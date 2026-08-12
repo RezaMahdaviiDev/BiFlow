@@ -27,11 +27,14 @@ routes, or DNS. For the native desktop and Linux artifacts:
 ./dev.sh desktop
 ./dev.sh check
 ./dev.sh build
-./dev.sh package
+./build.sh            # Linux .deb and Windows .exe + NSIS installer
+./build.sh linux      # artifacts/linux/BiFlow_<version>_amd64.deb
+./build.sh windows    # artifacts/windows/BiFlow.exe and NSIS setup
 ```
 
-The packaging command prints the `.deb` and AppImage output directories. It uses
-the checksum-verified Mihomo binary imported from the sibling `clash` stack.
+`./build.sh` reads the version from the root `version` file. Linux packages are
+built on Linux. Windows packages are built on Windows, or cross-compiled from
+Linux with `cargo-xwin` (or MinGW-w64) and NSIS.
 
 If Hiddify or Mihomo is missing, BiFlow shows an Install button and downloads
 the official Linux or Windows build into the user data directory. If that fails,

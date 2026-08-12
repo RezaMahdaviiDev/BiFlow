@@ -20,15 +20,22 @@ Commands:
   check     Run frontend and Rust formatting, linting, type checks, and tests
   e2e       Run Playwright primary-flow tests against the mock UI
   build     Build optimized frontend, helper, CLI, and Tauri desktop binaries
-  package   Build Linux .deb and AppImage packages
+  package   Build the Linux .deb via ./build.sh linux
   assets    Refresh the local Mihomo development asset after checksum validation
   paths     Print expected Linux output paths
   clean     Remove generated build outputs after an explicit confirmation
   help      Show this message
 
+Release packages for Linux (.deb) and Windows (.exe + NSIS installer):
+
+  ./build.sh
+  ./build.sh linux
+  ./build.sh windows
+
 The desktop/package commands require Rust 1.88 and WebKitGTK 4.1 development
-packages. The dev command only requires Node.js and pnpm and never touches TUN,
-routes, DNS, or system services.
+packages. Windows packages also need NSIS and a Windows Rust target. The dev
+command only requires Node.js and pnpm and never touches TUN, routes, DNS, or
+system services.
 EOF
 }
 
@@ -97,8 +104,8 @@ print_paths() {
     "Desktop:  ${TARGET_DIR}/release/iran-split-desktop" \
     "Helper:   ${TARGET_DIR}/release/iran-split-helper" \
     "CLI:      ${TARGET_DIR}/release/iran-split-cli" \
-    "Debian:   ${TARGET_DIR}/release/bundle/deb/" \
-    "AppImage: ${TARGET_DIR}/release/bundle/appimage/"
+    "Debian:   ${PROJECT_DIR}/artifacts/linux/" \
+    "Windows:  ${PROJECT_DIR}/artifacts/windows/"
 }
 
 run_dev() {
@@ -148,13 +155,7 @@ run_build() {
 }
 
 run_package() {
-  ensure_node_dependencies
-  ensure_rust
-  ensure_linux_desktop_dependencies
-  refresh_assets
-  cd -- "${PROJECT_DIR}"
-  pnpm tauri build --bundles deb,appimage
-  print_paths
+  exec "${PROJECT_DIR}/build.sh" linux
 }
 
 run_clean() {

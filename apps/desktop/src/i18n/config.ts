@@ -5,7 +5,7 @@ const resources = {
   en: {
     translation: {
       appName: "BiFlow",
-      tagline: "Split routing control",
+      tagline: "Right traffic. Right route",
       dashboard: "Dashboard",
       rules: "Direct rules",
       diagnostics: "Diagnostics",

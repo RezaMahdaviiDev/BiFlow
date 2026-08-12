@@ -8,4 +8,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0002](./0002-single-source-version.md)         | Single-source application version | Accepted |
 | [0003](./0003-testing-strategy.md)              | Unit and e2e testing strategy     | Accepted |
 | [0004](./0004-in-app-third-party-install.md)    | In-app Hiddify and Mihomo install | Accepted |
-| [0005](./0005-cloud-rule-fail-safe.md)          | Fail-safe Iran rule updates       | Accepted |
+| [0006](./0006-linux-windows-packages.md)        | Linux .deb and Windows exe/NSIS   | Accepted |

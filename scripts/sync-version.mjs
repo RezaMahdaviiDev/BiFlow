@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const checkOnly = process.argv.includes("--check");
@@ -69,12 +69,24 @@ function syncTauri(path, version) {
   write(path, `${JSON.stringify(json, null, 2)}\n`);
 }
 
-const version = readAppVersion();
-syncJson(join(root, "package.json"), version);
-syncJson(join(root, "apps/desktop/package.json"), version);
-syncCargoWorkspace(join(root, "Cargo.toml"), version);
-syncTauri(join(root, "src-tauri/tauri.conf.json"), version);
+function isDirectRun() {
+  return Boolean(
+    process.argv[1] &&
+      import.meta.url === pathToFileURL(resolve(process.argv[1])).href,
+  );
+}
 
-if (!checkOnly) {
-  process.stdout.write(`synced application version ${version}\n`);
+function syncAll() {
+  const version = readAppVersion();
+  syncJson(join(root, "package.json"), version);
+  syncJson(join(root, "apps/desktop/package.json"), version);
+  syncCargoWorkspace(join(root, "Cargo.toml"), version);
+  syncTauri(join(root, "src-tauri/tauri.conf.json"), version);
+  if (!checkOnly) {
+    process.stdout.write(`synced application version ${version}\n`);
+  }
+}
+
+if (isDirectRun()) {
+  syncAll();
 }
