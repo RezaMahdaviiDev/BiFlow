@@ -199,10 +199,7 @@ async fn restart_stack(app: AppHandle) -> Result<OperationAccepted, String> {
 
 #[tauri::command]
 async fn cancel_operation(app: AppHandle, operation_id: Uuid) -> Result<bool, String> {
-    Ok(services(&app)?
-        .engine
-        .cancel_operation(operation_id)
-        .await)
+    Ok(services(&app)?.engine.cancel_operation(operation_id).await)
 }
 
 #[tauri::command]
@@ -342,7 +339,10 @@ async fn test_route(target: String, app: AppHandle) -> Result<RouteTestResult, S
         .chain(read_snapshot_lines(
             &services.cloud_rules.resolve("iran-networks.txt"),
         )?)
-        .map(|line| line.parse().map_err(|error| format!("invalid bundled CIDR: {error}")))
+        .map(|line| {
+            line.parse()
+                .map_err(|error| format!("invalid bundled CIDR: {error}"))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     let decision = RuleSet::from_sources(&document, domains, cidrs)
         .decide(&target)
@@ -372,12 +372,51 @@ async fn run_full_diagnostics(app: AppHandle) -> Result<DiagnosticsReport, Strin
         .as_ref()
         .is_ok_and(|status| status.available && status.authorized);
     let steps = vec![
-        diagnostic_step("helper", "Helper authorization", helper_ok, helper.err().map(|error| error.to_string()), &started),
-        diagnostic_step("config", "Configuration validation", config.validate().is_empty(), None, &started),
-        diagnostic_step("core", "Mihomo process", snapshot.mihomo.phase == iran_split_core::ComponentPhase::Running, Some(format!("phase: {:?}", snapshot.mihomo.phase)), &started),
-        diagnostic_step("providers", "Rule providers", snapshot.providers.total > 0 && snapshot.providers.ready == snapshot.providers.total, Some(format!("{} of {} ready", snapshot.providers.ready, snapshot.providers.total)), &started),
-        diagnostic_step("tun", "Owned TUN state", snapshot.tun.phase != iran_split_core::ComponentPhase::Error, Some(format!("phase: {:?}", snapshot.tun.phase)), &started),
-        diagnostic_step("egress", "Foreign egress", snapshot.exit_ip.is_some(), snapshot.exit_ip.clone(), &started),
+        diagnostic_step(
+            "helper",
+            "Helper authorization",
+            helper_ok,
+            helper.err().map(|error| error.to_string()),
+            &started,
+        ),
+        diagnostic_step(
+            "config",
+            "Configuration validation",
+            config.validate().is_empty(),
+            None,
+            &started,
+        ),
+        diagnostic_step(
+            "core",
+            "Mihomo process",
+            snapshot.mihomo.phase == iran_split_core::ComponentPhase::Running,
+            Some(format!("phase: {:?}", snapshot.mihomo.phase)),
+            &started,
+        ),
+        diagnostic_step(
+            "providers",
+            "Rule providers",
+            snapshot.providers.total > 0 && snapshot.providers.ready == snapshot.providers.total,
+            Some(format!(
+                "{} of {} ready",
+                snapshot.providers.ready, snapshot.providers.total
+            )),
+            &started,
+        ),
+        diagnostic_step(
+            "tun",
+            "Owned TUN state",
+            snapshot.tun.phase != iran_split_core::ComponentPhase::Error,
+            Some(format!("phase: {:?}", snapshot.tun.phase)),
+            &started,
+        ),
+        diagnostic_step(
+            "egress",
+            "Foreign egress",
+            snapshot.exit_ip.is_some(),
+            snapshot.exit_ip.clone(),
+            &started,
+        ),
     ];
     Ok(DiagnosticsReport {
         operation_id,
@@ -404,7 +443,10 @@ fn diagnostic_step(
 }
 
 #[tauri::command]
-async fn query_logs(app: AppHandle, maximum: u16) -> Result<Vec<iran_split_ipc::ServiceLogEntry>, String> {
+async fn query_logs(
+    app: AppHandle,
+    maximum: u16,
+) -> Result<Vec<iran_split_ipc::ServiceLogEntry>, String> {
     #[cfg(target_os = "linux")]
     {
         return services(&app)?
@@ -476,7 +518,10 @@ async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
 async fn install_update(app: AppHandle) -> Result<OperationAccepted, String> {
     let services = services(&app)?;
     let operation_id = Uuid::new_v4();
-    if matches!(services.engine.snapshot().phase, StackPhase::Running | StackPhase::Degraded) {
+    if matches!(
+        services.engine.snapshot().phase,
+        StackPhase::Running | StackPhase::Degraded
+    ) {
         services
             .engine
             .stop_stack()
@@ -579,7 +624,10 @@ fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let menu = Menu::with_items(app, &[&connect, &disconnect, &open, &quit, &disconnect_quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&connect, &disconnect, &open, &quit, &disconnect_quit],
+    )?;
     TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -644,12 +692,14 @@ fn show_main<R: Runtime>(app: &AppHandle<R>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            show_main(app)
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(|app| {
-            let services = create_services(app.handle())
-                .map_err(|error| std::io::Error::other(error))?;
+            let services =
+                create_services(app.handle()).map_err(|error| std::io::Error::other(error))?;
             let mut snapshots = services.engine.subscribe();
             let engine = Arc::clone(&services.engine);
             let handle = app.handle().clone();

@@ -4,8 +4,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, LazyLock},
@@ -17,7 +16,6 @@ use tokio::{
     process::{Child, Command},
     sync::Mutex,
 };
-use tracing::{info, warn};
 use uuid::Uuid;
 
 const PROCESS_STOP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -476,7 +474,12 @@ fn set_directory_permissions(_path: &Path) -> Result<(), HelperServiceError> {
 
 fn now_string() -> String {
     // UTC RFC3339 without pulling wall-clock parsing into the IPC contract.
-    format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |value| value.as_secs()))
+    format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |value| value.as_secs())
+    )
 }
 
 fn capture_lines<R>(reader: R, logs: Arc<Mutex<VecDeque<ServiceLogEntry>>>, level: &'static str)
@@ -571,7 +574,10 @@ mod tests {
 
     #[test]
     fn redaction_removes_common_credentials_and_bounds_output() {
-        let input = format!("Authorization: Bearer-abc token=secret {}", "x".repeat(9_000));
+        let input = format!(
+            "Authorization: Bearer-abc token=secret {}",
+            "x".repeat(9_000)
+        );
         let output = redact(&input);
         assert!(!output.contains("Bearer-abc"));
         assert!(!output.contains("token=secret"));

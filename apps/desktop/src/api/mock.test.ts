@@ -13,6 +13,9 @@ describe("mock transport", () => {
     expect(boot.mock_mode).toBe(true);
     expect(boot.cloud_rules.domain_count).toBeGreaterThan(0);
     expect(boot.dependencies).toHaveLength(2);
+    expect(boot.dependencies.every((item) => item.installed === false)).toBe(
+      true,
+    );
   });
 
   it("installs missing third-party apps into the user data path", async () => {
@@ -21,6 +24,9 @@ describe("mock transport", () => {
     const [hiddify] = await mockApi.listDependencies();
     expect(hiddify?.installed).toBe(true);
     expect(hiddify?.path).toContain("biflow");
+    expect(localStorage.getItem("biflow-mock-installed-deps")).toMatch(
+      /"installed":true/,
+    );
   });
 
   it("routes .ir hosts direct and other hosts through the vpn", async () => {

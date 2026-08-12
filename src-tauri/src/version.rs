@@ -12,6 +12,8 @@ mod tests {
         let version = app_version();
         let parts: Vec<_> = version.split('.').collect();
         assert_eq!(parts.len(), 3);
-        assert!(parts.iter().all(|part| part.chars().all(|ch| ch.is_ascii_digit())));
+        assert!(parts
+            .iter()
+            .all(|part| part.chars().all(|ch| ch.is_ascii_digit())));
     }
 }

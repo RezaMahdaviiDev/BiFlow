@@ -98,9 +98,9 @@ pub fn resolve_provider_path(cache_dir: &Path, bundled_dir: &Path, name: &str) -
 }
 
 fn provider_lines(text: &str) -> impl Iterator<Item = &str> {
-    text.lines().map(str::trim).filter(|line| {
-        !line.is_empty() && !line.starts_with('#') && !line.starts_with("payload:")
-    })
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("payload:"))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -231,10 +231,12 @@ impl CloudRuleStore {
         let cache_complete = CATALOG
             .iter()
             .all(|entry| self.cache_dir.join(entry.local_name).is_file());
-        if cache_complete && let Some(status) = status_from_meta(&meta) {
-            return Ok(status);
+        if cache_complete {
+            if let Some(status) = status_from_meta(&meta) {
+                return Ok(status);
+            }
         }
-        self.bundled_status()
+        Ok(self.bundled_status())
     }
 
     pub async fn sync(&self) -> Result<CloudRulesStatus, CloudSyncError> {
@@ -268,7 +270,7 @@ impl CloudRuleStore {
             &self.cache_dir.join(META_FILE),
             &serde_json::to_vec_pretty(&meta)?,
         )?;
-        Ok(status_from_meta(&meta).unwrap_or_else(|| CloudRulesStatus {
+        Ok(status_from_meta(&meta).unwrap_or(CloudRulesStatus {
             domain_count: 0,
             ip_count: 0,
             last_synced_at: meta.last_synced_at,
@@ -277,7 +279,7 @@ impl CloudRuleStore {
         }))
     }
 
-    fn bundled_status(&self) -> Result<CloudRulesStatus, CloudSyncError> {
+    fn bundled_status(&self) -> CloudRulesStatus {
         let mut sets = Vec::new();
         for entry in CATALOG {
             let path = self.bundled_dir.join(entry.local_name);
@@ -294,7 +296,7 @@ impl CloudRuleStore {
                     .map(|bytes| sha256_hex(&bytes)),
             });
         }
-        Ok(summarize(sets, None, "bundled"))
+        summarize(sets, None, "bundled")
     }
 
     fn read_meta(&self) -> Result<SyncMeta, CloudSyncError> {
@@ -418,7 +420,9 @@ mod tests {
     #[test]
     fn fail_safe_chain_prefers_github_then_jsdelivr() {
         let urls = fail_safe_urls("ir.txt");
-        assert!(urls[0].starts_with("https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release/ir.txt"));
+        assert!(urls[0].starts_with(
+            "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release/ir.txt"
+        ));
         assert!(urls[1].contains("cdn.jsdelivr.net"));
         assert!(urls[2].contains("fastly.jsdelivr.net"));
         assert!(urls[3].contains("releases/latest/download/ir.txt"));

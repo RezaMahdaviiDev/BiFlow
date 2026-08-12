@@ -10,7 +10,8 @@ BiFlow requires Hiddify (upstream proxy) and Mihomo (split core). Users should n
 
 ## Decision
 
-- Discover binaries in the user data directory first (`…/biflow/apps`, `…/biflow/bin`), then common system paths.
+- Discover binaries in the user data directory first (`…/biflow/apps`, `…/biflow/bin`), then `PATH`, `~/.local/bin`, and common system paths (`hiddify`, `hiddify-app`, `mihomo`, `clash-meta`, Hiddify AppImages).
+- The Install button is shown only when that discovery finds no binary. A present install must not show Install.
 - Download only allowlisted GitHub release URLs for the current OS.
 - On failure, show a step-by-step modal and an official download link.
 - Linux prefers the Hiddify AppImage (no root). Windows prefers the portable zip, then the silent setup.

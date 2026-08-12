@@ -217,9 +217,16 @@ pub fn generate_config(
             ipv6: true,
             enhanced_mode: "fake-ip".into(),
             fake_ip_range: "198.18.0.1/16".into(),
-            fake_ip_filter: vec!["+.lan".into(), "+.local".into(), "localhost.ptlogin2.qq.com".into()],
+            fake_ip_filter: vec![
+                "+.lan".into(),
+                "+.local".into(),
+                "localhost.ptlogin2.qq.com".into(),
+            ],
             default_nameserver: vec!["1.1.1.1".into(), "8.8.8.8".into()],
-            nameserver: vec!["https://1.1.1.1/dns-query".into(), "https://8.8.8.8/dns-query".into()],
+            nameserver: vec![
+                "https://1.1.1.1/dns-query".into(),
+                "https://8.8.8.8/dns-query".into(),
+            ],
             proxy_server_nameserver: vec!["8.8.8.8".into(), "1.1.1.1".into()],
             direct_nameserver: vec!["178.22.122.100".into(), "185.51.200.2".into()],
         },
@@ -229,9 +236,24 @@ pub fn generate_config(
             parse_pure_ip: true,
             override_destination: true,
             sniff: BTreeMap::from([
-                ("HTTP".into(), SniffPorts { ports: vec!["80".into(), "8080-8880".into()] }),
-                ("TLS".into(), SniffPorts { ports: vec!["443".into(), "8443".into()] }),
-                ("QUIC".into(), SniffPorts { ports: vec!["443".into(), "8443".into()] }),
+                (
+                    "HTTP".into(),
+                    SniffPorts {
+                        ports: vec!["80".into(), "8080-8880".into()],
+                    },
+                ),
+                (
+                    "TLS".into(),
+                    SniffPorts {
+                        ports: vec!["443".into(), "8443".into()],
+                    },
+                ),
+                (
+                    "QUIC".into(),
+                    SniffPorts {
+                        ports: vec!["443".into(), "8443".into()],
+                    },
+                ),
             ]),
         },
         proxies: vec![ProxyConfig {
@@ -260,7 +282,11 @@ fn providers(paths: &RuntimePaths) -> BTreeMap<String, RuleProvider> {
         ("private-networks", "ipcidr", &paths.private_networks),
         ("iran-domains", "domain", &paths.iran_domains),
         ("iran-networks", "ipcidr", &paths.iran_networks),
-        ("custom-direct-domains", "domain", &paths.custom_direct_domains),
+        (
+            "custom-direct-domains",
+            "domain",
+            &paths.custom_direct_domains,
+        ),
         ("custom-direct-ips", "ipcidr", &paths.custom_direct_ips),
     ]
     .into_iter()
@@ -326,9 +352,9 @@ pub struct ControllerClient {
 
 impl ControllerClient {
     pub fn new(host: &str, port: u16, secret: impl Into<String>) -> Result<Self, MihomoError> {
-        let address: IpAddr = host
-            .parse()
-            .map_err(|_| MihomoError::InvalidConfig("controller host must be an IP address".into()))?;
+        let address: IpAddr = host.parse().map_err(|_| {
+            MihomoError::InvalidConfig("controller host must be an IP address".into())
+        })?;
         if !address.is_loopback() {
             return Err(MihomoError::InvalidConfig(
                 "controller must use a loopback address".into(),
@@ -465,7 +491,9 @@ impl ControllerClient {
             let mut request = match url.into_client_request() {
                 Ok(request) => request,
                 Err(error) => {
-                    let _ = sender.send(Err(MihomoError::WebSocket(error.to_string()))).await;
+                    let _ = sender
+                        .send(Err(MihomoError::WebSocket(error.to_string())))
+                        .await;
                     return;
                 }
             };
@@ -484,7 +512,9 @@ impl ControllerClient {
             let (mut stream, _) = match connect_async(request).await {
                 Ok(connection) => connection,
                 Err(error) => {
-                    let _ = sender.send(Err(MihomoError::WebSocket(error.to_string()))).await;
+                    let _ = sender
+                        .send(Err(MihomoError::WebSocket(error.to_string())))
+                        .await;
                     return;
                 }
             };
@@ -584,7 +614,9 @@ mod tests {
             }],
         };
         let generated = generate_config(&app, Platform::Linux, &paths(), &custom).expect("config");
-        assert!(generated.yaml.contains("external-controller: 127.0.0.1:19090"));
+        assert!(generated
+            .yaml
+            .contains("external-controller: 127.0.0.1:19090"));
         assert!(generated.yaml.contains("secret:"));
         assert!(generated.yaml.contains("PROCESS-NAME,hiddify,DIRECT"));
         assert!(generated.yaml.contains("MATCH,VPN"));

@@ -183,7 +183,11 @@ impl Resolver for DohResolver {
 }
 
 fn unique_addresses(values: impl IntoIterator<Item = IpAddr>) -> Vec<IpAddr> {
-    let mut values: Vec<_> = values.into_iter().collect::<HashSet<_>>().into_iter().collect();
+    let mut values: Vec<_> = values
+        .into_iter()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
     values.sort_unstable();
     values
 }
@@ -245,7 +249,9 @@ impl RuleManager {
             created_at: now,
             refreshed_at: Some(now),
         });
-        document.rules.sort_by_key(|rule| rule.target.display_value());
+        document
+            .rules
+            .sort_by_key(|rule| rule.target.display_value());
         document.revision = document.revision.saturating_add(1);
         publish(&self.path, &document)?;
         Ok(document.clone())
@@ -409,7 +415,11 @@ impl RuleSet {
         if is_private_or_local(address) {
             return direct(DecisionReason::PrivateOrLocal, Some(address.to_string()));
         }
-        if let Some(network) = self.iran_cidrs.iter().find(|network| network.contains(&address)) {
+        if let Some(network) = self
+            .iran_cidrs
+            .iter()
+            .find(|network| network.contains(&address))
+        {
             return direct(DecisionReason::IranCidr, Some(network.to_string()));
         }
         RouteDecision {
@@ -434,12 +444,10 @@ fn is_private_or_local(address: IpAddr) -> bool {
             address.is_private()
                 || address.is_loopback()
                 || address.is_link_local()
-                || u32::from(address) & 0xffc0_0000 == u32::from([100, 64, 0, 0])
+                || u32::from(address) & 0xffc0_0000 == u32::from_be_bytes([100, 64, 0, 0])
         }
         IpAddr::V6(address) => {
-            address.is_loopback()
-                || address.is_unique_local()
-                || address.is_unicast_link_local()
+            address.is_loopback() || address.is_unique_local() || address.is_unicast_link_local()
         }
     }
 }
@@ -465,7 +473,10 @@ mod tests {
 
     #[test]
     fn normalizes_unicode_and_rejects_urls() {
-        assert_eq!(normalize_domain("Example.COM.").expect("domain"), "example.com");
+        assert_eq!(
+            normalize_domain("Example.COM.").expect("domain"),
+            "example.com"
+        );
         assert!(normalize_domain("https://example.com/path").is_err());
         assert!(normalize_domain("*.example.com").is_err());
     }
@@ -508,6 +519,10 @@ mod tests {
         );
         assert_eq!(
             set.decide("192.168.1.1").expect("decision").reason,
+            DecisionReason::PrivateOrLocal
+        );
+        assert_eq!(
+            set.decide("100.64.1.1").expect("decision").reason,
             DecisionReason::PrivateOrLocal
         );
         assert_eq!(

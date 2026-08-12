@@ -79,8 +79,8 @@ mod windows_impl {
         read_frame, validate_envelope, write_frame, Envelope, HelperCommand, HelperReply,
         PROTOCOL_VERSION,
     };
-    use tokio::net::windows::named_pipe::ClientOptions;
     use std::time::Duration;
+    use tokio::net::windows::named_pipe::ClientOptions;
 
     pub async fn helper_status() -> Result<HelperStatus, CoreError> {
         let mut pipe = tokio::time::timeout(
@@ -102,13 +102,13 @@ mod windows_impl {
             .map_err(|error| CoreError::Platform(error.to_string()))?;
         validate_envelope(&response).map_err(|error| CoreError::Platform(error.to_string()))?;
         match response.payload {
-            HelperReply::Hello(reply) if reply.selected_protocol == PROTOCOL_VERSION => Ok(
-                HelperStatus {
+            HelperReply::Hello(reply) if reply.selected_protocol == PROTOCOL_VERSION => {
+                Ok(HelperStatus {
                     available: true,
                     authorized: true,
                     version: Some(reply.helper_version),
-                },
-            ),
+                })
+            }
             HelperReply::Error(error) if error.code == "UNAUTHORIZED" => {
                 Err(CoreError::HelperUnauthorized)
             }

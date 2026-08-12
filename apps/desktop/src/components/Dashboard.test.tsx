@@ -88,4 +88,31 @@ describe("Dashboard", () => {
     await userEvent.click(buttons[0]!);
     expect(install).toHaveBeenCalledWith("hiddify");
   });
+
+  it("hides install actions when Hiddify and Mihomo are already installed", () => {
+    useAppStore.setState({
+      snapshot: stopped,
+      actionPending: false,
+      installingId: null,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: "4.1.1",
+          path: "/usr/bin/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: "1.19.29",
+          path: "/usr/bin/mihomo",
+        },
+      ],
+    });
+    render(<Dashboard snapshot={stopped} />);
+    expect(screen.queryByRole("button", { name: /^Install$/ })).toBeNull();
+    expect(screen.getAllByText("stopped")).toHaveLength(5);
+  });
 });

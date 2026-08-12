@@ -118,8 +118,18 @@ async fn handle_connection(
             command = request.payload.audit_name(),
             "authorized helper command"
         );
+        let request_id = request.request_id;
+        let protocol_version = request.protocol_version;
         let reply = execute(&supervisor, request.payload).await;
-        send_reply(&mut stream, request.reply(reply)).await?;
+        send_reply(
+            &mut stream,
+            Envelope {
+                protocol_version,
+                request_id,
+                payload: reply,
+            },
+        )
+        .await?;
     }
 }
 
@@ -149,18 +159,14 @@ async fn execute(supervisor: &Supervisor, command: HelperCommand) -> HelperReply
             HelperCommand::StartMihomo {
                 generation_id,
                 config_sha256,
-            } => HelperReply::ProcessStatus(
-                supervisor.start(generation_id, &config_sha256).await?,
-            ),
+            } => HelperReply::ProcessStatus(supervisor.start(generation_id, &config_sha256).await?),
             HelperCommand::StopMihomo => HelperReply::ProcessStatus(supervisor.stop().await?),
             HelperCommand::RestartMihomo {
                 generation_id,
                 config_sha256,
             } => {
                 supervisor.stop().await?;
-                HelperReply::ProcessStatus(
-                    supervisor.start(generation_id, &config_sha256).await?,
-                )
+                HelperReply::ProcessStatus(supervisor.start(generation_id, &config_sha256).await?)
             }
             HelperCommand::GetMihomoProcessStatus => {
                 HelperReply::ProcessStatus(supervisor.status().await?)
@@ -183,14 +189,16 @@ async fn execute(supervisor: &Supervisor, command: HelperCommand) -> HelperReply
         })
     }
     .await;
-    result.unwrap_or_else(|error| HelperReply::Error(HelperError {
-        code: helper_error_code(&error).into(),
-        message: error.to_string(),
-        retryable: matches!(
-            error,
-            HelperServiceError::Io(_) | HelperServiceError::Process(_)
-        ),
-    }))
+    result.unwrap_or_else(|error| {
+        HelperReply::Error(HelperError {
+            code: helper_error_code(&error).into(),
+            message: error.to_string(),
+            retryable: matches!(
+                error,
+                HelperServiceError::Io(_) | HelperServiceError::Process(_)
+            ),
+        })
+    })
 }
 
 fn helper_error_code(error: &HelperServiceError) -> &'static str {
@@ -198,7 +206,9 @@ fn helper_error_code(error: &HelperServiceError) -> &'static str {
         HelperServiceError::InvalidGeneration(_) => "INVALID_GENERATION",
         HelperServiceError::BinaryIntegrity => "BINARY_INTEGRITY_FAILED",
         HelperServiceError::Process(_) => "PROCESS_FAILED",
-        HelperServiceError::UnsafeConfig(_) | HelperServiceError::Toml(_) => "HELPER_CONFIG_INVALID",
+        HelperServiceError::UnsafeConfig(_) | HelperServiceError::Toml(_) => {
+            "HELPER_CONFIG_INVALID"
+        }
         HelperServiceError::Io(_) => "IO_FAILED",
         HelperServiceError::Protocol(_) => "PROTOCOL_ERROR",
     }

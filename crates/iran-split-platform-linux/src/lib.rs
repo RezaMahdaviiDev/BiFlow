@@ -190,14 +190,25 @@ impl LinuxBackend {
         }
         let mut candidates = vec![
             data.join("bin/hiddify"),
+            data.join("bin/hiddify-app"),
             data.join("apps/Hiddify.AppImage"),
             PathBuf::from("/usr/bin/hiddify"),
+            PathBuf::from("/usr/bin/hiddify-app"),
             PathBuf::from("/usr/local/bin/hiddify"),
             PathBuf::from("/opt/Hiddify/Hiddify"),
             PathBuf::from("/opt/hiddify/hiddify"),
+            PathBuf::from("/opt/hiddify/hiddify-app"),
         ];
         if let Some(home) = std::env::var_os("HOME") {
-            candidates.push(PathBuf::from(home).join(".local/bin/hiddify"));
+            let home = PathBuf::from(home);
+            candidates.push(home.join(".local/bin/hiddify"));
+            candidates.push(home.join(".local/bin/hiddify-app"));
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for dir in std::env::split_paths(&path) {
+                candidates.push(dir.join("hiddify"));
+                candidates.push(dir.join("hiddify-app"));
+            }
         }
         candidates.into_iter().find(|path| path.is_file())
     }
@@ -248,8 +259,8 @@ impl PlatformBackend for LinuxBackend {
             .spawn()
             .map_err(|error| CoreError::Platform(error.to_string()))?;
         *self.launched_hiddify.lock().await = Some(child);
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_secs(config.hiddify.start_timeout_seconds);
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(config.hiddify.start_timeout_seconds);
         loop {
             if Self::hiddify_listening(&config).await {
                 return Ok(());
@@ -394,7 +405,9 @@ impl PlatformBackend for LinuxBackend {
                 running: status.running,
                 pid: status.pid,
             }),
-            _ => Err(CoreError::Platform("unexpected process status reply".into())),
+            _ => Err(CoreError::Platform(
+                "unexpected process status reply".into(),
+            )),
         }
     }
 
@@ -578,5 +591,16 @@ mod tests {
             "/var/lib/iran-split/generations/{}",
             generation.generation_id
         )));
+    }
+
+    #[test]
+    fn discovers_installed_hiddify_appimage() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let apps = directory.path().join("apps");
+        fs::create_dir_all(&apps).expect("apps");
+        let appimage = apps.join("Hiddify.AppImage");
+        fs::write(&appimage, b"elf").expect("appimage");
+        let found = LinuxBackend::discover_hiddify(&AppConfig::default(), directory.path());
+        assert_eq!(found, Some(appimage));
     }
 }

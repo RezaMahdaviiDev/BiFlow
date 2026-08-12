@@ -78,7 +78,9 @@ async fn demo() -> Result<(), CoreError> {
     engine
         .wait_for_phase(StackPhase::Running, Duration::from_secs(5))
         .await?;
-    printer.await.map_err(|error| CoreError::Platform(error.to_string()))?;
+    printer
+        .await
+        .map_err(|error| CoreError::Platform(error.to_string()))?;
     engine.stop_stack().await?;
     engine
         .wait_for_phase(StackPhase::Stopped, Duration::from_secs(5))

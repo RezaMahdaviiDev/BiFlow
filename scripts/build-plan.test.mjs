@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -38,5 +38,34 @@ describe("release artifact names", () => {
     assert.match(result.stdout, /\.deb/);
     assert.match(result.stdout, /NSIS installer/);
     assert.match(result.stdout, /BiFlow\.exe/);
+    assert.match(result.stdout, /One-shot/);
+    assert.match(result.stdout, /missing tools are installed/i);
+  });
+
+  it("bootstraps cargo with rustup instead of exiting when cargo is missing", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    assert.match(source, /sh\.rustup\.rs/);
+    assert.match(source, /ensure_rust/);
+    assert.doesNotMatch(source, /need_command cargo/);
+  });
+
+  it("pins cargo-xwin to a release that builds on rustc 1.88", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    assert.match(source, /CARGO_XWIN_VERSION="0\.19\.2"/);
+    assert.match(
+      source,
+      /cargo install cargo-xwin --locked --version "\$\{CARGO_XWIN_VERSION\}"/,
+    );
+    assert.doesNotMatch(source, /cargo install cargo-xwin --locked\n/);
+  });
+
+  it("requires a green frontend and rust build before a change is done", () => {
+    const agents = readFileSync(join(root, "AGENTS.md"), "utf8");
+    assert.match(agents, /Done gate \(hard rule\)/);
+    assert.match(agents, /pnpm check/);
+    assert.match(agents, /pnpm build/);
+    assert.match(agents, /cargo test --workspace/);
+    assert.match(agents, /cargo build --workspace/);
+    assert.match(agents, /not done/i);
   });
 });

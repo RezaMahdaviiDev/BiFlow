@@ -172,18 +172,14 @@ impl AppConfig {
                 "controller secret must contain at least 32 characters",
             ));
         }
-        if self.hiddify.start_timeout_seconds == 0
-            || self.hiddify.start_timeout_seconds > 300
-        {
+        if self.hiddify.start_timeout_seconds == 0 || self.hiddify.start_timeout_seconds > 300 {
             issues.push(issue(
                 "hiddify.start_timeout_seconds",
                 "OUT_OF_RANGE",
                 "start timeout must be between 1 and 300 seconds",
             ));
         }
-        if self.rules.refresh_interval_minutes == 0
-            || self.rules.upstream_refresh_hours == 0
-        {
+        if self.rules.refresh_interval_minutes == 0 || self.rules.upstream_refresh_hours == 0 {
             issues.push(issue(
                 "rules",
                 "OUT_OF_RANGE",
@@ -208,10 +204,7 @@ impl AppConfig {
             if *port == 0 {
                 issues.push(issue(field, "INVALID_PORT", "port cannot be zero"));
             }
-            if ports[..index]
-                .iter()
-                .any(|(_, previous)| previous == port)
-            {
+            if ports[..index].iter().any(|(_, previous)| previous == port) {
                 issues.push(issue(
                     field,
                     "PORT_CONFLICT",
@@ -377,9 +370,7 @@ fn migrate(value: &mut toml::Value, from: u32) -> Result<(), ConfigError> {
         "schema_version".into(),
         toml::Value::Integer(i64::from(CURRENT_SCHEMA_VERSION)),
     );
-    table
-        .entry("revision")
-        .or_insert(toml::Value::Integer(0));
+    table.entry("revision").or_insert(toml::Value::Integer(0));
     Ok(())
 }
 
@@ -408,7 +399,10 @@ mod tests {
         let first = AppConfig::default();
         let second = AppConfig::default();
         assert!(first.validate().is_empty());
-        assert_ne!(first.mihomo.controller_secret, second.mihomo.controller_secret);
+        assert_ne!(
+            first.mihomo.controller_secret,
+            second.mihomo.controller_secret
+        );
         assert_eq!(first.mihomo.controller_secret.len(), 64);
     }
 

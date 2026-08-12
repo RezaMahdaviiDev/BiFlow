@@ -8,5 +8,10 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "eslint.config.js", "tailwind.config.ts"]
+  "include": [
+    "vite.config.ts",
+    "local-deps.ts",
+    "eslint.config.js",
+    "tailwind.config.ts"
+  ]
 }

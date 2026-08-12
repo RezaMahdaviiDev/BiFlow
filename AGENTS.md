@@ -2,6 +2,19 @@
 
 Follow these rules in every change. If a rule is missing or a new failure mode appears, update this file in the same change.
 
+## Done gate (hard rule)
+
+A change is **not done** until both the frontend and Rust app build and test with **zero failures**. Do not report the task complete, skip the gate, or leave a red command.
+
+After every change, run:
+
+1. Frontend: `pnpm check` and `pnpm build`
+2. Rust: `cargo test --workspace` and `cargo build --workspace`
+
+If Node, pnpm, or Cargo is missing, install it first (see `./build.sh`) and re-run. A missing toolchain is not a pass.
+
+If any command fails, fix it in the same change and re-run the full gate. Do not treat Clippy style warnings as a substitute for a green `cargo build`.
+
 ## Testing
 
 - Add or update an **e2e test** for every primary user flow (install missing apps, connect/disconnect, cloud rule sync, custom direct rules, diagnostics DIRECT vs VPN).
@@ -40,3 +53,14 @@ Follow these rules in every change. If a rule is missing or a new failure mode a
 - The Zustand store is a process singleton. App tests that change `page` must reset store state in `beforeEach`, or the next test stays on Settings and never sees the dashboard heading.
 - `getByRole(..., { name: "Install" })` substring-matches **Installing…**. Use `{ name: /^Install$/ }` in Vitest and `{ exact: true }` in Playwright.
 - `scripts/sync-version.mjs` must only sync manifests when it is the process entry point. Importing `readAppVersion` from tests or `build-plan.mjs` must not rewrite `package.json`.
+- After installing rustup, the same shell must prepend `$HOME/.cargo/bin` (or `source "$HOME/.cargo/env"`) or `cargo` is still missing. `./build.sh` does this before every toolchain check.
+- Hiddify/Mihomo Install buttons must use PATH and `~/.local/bin`, not only `~/.local/share/biflow`. Mock UI reads the same locations at Vite startup; Playwright still forces missing deps via `sessionStorage` so e2e can test Install.
+- `zip` 2.6.1 is yanked on crates.io; pin `3.0.0` (2.4.2 also exists) or `cargo build` cannot resolve the crate.
+- Edition 2021 + rustc 1.88 does not allow `if cond && let Some(...)` let-chains. Split into nested `if`.
+- `u32::from([100, 64, 0, 0])` does not compile; use `u32::from_be_bytes([100, 64, 0, 0])` for CGNAT `100.64.0.0/10`.
+- Workspace Clippy is `pedantic`. The done gate is `cargo test` + `cargo build`, not `clippy -D warnings` (that fails on style nits like `must_use_candidate`).
+- `iran-split-cli` uses `toml::from_str` in `main`; add `toml.workspace = true` or `cargo test --workspace` fails compiling the CLI binary tests.
+- Tauri `bundle.resources` globs must match at least one file. Keep `resources/licenses/NOTICE.txt` so `../resources/licenses/*` does not fail the desktop build script.
+- After `execute(..., request.payload)`, do not call `request.reply(...)`; `payload` was moved. Copy `request_id` / `protocol_version` first, then build a new `Envelope`.
+- `iran-split-mihomo` tests use `chrono::Utc::now()`; add `chrono` under `[dev-dependencies]` or `cargo test --workspace` fails.
+- Latest `cargo-xwin` (0.20+) needs rustc 1.89. Pin `0.19.2` in `build.sh` so Windows cross-compile install works on the repo toolchain 1.88.

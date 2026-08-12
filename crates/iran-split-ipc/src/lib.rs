@@ -69,9 +69,11 @@ impl HelperCommand {
             Self::Hello {
                 supported_protocols,
                 ..
-            } if supported_protocols.is_empty() || supported_protocols.len() > 8 => Err(
-                ProtocolError::InvalidMessage("supported protocol list must contain 1-8 items".into()),
-            ),
+            } if supported_protocols.is_empty() || supported_protocols.len() > 8 => {
+                Err(ProtocolError::InvalidMessage(
+                    "supported protocol list must contain 1-8 items".into(),
+                ))
+            }
             Self::RegisterRuntimeGeneration { config_sha256, .. }
             | Self::StartMihomo { config_sha256, .. }
             | Self::RestartMihomo { config_sha256, .. }
@@ -81,7 +83,9 @@ impl HelperCommand {
                     "generation SHA-256 must be 64 lowercase hexadecimal characters".into(),
                 ))
             }
-            Self::CollectServiceLogs { max_entries } if *max_entries == 0 || *max_entries > 2_000 => {
+            Self::CollectServiceLogs { max_entries }
+                if *max_entries == 0 || *max_entries > 2_000 =>
+            {
                 Err(ProtocolError::InvalidMessage(
                     "log request must contain between 1 and 2000 entries".into(),
                 ))

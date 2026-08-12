@@ -562,7 +562,9 @@ impl<B: PlatformBackend> Engine<B> {
             return Ok(());
         }
         let mut core_started = false;
-        let result = self.start_steps(operation_id, cancel, &mut core_started).await;
+        let result = self
+            .start_steps(operation_id, cancel, &mut core_started)
+            .await;
         if let Err(error) = result {
             if core_started || matches!(error, CoreError::Cancelled) {
                 if let Err(rollback_error) = self.rollback(operation_id).await {
@@ -629,7 +631,8 @@ impl<B: PlatformBackend> Engine<B> {
         if !readiness.egress_ready {
             return Err(CoreError::HiddifyEgressUnavailable);
         }
-        if readiness.providers.total == 0 || readiness.providers.ready != readiness.providers.total {
+        if readiness.providers.total == 0 || readiness.providers.ready != readiness.providers.total
+        {
             return Err(CoreError::ProviderNotReady);
         }
         let process = self.backend.core_process().await?;
@@ -723,13 +726,10 @@ impl<B: PlatformBackend> Engine<B> {
                     return Ok(snapshot);
                 }
                 if snapshot.phase == StackPhase::Error {
-                    return Err(CoreError::Platform(
-                        snapshot
-                            .last_error
-                            .map_or_else(|| "unknown error".into(), |error| {
-                                error.technical_details.unwrap_or(error.message_key)
-                            }),
-                    ));
+                    return Err(CoreError::Platform(snapshot.last_error.map_or_else(
+                        || "unknown error".into(),
+                        |error| error.technical_details.unwrap_or(error.message_key),
+                    )));
                 }
                 receiver
                     .changed()
@@ -870,7 +870,13 @@ mod tests {
             .await
             .expect("running");
         assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
-        assert!(engine.start_stack().await.expect("idempotent").already_complete);
+        assert!(
+            engine
+                .start_stack()
+                .await
+                .expect("idempotent")
+                .already_complete
+        );
 
         engine.stop_stack().await.expect("stop accepted");
         engine
@@ -878,7 +884,13 @@ mod tests {
             .await
             .expect("stopped");
         assert!(!backend.tun.load(Ordering::SeqCst));
-        assert!(engine.stop_stack().await.expect("idempotent").already_complete);
+        assert!(
+            engine
+                .stop_stack()
+                .await
+                .expect("idempotent")
+                .already_complete
+        );
     }
 
     #[tokio::test]

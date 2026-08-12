@@ -120,6 +120,51 @@ function initialCloudRules(): CloudRulesStatus {
 }
 
 function initialDependencies(): DependencyStatus[] {
+  if (
+    typeof sessionStorage !== "undefined" &&
+    sessionStorage.getItem("biflow-mock-force-missing-deps") === "1"
+  ) {
+    return missingDependencies();
+  }
+  return mergeInstalled(detectedDependencies(), loadSavedDependencies());
+}
+
+function persistMockDependencies() {
+  try {
+    localStorage.setItem(
+      "biflow-mock-installed-deps",
+      JSON.stringify(dependencies),
+    );
+  } catch {
+    // Ignore quota / private-mode failures.
+  }
+}
+
+function loadSavedDependencies(): DependencyStatus[] | null {
+  try {
+    const raw = localStorage.getItem("biflow-mock-installed-deps");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as DependencyStatus[];
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergeInstalled(
+  base: DependencyStatus[],
+  saved: DependencyStatus[] | null,
+): DependencyStatus[] {
+  if (!saved) return base;
+  return base.map((item) => {
+    const extra = saved.find((entry) => entry.id === item.id);
+    return extra?.installed
+      ? { ...item, installed: true, path: extra.path ?? item.path }
+      : item;
+  });
+}
+
+function missingDependencies(): DependencyStatus[] {
   return [
     {
       id: "hiddify",
@@ -134,6 +179,27 @@ function initialDependencies(): DependencyStatus[] {
       installed: false,
       version: null,
       path: null,
+    },
+  ];
+}
+
+function detectedDependencies(): DependencyStatus[] {
+  const hiddify = Boolean(__MOCK_HIDDIFY_INSTALLED__);
+  const mihomo = Boolean(__MOCK_MIHOMO_INSTALLED__);
+  return [
+    {
+      id: "hiddify",
+      name: "Hiddify",
+      installed: hiddify,
+      version: null,
+      path: hiddify ? "detected" : null,
+    },
+    {
+      id: "mihomo",
+      name: "Mihomo",
+      installed: mihomo,
+      version: null,
+      path: mihomo ? "detected" : null,
     },
   ];
 }
@@ -394,6 +460,7 @@ export const mockApi = {
         ? { ...item, installed: true, path: `/tmp/biflow/${id}` }
         : item,
     );
+    persistMockDependencies();
     return {
       id,
       installed: true,
@@ -466,11 +533,17 @@ export const mockApi = {
 };
 
 export function resetMockState() {
+  try {
+    sessionStorage.setItem("biflow-mock-force-missing-deps", "1");
+    localStorage.removeItem("biflow-mock-installed-deps");
+  } catch {
+    // jsdom and Playwright always provide web storage.
+  }
   snapshot = initialSnapshot();
   settings = initialSettings();
   directRules = initialDirectRules();
   cloudRules = initialCloudRules();
-  dependencies = initialDependencies();
+  dependencies = missingDependencies();
   logs.length = 0;
   logs.push({
     timestamp: now(),

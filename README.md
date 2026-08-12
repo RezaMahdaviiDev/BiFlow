@@ -32,9 +32,11 @@ routes, or DNS. For the native desktop and Linux artifacts:
 ./build.sh windows    # artifacts/windows/BiFlow.exe and NSIS setup
 ```
 
-`./build.sh` reads the version from the root `version` file. Linux packages are
+`./build.sh` is one-shot: it installs missing Node.js, pnpm, Rust, Linux
+desktop libraries, NSIS, and cargo-xwin, then writes packages under
+`artifacts/`. Version comes from the root `version` file. Linux packages are
 built on Linux. Windows packages are built on Windows, or cross-compiled from
-Linux with `cargo-xwin` (or MinGW-w64) and NSIS.
+Linux.
 
 If Hiddify or Mihomo is missing, BiFlow shows an Install button and downloads
 the official Linux or Windows build into the user data directory. If that fails,

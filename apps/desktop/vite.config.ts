@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { detectLocalHiddify, detectLocalMihomo } from "./local-deps";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const appVersion = readFileSync(resolve(root, "version"), "utf8").trim();
@@ -12,6 +13,8 @@ export default defineConfig({
   clearScreen: false,
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
+    __MOCK_HIDDIFY_INSTALLED__: detectLocalHiddify(),
+    __MOCK_MIHOMO_INSTALLED__: detectLocalMihomo(),
   },
   server: {
     port: 1420,
