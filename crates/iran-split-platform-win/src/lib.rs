@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use iran_split_core::{
-    CleanupReport, CoreError, HelperStatus, PlatformBackend, ProcessStatus, ReadinessReport,
-    RuntimeGeneration, TunStatus,
+    CleanupReport, ComponentPhase, ComponentStatus, CoreError, HelperStatus, PlatformBackend,
+    ProcessStatus, ProviderSummary, ReadinessReport, RuntimeGeneration, RuntimeHealth, TunStatus,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -23,6 +23,39 @@ fn unavailable<T>() -> Result<T, CoreError> {
 
 #[async_trait]
 impl PlatformBackend for WindowsBackend {
+    async fn runtime_health(&self) -> RuntimeHealth {
+        let helper = match self.helper_status().await {
+            Ok(status) if status.available && status.authorized => ComponentStatus::new(
+                ComponentPhase::Running,
+                status
+                    .version
+                    .map(|version| format!("Helper {version} is ready")),
+            ),
+            Ok(status) if status.available => ComponentStatus::new(
+                ComponentPhase::Degraded,
+                Some("Helper is running but this user is not authorized".into()),
+            ),
+            Ok(_) | Err(_) => ComponentStatus::new(
+                ComponentPhase::Unavailable,
+                Some("Windows helper service is not available".into()),
+            ),
+        };
+        let unavailable = || {
+            ComponentStatus::new(
+                ComponentPhase::Unavailable,
+                Some("Windows runtime status probe is not available".into()),
+            )
+        };
+        RuntimeHealth {
+            helper,
+            hiddify: unavailable(),
+            mihomo: unavailable(),
+            tun: unavailable(),
+            dns: unavailable(),
+            providers: ProviderSummary::default(),
+        }
+    }
+
     async fn helper_status(&self) -> Result<HelperStatus, CoreError> {
         #[cfg(windows)]
         {

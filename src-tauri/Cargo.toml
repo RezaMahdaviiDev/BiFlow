@@ -43,5 +43,8 @@ iran-split-platform-linux = { path = "../crates/iran-split-platform-linux" }
 [target.'cfg(target_os = "windows")'.dependencies]
 iran-split-platform-win = { path = "../crates/iran-split-platform-win" }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

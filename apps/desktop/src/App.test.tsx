@@ -19,6 +19,7 @@ beforeEach(() => {
     rules: null,
     cloudRules: null,
     dependencies: [],
+    networkStatus: null,
     diagnostics: null,
     error: null,
     installGuide: null,

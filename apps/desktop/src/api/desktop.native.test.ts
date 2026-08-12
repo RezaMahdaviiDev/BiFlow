@@ -32,6 +32,7 @@ describe("native desktop transport", () => {
     const draft = { revision: 4 } as AppConfig;
 
     await expect(desktop.bootstrap()).resolves.toBe(boot);
+    await desktop.getNetworkStatus();
     await desktop.saveSettings(draft, 4);
     await desktop.cancel("operation-1");
     await desktop.installDependency("mihomo");
@@ -39,14 +40,15 @@ describe("native desktop transport", () => {
     await expect(desktop.subscribe(listener)).resolves.toBe(unlisten);
 
     expect(tauri.invoke).toHaveBeenNthCalledWith(1, "bootstrap_app");
-    expect(tauri.invoke).toHaveBeenNthCalledWith(2, "save_settings", {
+    expect(tauri.invoke).toHaveBeenNthCalledWith(2, "get_network_status");
+    expect(tauri.invoke).toHaveBeenNthCalledWith(3, "save_settings", {
       draft,
       expectedRevision: 4,
     });
-    expect(tauri.invoke).toHaveBeenNthCalledWith(3, "cancel_operation", {
+    expect(tauri.invoke).toHaveBeenNthCalledWith(4, "cancel_operation", {
       operationId: "operation-1",
     });
-    expect(tauri.invoke).toHaveBeenNthCalledWith(4, "install_dependency", {
+    expect(tauri.invoke).toHaveBeenNthCalledWith(5, "install_dependency", {
       id: "mihomo",
     });
     expect(tauri.listen).toHaveBeenCalledWith(

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use iran_split_config::{AppConfig, ExecutableSetting};
 use iran_split_core::{
-    CleanupReport, CoreError, HelperStatus, PlatformBackend, ProcessStatus, ProviderSummary,
-    ReadinessReport, RuntimeGeneration, TunStatus,
+    CleanupReport, ComponentPhase, ComponentStatus, CoreError, HelperStatus, PlatformBackend,
+    ProcessStatus, ProviderSummary, ReadinessReport, RuntimeGeneration, RuntimeHealth, TunStatus,
 };
 use iran_split_ipc::{
     read_frame, validate_envelope, write_frame, Envelope, HelperCommand, HelperReply,
@@ -188,12 +188,13 @@ impl LinuxBackend {
     }
 
     async fn hiddify_listening(config: &AppConfig) -> bool {
-        tokio::time::timeout(
-            Duration::from_millis(750),
-            TcpStream::connect((config.hiddify.host.as_str(), config.hiddify.port)),
-        )
-        .await
-        .is_ok_and(|result| result.is_ok())
+        Self::tcp_listening(&config.hiddify.host, config.hiddify.port).await
+    }
+
+    async fn tcp_listening(host: &str, port: u16) -> bool {
+        tokio::time::timeout(Duration::from_millis(750), TcpStream::connect((host, port)))
+            .await
+            .is_ok_and(|result| result.is_ok())
     }
 
     fn discover_hiddify(config: &AppConfig, data: &Path) -> Option<PathBuf> {
@@ -225,6 +226,149 @@ impl LinuxBackend {
         candidates.into_iter().find(|path| path.is_file())
     }
 
+    fn helper_component(result: Result<HelperStatus, CoreError>) -> ComponentStatus {
+        match result {
+            Ok(status) if status.available && status.authorized => ComponentStatus::new(
+                ComponentPhase::Running,
+                status
+                    .version
+                    .map(|version| format!("Helper {version} is ready")),
+            ),
+            Ok(status) if status.available => ComponentStatus::new(
+                ComponentPhase::Degraded,
+                Some("Helper is running but this user is not authorized".into()),
+            ),
+            Ok(_) => ComponentStatus::new(
+                ComponentPhase::Unavailable,
+                Some("Helper service is not installed or running".into()),
+            ),
+            Err(error) => ComponentStatus::new(ComponentPhase::Error, Some(error.to_string())),
+        }
+    }
+
+    fn hiddify_component(
+        config: &AppConfig,
+        listening: bool,
+        executable: Option<&Path>,
+    ) -> ComponentStatus {
+        if listening {
+            ComponentStatus::new(
+                ComponentPhase::Running,
+                Some(format!(
+                    "Listening on {}:{}",
+                    config.hiddify.host, config.hiddify.port
+                )),
+            )
+        } else if let Some(path) = executable {
+            ComponentStatus::new(
+                ComponentPhase::Stopped,
+                Some(format!("Installed at {}", path.display())),
+            )
+        } else {
+            ComponentStatus::new(
+                ComponentPhase::Unavailable,
+                Some("Hiddify is not installed and its local proxy is not listening".into()),
+            )
+        }
+    }
+
+    async fn mihomo_component(
+        config: &AppConfig,
+        controller_listening: bool,
+        executable: Option<&Path>,
+    ) -> (ComponentStatus, ProviderSummary) {
+        if !controller_listening {
+            let component = executable.map_or_else(
+                || {
+                    ComponentStatus::new(
+                        ComponentPhase::Unavailable,
+                        Some("Mihomo is not installed and its controller is not listening".into()),
+                    )
+                },
+                |path| {
+                    ComponentStatus::new(
+                        ComponentPhase::Stopped,
+                        Some(format!("Installed at {}", path.display())),
+                    )
+                },
+            );
+            return (component, ProviderSummary::default());
+        }
+        let Ok(controller) = ControllerClient::new(
+            &config.mihomo.controller_host,
+            config.mihomo.controller_port,
+            config.mihomo.controller_secret.clone(),
+        ) else {
+            return (
+                ComponentStatus::new(
+                    ComponentPhase::Error,
+                    Some("Mihomo controller address is invalid".into()),
+                ),
+                ProviderSummary::default(),
+            );
+        };
+        match controller.version().await {
+            Ok(version) => {
+                let providers = controller.provider_summary().await.map_or_else(
+                    |_| ProviderSummary::default(),
+                    |summary| ProviderSummary {
+                        ready: summary.ready,
+                        total: summary.total,
+                        rules_loaded: summary.rules_loaded,
+                        last_refresh: Some(chrono::Utc::now()),
+                    },
+                );
+                (
+                    ComponentStatus::new(
+                        ComponentPhase::Running,
+                        Some(format!("Controller {} is ready", version.version)),
+                    ),
+                    providers,
+                )
+            }
+            Err(error) => (
+                ComponentStatus::new(
+                    ComponentPhase::Degraded,
+                    Some(format!(
+                        "Controller port is active but BiFlow cannot authenticate: {error}"
+                    )),
+                ),
+                ProviderSummary::default(),
+            ),
+        }
+    }
+
+    fn tun_component(tun_name: &str) -> ComponentStatus {
+        let active = Path::new("/sys/class/net").join(tun_name).exists();
+        ComponentStatus::new(
+            if active {
+                ComponentPhase::Running
+            } else {
+                ComponentPhase::Stopped
+            },
+            Some(if active {
+                format!("Interface {tun_name} is active")
+            } else {
+                format!("Interface {tun_name} is absent")
+            }),
+        )
+    }
+
+    fn dns_component(port: u16, listening: bool) -> ComponentStatus {
+        ComponentStatus::new(
+            if listening {
+                ComponentPhase::Running
+            } else {
+                ComponentPhase::Stopped
+            },
+            Some(if listening {
+                format!("DNS is listening on 127.0.0.1:{port}")
+            } else {
+                format!("No DNS listener on 127.0.0.1:{port}")
+            }),
+        )
+    }
+
     async fn prepared(&self) -> Result<PreparedGeneration, CoreError> {
         self.prepared
             .lock()
@@ -236,6 +380,41 @@ impl LinuxBackend {
 
 #[async_trait]
 impl PlatformBackend for LinuxBackend {
+    async fn runtime_health(&self) -> RuntimeHealth {
+        let config = self.config.read().await.clone();
+        let hiddify_path = Self::discover_hiddify(&config, &self.paths.user_data_dir);
+        let mihomo_path = self
+            .paths
+            .mihomo_binary
+            .is_file()
+            .then(|| self.paths.mihomo_binary.clone());
+        let (helper_result, hiddify_listening, controller_listening, dns_listening) = tokio::join!(
+            self.helper_status(),
+            Self::hiddify_listening(&config),
+            Self::tcp_listening(
+                &config.mihomo.controller_host,
+                config.mihomo.controller_port
+            ),
+            Self::tcp_listening(&config.mihomo.controller_host, config.mihomo.dns_port),
+        );
+
+        let helper = Self::helper_component(helper_result);
+        let hiddify = Self::hiddify_component(&config, hiddify_listening, hiddify_path.as_deref());
+        let (mihomo, providers) =
+            Self::mihomo_component(&config, controller_listening, mihomo_path.as_deref()).await;
+        let tun = Self::tun_component(&config.mihomo.tun_name);
+        let dns = Self::dns_component(config.mihomo.dns_port, dns_listening);
+
+        RuntimeHealth {
+            helper,
+            hiddify,
+            mihomo,
+            tun,
+            dns,
+            providers,
+        }
+    }
+
     async fn helper_status(&self) -> Result<HelperStatus, CoreError> {
         match self.helper.request(HelperCommand::GetServiceStatus).await {
             Ok(HelperReply::ServiceStatus(status)) => Ok(HelperStatus {

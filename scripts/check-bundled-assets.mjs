@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const assets = [
+  {
+    name: "Linux Mihomo",
+    path: "vendor/mihomo/linux-x86_64/mihomo",
+    sha256: "9c397be7489538628fae781bc005e4c5b8cd7b0961b8bb2ca815c8150f193577",
+    magic: Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+  },
+  {
+    name: "Windows Mihomo",
+    path: "vendor/mihomo/windows-x86_64/mihomo.exe",
+    sha256: "4316ff91fecec2fca9acb5612d7400ba228c069ffd325b1f17f46f1d4ef7e0cd",
+    magic: Buffer.from("MZ"),
+  },
+];
+
+for (const asset of assets) {
+  const bytes = readFileSync(join(root, asset.path));
+  assert.ok(
+    bytes.subarray(0, asset.magic.length).equals(asset.magic),
+    `${asset.name} has an invalid executable header`,
+  );
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  assert.equal(
+    actual,
+    asset.sha256,
+    `${asset.name} failed its SHA-256 integrity check`,
+  );
+}
+
+process.stdout.write(`verified ${assets.length} bundled Mihomo executables\n`);

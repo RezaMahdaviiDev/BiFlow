@@ -12,6 +12,7 @@ import type {
   InstallGuide,
   InstallResult,
   LogEntry,
+  NetworkStatus,
   OperationAccepted,
   RouteTestResult,
   StackPhase,
@@ -21,9 +22,12 @@ import type {
 } from "./models";
 
 const now = () => new Date().toISOString();
-const component = (phase: StackSnapshot["mihomo"]["phase"]) => ({
+const component = (
+  phase: StackSnapshot["mihomo"]["phase"],
+  message: string,
+) => ({
   phase,
-  message: null,
+  message,
   since: now(),
 });
 
@@ -32,10 +36,15 @@ function initialSnapshot(): StackSnapshot {
     revision: 1,
     phase: "stopped",
     operation_id: null,
-    hiddify: component("stopped"),
-    mihomo: component("stopped"),
-    tun: component("stopped"),
-    dns: component("stopped"),
+    helper: {
+      phase: "running",
+      message: "Mock helper is ready",
+      since: now(),
+    },
+    hiddify: component("stopped", "Hiddify proxy is not listening"),
+    mihomo: component("stopped", "Mihomo controller is not listening"),
+    tun: component("stopped", "TUN interface is absent"),
+    dns: component("stopped", "DNS listener is inactive"),
     providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
     exit_ip: null,
     backend: "external_hiddify",
@@ -89,29 +98,29 @@ function initialDirectRules(): DirectRulesDocument {
 
 function initialCloudRules(): CloudRulesStatus {
   return {
-    domain_count: 62_829,
-    ip_count: 2_899,
+    domain_count: 62_828,
+    ip_count: 2_906,
     last_synced_at: null,
     source: "bundled",
     sets: [
       {
         id: "iran-domains",
         kind: "domain",
-        entry_count: 62_829,
+        entry_count: 62_828,
         source: "bundled",
         sha256: null,
       },
       {
         id: "iran-networks",
         kind: "ip_cidr",
-        entry_count: 2_880,
+        entry_count: 2_888,
         source: "bundled",
         sha256: null,
       },
       {
         id: "private",
         kind: "ip_cidr",
-        entry_count: 19,
+        entry_count: 18,
         source: "bundled",
         sha256: null,
       },
@@ -210,6 +219,17 @@ let directRules = initialDirectRules();
 let cloudRules = initialCloudRules();
 let dependencies = initialDependencies();
 
+function mockNetworkStatus(): NetworkStatus {
+  return {
+    state: "online",
+    public_ip: "198.51.100.24",
+    country_code: "IR",
+    city: "Tehran",
+    checked_at: now(),
+    detail: "Internet is reachable",
+  };
+}
+
 function guideFor(id: string): InstallGuide {
   const linux =
     typeof navigator === "undefined" || !/win/i.test(navigator.platform);
@@ -291,10 +311,10 @@ async function runStart(accepted: OperationAccepted) {
   }
   snapshot = {
     ...snapshot,
-    hiddify: component("running"),
-    mihomo: component("running"),
-    tun: component("running"),
-    dns: component("running"),
+    hiddify: component("running", "Hiddify proxy is listening"),
+    mihomo: component("running", "Mihomo controller is ready"),
+    tun: component("running", "TUN interface is active"),
+    dns: component("running", "DNS listener is active"),
     providers: {
       ready: 6,
       total: 6,
@@ -323,10 +343,14 @@ export const mockApi = {
       direct_rules: structuredClone(directRules),
       cloud_rules: structuredClone(cloudRules),
       dependencies: structuredClone(dependencies),
+      network_status: mockNetworkStatus(),
     };
   },
   async getSnapshot() {
     return structuredClone(snapshot);
+  },
+  async getNetworkStatus() {
+    return mockNetworkStatus();
   },
   async start(): Promise<OperationAccepted> {
     if (snapshot.phase === "running") {
@@ -345,10 +369,10 @@ export const mockApi = {
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
-        hiddify: component("stopped"),
-        mihomo: component("stopped"),
-        tun: component("stopped"),
-        dns: component("stopped"),
+        hiddify: component("stopped", "Hiddify proxy is not listening"),
+        mihomo: component("stopped", "Mihomo controller is not listening"),
+        tun: component("stopped", "TUN interface is absent"),
+        dns: component("stopped", "DNS listener is inactive"),
         providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
         exit_ip: null,
       };

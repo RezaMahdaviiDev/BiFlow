@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "../vendor/mihomo/windows-x86_64/mihomo.exe": "dependencies/mihomo.exe"
+    }
+  }
+}

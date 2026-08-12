@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "../vendor/mihomo/linux-x86_64/mihomo": "dependencies/mihomo"
+    }
+  }
+}

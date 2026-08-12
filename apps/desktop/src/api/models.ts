@@ -14,10 +14,12 @@ export type StackPhase =
 
 export type ComponentPhase =
   | "unknown"
+  | "checking"
   | "stopped"
   | "starting"
   | "running"
   | "degraded"
+  | "unavailable"
   | "error";
 
 export interface ComponentStatus {
@@ -53,6 +55,7 @@ export interface StackSnapshot {
   revision: number;
   phase: StackPhase;
   operation_id: string | null;
+  helper: ComponentStatus;
   hiddify: ComponentStatus;
   mihomo: ComponentStatus;
   tun: ComponentStatus;
@@ -165,6 +168,18 @@ export interface BootstrapResult {
   direct_rules: DirectRulesDocument;
   cloud_rules: CloudRulesStatus;
   dependencies: DependencyStatus[];
+  network_status: NetworkStatus;
+}
+
+export type InternetState = "checking" | "online" | "offline";
+
+export interface NetworkStatus {
+  state: InternetState;
+  public_ip: string | null;
+  country_code: string | null;
+  city: string | null;
+  checked_at: string;
+  detail: string | null;
 }
 
 export interface ExportResult {

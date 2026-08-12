@@ -3,6 +3,7 @@ import type { ComponentPhase, StackPhase } from "../api/models";
 const colors: Record<ComponentPhase | StackPhase, string> = {
   uninitialized: "bg-slate-400/15 text-slate-500",
   unknown: "bg-slate-400/15 text-slate-500",
+  checking: "bg-sky-400/15 text-sky-600 dark:text-sky-300",
   stopped: "bg-slate-400/15 text-slate-500",
   starting: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   starting_hiddify: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
@@ -12,6 +13,7 @@ const colors: Record<ComponentPhase | StackPhase, string> = {
   checking_readiness: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   running: "bg-success/15 text-success",
   degraded: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  unavailable: "bg-danger/15 text-danger",
   stopping: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   recovering: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   error: "bg-danger/15 text-danger",

@@ -18,6 +18,11 @@ test.describe("primary BiFlow flows", () => {
     await expect(
       page.getByRole("heading", { name: "Ready when you are" }),
     ).toBeVisible();
+    const statusBar = page.locator("footer[role='status']");
+    await expect(statusBar).toContainText("Internet connected");
+    await expect(statusBar).toContainText("198.51.100.24");
+    await expect(statusBar).toContainText("🇮🇷");
+    await expect(page.getByText("unknown", { exact: true })).toHaveCount(0);
 
     const installButtons = page.getByRole("button", {
       name: "Install",
@@ -38,11 +43,18 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
     await expect(page.getByText("203.0.113.42")).toBeVisible();
+    await expect(
+      page.getByRole("img", {
+        name: /traffic leaving this device and splitting/i,
+      }),
+    ).toBeVisible();
+    await expect(page.locator(".traffic-flow-route")).toHaveCount(2);
 
     await page.getByRole("button", { name: "Disconnect" }).click();
     await expect(
       page.getByRole("heading", { name: "Ready when you are" }),
     ).toBeVisible();
+    await expect(page.locator(".traffic-flow-route")).toHaveCount(0);
   });
 
   test("shows cloud rule counts and adds a custom direct rule", async ({
@@ -54,10 +66,10 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("heading", { name: "Direct rules" }),
     ).toBeVisible();
     await expect(
-      page.getByText("62,829").or(page.getByText("62829")),
+      page.getByText("62,828").or(page.getByText("62828")),
     ).toBeVisible();
     await expect(
-      page.getByText("2,899").or(page.getByText("2899")),
+      page.getByText("2,906").or(page.getByText("2906")),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Update from cloud" }).click();
@@ -75,10 +87,10 @@ test.describe("primary BiFlow flows", () => {
     await page.getByRole("button", { name: "Diagnostics" }).click();
     await page.getByLabel("Test IP or domain").fill("openai.com");
     await page.getByRole("button", { name: "Test flow" }).click();
-    await expect(page.getByRole("status")).toContainText("openai.com → VPN");
+    await expect(page.getByText("openai.com → VPN")).toBeVisible();
 
     await page.getByLabel("Test IP or domain").fill("example.ir");
     await page.getByRole("button", { name: "Test flow" }).click();
-    await expect(page.getByRole("status")).toContainText("example.ir → DIRECT");
+    await expect(page.getByText("example.ir → DIRECT")).toBeVisible();
   });
 });

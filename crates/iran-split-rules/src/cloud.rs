@@ -241,7 +241,7 @@ impl CloudRuleStore {
                 return Ok(status);
             }
         }
-        Ok(self.bundled_status())
+        self.bundled_status()
     }
 
     /// Downloads, validates, and atomically publishes every cloud rule set.
@@ -291,24 +291,26 @@ impl CloudRuleStore {
         }))
     }
 
-    fn bundled_status(&self) -> CloudRulesStatus {
+    fn bundled_status(&self) -> Result<CloudRulesStatus, CloudSyncError> {
         let mut sets = Vec::new();
         for entry in CATALOG {
             let path = self.bundled_dir.join(entry.local_name);
-            let text = fs::read_to_string(&path).unwrap_or_default();
+            let bytes = fs::read(&path)?;
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| CloudSyncError::InvalidSet(entry.local_name.into()))?;
+            let count = provider_entry_count(text);
+            if count < entry.min_entries {
+                return Err(CloudSyncError::InvalidSet(entry.local_name.into()));
+            }
             sets.push(CloudRuleSetStatus {
                 id: entry.local_name.trim_end_matches(".txt").to_owned(),
                 kind: entry.kind,
-                entry_count: provider_entry_count(&text),
+                entry_count: count,
                 source: "bundled".into(),
-                sha256: path
-                    .is_file()
-                    .then(|| fs::read(&path).ok())
-                    .flatten()
-                    .map(|bytes| sha256_hex(&bytes)),
+                sha256: Some(sha256_hex(&bytes)),
             });
         }
-        summarize(sets, None, "bundled")
+        Ok(summarize(sets, None, "bundled"))
     }
 
     fn read_meta(&self) -> Result<SyncMeta, CloudSyncError> {
@@ -449,6 +451,14 @@ mod tests {
     fn counts_ignore_comments_and_payload_headers() {
         let text = "# comment\npayload:\n+.digikala.com\n\n5.22.0.0/16\n";
         assert_eq!(provider_entry_count(text), 2);
+    }
+
+    #[test]
+    fn incomplete_bundled_snapshot_is_rejected() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = CloudRuleStore::load(directory.path(), directory.path().join("cache"));
+
+        assert!(matches!(store.status(), Err(CloudSyncError::Io(_))));
     }
 
     #[tokio::test]

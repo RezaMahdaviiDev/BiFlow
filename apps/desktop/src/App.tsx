@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import logo from "./assets/logo.png";
 import { desktop } from "./api/desktop";
 import { Dashboard } from "./components/Dashboard";
+import { AppStatusBar } from "./components/AppStatusBar";
 import { Diagnostics } from "./components/Diagnostics";
 import { DirectRules } from "./components/DirectRules";
 import { Settings } from "./components/Settings";
@@ -47,6 +48,13 @@ export function App() {
     return () => unsubscribe();
     // The Zustand action is stable for the store lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void useAppStore.getState().refreshNetworkStatus();
+    }, 30_000);
+    return () => window.clearInterval(interval);
   }, []);
 
   if (store.loading) {
@@ -121,20 +129,23 @@ export function App() {
         </div>
       </aside>
 
-      <main className="mx-auto w-full max-w-6xl p-5 sm:p-8 lg:p-10">
-        {store.page === "dashboard" && store.snapshot ? (
-          <Dashboard snapshot={store.snapshot} />
-        ) : null}
-        {store.page === "rules" && store.rules ? (
-          <DirectRules rules={store.rules} />
-        ) : null}
-        {store.page === "diagnostics" ? (
-          <Diagnostics report={store.diagnostics} />
-        ) : null}
-        {store.page === "settings" && store.settings ? (
-          <Settings settings={store.settings} />
-        ) : null}
-      </main>
+      <div className="flex min-h-screen min-w-0 flex-col">
+        <main className="mx-auto w-full max-w-6xl flex-1 p-5 sm:p-8 lg:p-10">
+          {store.page === "dashboard" && store.snapshot ? (
+            <Dashboard snapshot={store.snapshot} />
+          ) : null}
+          {store.page === "rules" && store.rules ? (
+            <DirectRules rules={store.rules} />
+          ) : null}
+          {store.page === "diagnostics" ? (
+            <Diagnostics report={store.diagnostics} />
+          ) : null}
+          {store.page === "settings" && store.settings ? (
+            <Settings settings={store.settings} />
+          ) : null}
+        </main>
+        <AppStatusBar />
+      </div>
 
       <Dialog.Root
         open={store.error !== null && store.installGuide === null}

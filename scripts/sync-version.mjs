@@ -27,16 +27,28 @@ function fail(message) {
   throw new Error(message);
 }
 
+export function replaceJsonVersion(source, version) {
+  const next = source.replace(
+    /^(\s*"version"\s*:\s*)"[^"]+"/m,
+    `$1"${version}"`,
+  );
+  if (next === source) {
+    fail("could not find a JSON version property to replace");
+  }
+  return next;
+}
+
 function syncJson(path, version) {
-  const json = JSON.parse(read(path));
+  const source = read(path);
+  const json = JSON.parse(source);
   if (json.version === version) return;
   if (checkOnly) {
     fail(
       `${path} version is ${json.version}, expected ${version} from ./version`,
     );
   }
-  json.version = version;
-  write(path, `${JSON.stringify(json, null, 2)}\n`);
+  const next = replaceJsonVersion(source, version);
+  write(path, next);
 }
 
 function syncCargoWorkspace(path, version) {
@@ -58,15 +70,7 @@ function syncCargoWorkspace(path, version) {
 }
 
 function syncTauri(path, version) {
-  const json = JSON.parse(read(path));
-  if (json.version === version) return;
-  if (checkOnly) {
-    fail(
-      `${path} version is ${json.version}, expected ${version} from ./version`,
-    );
-  }
-  json.version = version;
-  write(path, `${JSON.stringify(json, null, 2)}\n`);
+  syncJson(path, version);
 }
 
 function isDirectRun() {

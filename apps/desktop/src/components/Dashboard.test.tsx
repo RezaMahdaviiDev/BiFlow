@@ -22,6 +22,7 @@ const stopped: StackSnapshot = {
   revision: 1,
   phase: "stopped",
   operation_id: null,
+  helper: { phase: "running", message: "Helper is ready", since: now },
   hiddify: { phase: "stopped", message: null, since: now },
   mihomo: { phase: "stopped", message: null, since: now },
   tun: { phase: "stopped", message: null, since: now },
@@ -114,5 +115,35 @@ describe("Dashboard", () => {
     render(<Dashboard snapshot={stopped} />);
     expect(screen.queryByRole("button", { name: /^Install$/ })).toBeNull();
     expect(screen.getAllByText("stopped")).toHaveLength(5);
+  });
+
+  it("shows animated direct and VPN routes only while connected", () => {
+    const running = {
+      phase: "running" as const,
+      message: "Ready",
+      since: now,
+    };
+    const { rerender } = render(
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          phase: "running",
+          helper: running,
+          hiddify: running,
+          mihomo: running,
+          tun: running,
+          dns: running,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("img", {
+        name: /traffic leaving this device and splitting/i,
+      }),
+    ).toBeVisible();
+
+    rerender(<Dashboard snapshot={stopped} />);
+    expect(screen.queryByRole("img")).toBeNull();
   });
 });

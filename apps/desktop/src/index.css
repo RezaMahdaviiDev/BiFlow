@@ -64,6 +64,42 @@ select:focus-visible,
   outline-offset: 2px;
 }
 
+.traffic-flow-base {
+  fill: none;
+  stroke: rgb(var(--muted) / 0.16);
+  stroke-width: 8;
+  stroke-linecap: round;
+}
+
+.traffic-flow-route {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 3 13;
+  animation: traffic-flow 1.1s linear infinite;
+}
+
+.traffic-flow-route-direct {
+  stroke: rgb(var(--success));
+}
+
+.traffic-flow-route-vpn {
+  stroke: rgb(var(--brand));
+  animation-delay: -0.55s;
+}
+
+.traffic-flow-label {
+  fill: rgb(var(--ink));
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@keyframes traffic-flow {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

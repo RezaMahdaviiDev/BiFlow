@@ -4,6 +4,7 @@ use flate2::read::GzDecoder;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
+    error::Error as _,
     fs,
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
@@ -11,14 +12,18 @@ use std::{
 };
 use thiserror::Error;
 
-const USER_AGENT: &str = "BiFlow/0.1.0";
+const USER_AGENT: &str = concat!("BiFlow/", env!("CARGO_PKG_VERSION"));
 const MAX_DOWNLOAD_BYTES: usize = 180 * 1024 * 1024;
 const HIDDIFY_VERSION: &str = "v4.1.1";
 const MIHOMO_VERSION: &str = "v1.19.29";
 const MIHOMO_LINUX_SHA256: &str =
     "9c397be7489538628fae781bc005e4c5b8cd7b0961b8bb2ca815c8150f193577";
+const MIHOMO_LINUX_ARCHIVE_SHA256: &str =
+    "60de76a35e6cbf7b4fa4a20f5c257c24345d1d635ab1aa3877022a1997ef413c";
 const MIHOMO_WINDOWS_ZIP_SHA256: &str =
     "1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9";
+const MIHOMO_WINDOWS_SHA256: &str =
+    "4316ff91fecec2fca9acb5612d7400ba228c069ffd325b1f17f46f1d4ef7e0cd";
 
 #[derive(Debug, Error)]
 pub enum DepsError {
@@ -271,12 +276,16 @@ pub fn install_guide(id: DependencyId) -> InstallGuide {
     }
 }
 
-pub async fn install_dependency(id: DependencyId, data: &Path) -> Result<InstallResult, DepsError> {
+pub async fn install_dependency(
+    id: DependencyId,
+    data: &Path,
+    bundled_dependencies: &Path,
+) -> Result<InstallResult, DepsError> {
     fs::create_dir_all(data.join("bin"))?;
     fs::create_dir_all(data.join("apps"))?;
     let path = match id {
         DependencyId::Hiddify => install_hiddify(data).await?,
-        DependencyId::Mihomo => install_mihomo(data).await?,
+        DependencyId::Mihomo => install_mihomo(data, bundled_dependencies).await?,
     };
     Ok(InstallResult {
         id: id.as_str(),
@@ -352,9 +361,15 @@ async fn install_hiddify_windows(data: &Path) -> Result<PathBuf, DepsError> {
     })
 }
 
-async fn install_mihomo(data: &Path) -> Result<PathBuf, DepsError> {
+async fn install_mihomo(data: &Path, bundled_dependencies: &Path) -> Result<PathBuf, DepsError> {
     let dest = data.join(mihomo_file_name());
     if cfg!(target_os = "windows") {
+        let bundled = bundled_dependencies.join("mihomo.exe");
+        if bundled.is_file() {
+            let bytes = fs::read(bundled)?;
+            install_windows_mihomo_bytes(&dest, &bytes, MIHOMO_WINDOWS_SHA256)?;
+            return Ok(dest);
+        }
         let bytes = download_first(&[mihomo_windows_url()]).await?;
         verify_sha256(&bytes, MIHOMO_WINDOWS_ZIP_SHA256)?;
         let staging = data.join("apps/mihomo-extract");
@@ -362,18 +377,52 @@ async fn install_mihomo(data: &Path) -> Result<PathBuf, DepsError> {
         let found = find_file(&staging, "mihomo.exe")
             .ok_or_else(|| DepsError::Install("Mihomo zip did not contain mihomo.exe".into()))?;
         fs::create_dir_all(dest.parent().unwrap_or(data))?;
-        fs::copy(found, &dest)?;
+        let executable = fs::read(found)?;
+        install_windows_mihomo_bytes(&dest, &executable, MIHOMO_WINDOWS_SHA256)?;
         let _ = fs::remove_dir_all(staging);
     } else {
-        let bytes = download_first(&[mihomo_linux_url()]).await?;
-        let decoded = gunzip(&bytes)?;
-        verify_sha256(&decoded, MIHOMO_LINUX_SHA256)?;
-        if !is_elf(&decoded) {
-            return Err(DepsError::Integrity("Mihomo is not an ELF binary".into()));
+        let bundled = bundled_dependencies.join("mihomo");
+        if bundled.is_file() {
+            let bytes = fs::read(bundled)?;
+            install_linux_mihomo_bytes(&dest, &bytes, MIHOMO_LINUX_SHA256)?;
+            return Ok(dest);
         }
-        write_executable(&dest, &decoded)?;
+        let bytes = download_first(&[mihomo_linux_url()]).await?;
+        verify_sha256(&bytes, MIHOMO_LINUX_ARCHIVE_SHA256)?;
+        let decoded = gunzip(&bytes)?;
+        install_linux_mihomo_bytes(&dest, &decoded, MIHOMO_LINUX_SHA256)?;
     }
     Ok(dest)
+}
+
+fn install_linux_mihomo_bytes(
+    destination: &Path,
+    bytes: &[u8],
+    expected_sha256: &str,
+) -> Result<(), DepsError> {
+    verify_sha256(bytes, expected_sha256)?;
+    if !is_elf(bytes) {
+        return Err(DepsError::Integrity("Mihomo is not an ELF binary".into()));
+    }
+    write_executable(destination, bytes)
+}
+
+fn install_windows_mihomo_bytes(
+    destination: &Path,
+    bytes: &[u8],
+    expected_sha256: &str,
+) -> Result<(), DepsError> {
+    verify_sha256(bytes, expected_sha256)?;
+    if !is_pe(bytes) {
+        return Err(DepsError::Integrity(
+            "Mihomo is not a Windows executable".into(),
+        ));
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(destination, bytes)?;
+    Ok(())
 }
 
 fn mihomo_file_name() -> &'static str {
@@ -446,27 +495,59 @@ async fn download(url: &str) -> Result<Vec<u8>, DepsError> {
     if !url_allowed(url) {
         return Err(DepsError::Fetch("download URL is not allowlisted".into()));
     }
-    let client = reqwest::Client::builder()
+    match download_with_client(url, false).await {
+        Ok(bytes) => Ok(bytes),
+        Err(proxy_error) => download_with_client(url, true)
+            .await
+            .map_err(|direct_error| {
+                DepsError::Fetch(format!(
+                "proxy-aware request failed ({proxy_error}); direct retry failed ({direct_error})"
+            ))
+            }),
+    }
+}
+
+async fn download_with_client(url: &str, direct: bool) -> Result<Vec<u8>, String> {
+    let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(300))
-        .redirect(reqwest::redirect::Policy::limited(8))
-        .build()
-        .map_err(|error| DepsError::Fetch(error.to_string()))?;
+        .redirect(reqwest::redirect::Policy::limited(8));
+    if direct {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|error| error_chain(&error))?;
     let response = client
         .get(url)
         .send()
         .await
         .and_then(reqwest::Response::error_for_status)
-        .map_err(|error| DepsError::Fetch(error.to_string()))?;
+        .map_err(|error| error_chain(&error))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_DOWNLOAD_BYTES as u64)
+    {
+        return Err("download exceeded the size limit".into());
+    }
     let bytes = response
         .bytes()
         .await
-        .map_err(|error| DepsError::Fetch(error.to_string()))?;
+        .map_err(|error| error_chain(&error))?;
     if bytes.len() > MAX_DOWNLOAD_BYTES {
-        return Err(DepsError::Fetch("download exceeded the size limit".into()));
+        return Err("download exceeded the size limit".into());
     }
     Ok(bytes.to_vec())
+}
+
+fn error_chain(error: &reqwest::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
 
 fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, DepsError> {
@@ -654,5 +735,17 @@ mod tests {
         let found = files_named_in(std::iter::once(dir.clone()), &["hiddify", "mihomo"]);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn bundled_linux_mihomo_is_verified_before_install() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let destination = directory.path().join("bin/mihomo");
+        let bytes = b"\x7fELF bundled mihomo fixture";
+        let expected = hex::encode(Sha256::digest(bytes));
+
+        install_linux_mihomo_bytes(&destination, bytes, &expected).expect("install");
+
+        assert_eq!(fs::read(destination).expect("installed bytes"), bytes);
     }
 }

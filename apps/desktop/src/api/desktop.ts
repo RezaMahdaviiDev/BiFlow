@@ -12,6 +12,7 @@ import type {
   InstallGuide,
   InstallResult,
   LogEntry,
+  NetworkStatus,
   OperationAccepted,
   RouteTestResult,
   StackSnapshot,
@@ -28,6 +29,9 @@ export const desktop = {
   },
   getSnapshot(): Promise<StackSnapshot> {
     return native ? invoke("get_stack_snapshot") : mockApi.getSnapshot();
+  },
+  getNetworkStatus(): Promise<NetworkStatus> {
+    return native ? invoke("get_network_status") : mockApi.getNetworkStatus();
   },
   start(): Promise<OperationAccepted> {
     return native ? invoke("start_stack") : mockApi.start();

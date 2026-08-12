@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "repository": "Chocolate4U/Iran-clash-rules",
+  "branch": "release",
+  "commit": "767ef8bf56739c436f72e7489cc86b5f79a926e6",
+  "fetched_at": "2026-08-12T22:57:04.774Z",
+  "rules": [
+    {
+      "id": "iran-domains",
+      "file": "iran-domains.txt",
+      "upstream_file": "ir.txt",
+      "kind": "domain",
+      "entry_count": 62828,
+      "sha256": "ae533f8bf147877bb97efd24a3dd708695f10289462d0746c30af0d9442f2581",
+      "source": "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/767ef8bf56739c436f72e7489cc86b5f79a926e6/ir.txt"
+    },
+    {
+      "id": "iran-networks",
+      "file": "iran-networks.txt",
+      "upstream_file": "ircidr.txt",
+      "kind": "ip_cidr",
+      "entry_count": 2888,
+      "sha256": "e72076c81b372dcd6ecb6e8fb17b63b0d33bdd1dc53f1b795875a3f811d6561e",
+      "source": "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/767ef8bf56739c436f72e7489cc86b5f79a926e6/ircidr.txt"
+    },
+    {
+      "id": "private",
+      "file": "private.txt",
+      "upstream_file": "private.txt",
+      "kind": "ip_cidr",
+      "entry_count": 18,
+      "sha256": "aed134cc43c2414cb3df5a10fcb3e215e64fac0249579a112c163674df4ddd36",
+      "source": "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/767ef8bf56739c436f72e7489cc86b5f79a926e6/private.txt"
+    }
+  ]
+}

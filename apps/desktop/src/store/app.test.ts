@@ -13,6 +13,7 @@ vi.mock("../api/desktop", () => ({
     listDependencies: vi.fn(),
     getInstallGuide: vi.fn(),
     syncCloudRules: vi.fn(),
+    getNetworkStatus: vi.fn(),
   },
 }));
 
@@ -24,6 +25,7 @@ const boot = {
     revision: 1,
     phase: "stopped",
     operation_id: null,
+    helper: { phase: "running", message: "Helper is ready", since: "now" },
     hiddify: { phase: "stopped", message: null, since: "now" },
     mihomo: { phase: "stopped", message: null, since: "now" },
     tun: { phase: "stopped", message: null, since: "now" },
@@ -52,6 +54,14 @@ const boot = {
       path: null,
     },
   ],
+  network_status: {
+    state: "checking",
+    public_ip: null,
+    country_code: null,
+    city: null,
+    checked_at: "now",
+    detail: null,
+  },
 } as unknown as BootstrapResult;
 
 describe("app store", () => {
@@ -68,6 +78,7 @@ describe("app store", () => {
       rules: null,
       cloudRules: null,
       dependencies: [],
+      networkStatus: null,
       diagnostics: null,
       error: null,
       installGuide: null,
@@ -76,11 +87,20 @@ describe("app store", () => {
 
   it("loads bootstrap data including cloud rules and dependencies", async () => {
     vi.mocked(desktop.bootstrap).mockResolvedValue(boot);
+    vi.mocked(desktop.getNetworkStatus).mockResolvedValue({
+      state: "online",
+      public_ip: "203.0.113.8",
+      country_code: "IR",
+      city: "Tehran",
+      checked_at: "now",
+      detail: null,
+    });
     await useAppStore.getState().initialize();
     const state = useAppStore.getState();
     expect(state.loading).toBe(false);
     expect(state.cloudRules?.domain_count).toBe(10);
     expect(state.dependencies[0]?.id).toBe("hiddify");
+    expect(desktop.getNetworkStatus).toHaveBeenCalledOnce();
   });
 
   it("starts the stack from a stopped snapshot", async () => {

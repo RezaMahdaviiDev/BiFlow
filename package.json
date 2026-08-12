@@ -1,6 +1,6 @@
 {
   "name": "iran-split-desktop-workspace",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "private": true,
   "packageManager": "pnpm@9.0.1",
   "engines": {
@@ -9,9 +9,9 @@
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",
     "version:check": "node scripts/sync-version.mjs --check",
-    "predev": "node scripts/sync-version.mjs",
+    "predev": "node scripts/sync-version.mjs && pnpm bundle:check",
     "dev": "pnpm --filter @iran-split/desktop dev",
-    "prebuild": "node scripts/sync-version.mjs",
+    "prebuild": "node scripts/sync-version.mjs && pnpm bundle:check",
     "build": "pnpm --filter @iran-split/desktop build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -19,9 +19,13 @@
     "typecheck": "pnpm --filter @iran-split/desktop typecheck",
     "test": "pnpm --filter @iran-split/desktop test",
     "test:scripts": "node --test scripts/*.test.mjs",
+    "rules:update": "node scripts/sync-rules.mjs",
+    "rules:check": "node scripts/sync-rules.mjs --check",
+    "assets:check": "node scripts/check-bundled-assets.mjs",
+    "bundle:check": "pnpm rules:check && pnpm assets:check",
     "test:e2e": "playwright test",
     "precheck": "node scripts/sync-version.mjs",
-    "check": "pnpm version:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts",
+    "check": "pnpm version:check && pnpm bundle:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts",
     "tauri": "tauri"
   },
   "devDependencies": {

@@ -132,7 +132,7 @@ run_dev() {
   ensure_node_dependencies
   ensure_rust
   ensure_linux_desktop_dependencies
-  refresh_assets
+  verify_mihomo "${VENDORED_MIHOMO}"
   cd -- "${PROJECT_DIR}"
   exec pnpm tauri dev
 }
@@ -158,7 +158,7 @@ run_build() {
   ensure_node_dependencies
   ensure_rust
   ensure_linux_desktop_dependencies
-  refresh_assets
+  verify_mihomo "${VENDORED_MIHOMO}"
   cd -- "${PROJECT_DIR}"
   pnpm build
   cargo build --release -p iran-split-helper -p iran-split-cli

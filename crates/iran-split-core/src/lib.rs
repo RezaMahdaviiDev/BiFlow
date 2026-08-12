@@ -31,10 +31,12 @@ pub enum StackPhase {
 pub enum ComponentPhase {
     #[default]
     Unknown,
+    Checking,
     Stopped,
     Starting,
     Running,
     Degraded,
+    Unavailable,
     Error,
 }
 
@@ -58,7 +60,10 @@ impl ComponentStatus {
 
 impl Default for ComponentStatus {
     fn default() -> Self {
-        Self::new(ComponentPhase::Unknown, None)
+        Self::new(
+            ComponentPhase::Checking,
+            Some("Inspecting current status".into()),
+        )
     }
 }
 
@@ -124,6 +129,7 @@ pub struct StackSnapshot {
     pub revision: u64,
     pub phase: StackPhase,
     pub operation_id: Option<Uuid>,
+    pub helper: ComponentStatus,
     pub hiddify: ComponentStatus,
     pub mihomo: ComponentStatus,
     pub tun: ComponentStatus,
@@ -141,6 +147,7 @@ impl Default for StackSnapshot {
             revision: 0,
             phase: StackPhase::Uninitialized,
             operation_id: None,
+            helper: ComponentStatus::default(),
             hiddify: ComponentStatus::default(),
             mihomo: ComponentStatus::default(),
             tun: ComponentStatus::default(),
@@ -207,6 +214,16 @@ pub struct ReadinessReport {
     pub egress_ready: bool,
     pub providers: ProviderSummary,
     pub exit_ip: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeHealth {
+    pub helper: ComponentStatus,
+    pub hiddify: ComponentStatus,
+    pub mihomo: ComponentStatus,
+    pub tun: ComponentStatus,
+    pub dns: ComponentStatus,
+    pub providers: ProviderSummary,
 }
 
 impl ReadinessReport {
@@ -339,6 +356,7 @@ impl CoreError {
 
 #[async_trait]
 pub trait PlatformBackend: Send + Sync + 'static {
+    async fn runtime_health(&self) -> RuntimeHealth;
     async fn helper_status(&self) -> Result<HelperStatus, CoreError>;
     async fn ensure_hiddify(&self, cancel: CancellationToken) -> Result<(), CoreError>;
     async fn prepare_runtime(&self) -> Result<RuntimeGeneration, CoreError>;
@@ -418,6 +436,11 @@ impl<B: PlatformBackend> Engine<B> {
 
     pub fn subscribe(&self) -> watch::Receiver<StackSnapshot> {
         self.snapshots.subscribe()
+    }
+
+    pub async fn refresh_health(&self) {
+        let health = self.backend.runtime_health().await;
+        self.update(|snapshot| apply_health(snapshot, health));
     }
 
     /// Queues startup reconciliation of helper and network state.
@@ -541,7 +564,9 @@ impl<B: PlatformBackend> Engine<B> {
             if let Err(error) = result {
                 if !matches!(error, CoreError::Cancelled) {
                     error!(operation_id = %item.id, %error, "operation failed");
+                    let health = engine.backend.runtime_health().await;
                     engine.update(|snapshot| {
+                        apply_health(snapshot, health);
                         snapshot.phase = StackPhase::Error;
                         snapshot.last_error = Some(error.to_app_error(item.id));
                     });
@@ -561,23 +586,22 @@ impl<B: PlatformBackend> Engine<B> {
     ) -> Result<(), CoreError> {
         self.transition(StackPhase::Recovering, operation_id);
         check_cancelled(cancel)?;
-        let helper = self.backend.helper_status().await?;
-        if !helper.available {
-            return Err(CoreError::HelperUnavailable);
-        }
-        if !helper.authorized {
-            return Err(CoreError::HelperUnauthorized);
-        }
-        let process = self.backend.core_process().await?;
-        let tun = self.backend.tun_status().await?;
-        if process.running || tun.active {
-            warn!("found owned runtime state during startup reconciliation");
-            let report = self.backend.cleanup_owned_state().await?;
-            if !report.clean() {
-                return Err(CoreError::TunCleanupFailed(report.warnings.join("; ")));
+        let health = self.backend.runtime_health().await;
+        let helper_ready = health.helper.phase == ComponentPhase::Running;
+        self.update(|snapshot| apply_health(snapshot, health));
+        if helper_ready {
+            let process = self.backend.core_process().await.unwrap_or_default();
+            let tun = self.backend.tun_status().await.unwrap_or_default();
+            if process.running || tun.active {
+                warn!("found owned runtime state during startup reconciliation");
+                let report = self.backend.cleanup_owned_state().await?;
+                if !report.clean() {
+                    return Err(CoreError::TunCleanupFailed(report.warnings.join("; ")));
+                }
             }
         }
-        self.set_stopped();
+        let health = self.backend.runtime_health().await;
+        self.set_stopped(health);
         Ok(())
     }
 
@@ -602,7 +626,8 @@ impl<B: PlatformBackend> Engine<B> {
                 }
             }
             if matches!(error, CoreError::Cancelled) {
-                self.set_stopped();
+                let health = self.backend.runtime_health().await;
+                self.set_stopped(health);
             }
             return Err(error);
         }
@@ -622,6 +647,12 @@ impl<B: PlatformBackend> Engine<B> {
         if !helper.authorized {
             return Err(CoreError::HelperUnauthorized);
         }
+        self.update(|snapshot| {
+            snapshot.helper = ComponentStatus::new(
+                ComponentPhase::Running,
+                helper.version.map(|version| format!("Helper {version}")),
+            );
+        });
 
         self.transition(StackPhase::StartingHiddify, operation_id);
         self.update(|snapshot| {
@@ -709,7 +740,8 @@ impl<B: PlatformBackend> Engine<B> {
                 report.warnings.join("; ")
             )));
         }
-        self.set_stopped();
+        let health = self.backend.runtime_health().await;
+        self.set_stopped(health);
         Ok(())
     }
 
@@ -720,14 +752,11 @@ impl<B: PlatformBackend> Engine<B> {
         });
     }
 
-    fn set_stopped(&self) {
+    fn set_stopped(&self, health: RuntimeHealth) {
         self.update(|snapshot| {
+            apply_health(snapshot, health);
             snapshot.phase = StackPhase::Stopped;
             snapshot.operation_id = None;
-            snapshot.mihomo = ComponentStatus::new(ComponentPhase::Stopped, None);
-            snapshot.tun = ComponentStatus::new(ComponentPhase::Stopped, None);
-            snapshot.dns = ComponentStatus::new(ComponentPhase::Stopped, None);
-            snapshot.providers = ProviderSummary::default();
             snapshot.exit_ip = None;
             snapshot.last_error = None;
         });
@@ -777,6 +806,15 @@ impl<B: PlatformBackend> Engine<B> {
     }
 }
 
+fn apply_health(snapshot: &mut StackSnapshot, health: RuntimeHealth) {
+    snapshot.helper = health.helper;
+    snapshot.hiddify = health.hiddify;
+    snapshot.mihomo = health.mihomo;
+    snapshot.tun = health.tun;
+    snapshot.dns = health.dns;
+    snapshot.providers = health.providers;
+}
+
 fn check_cancelled(cancel: &CancellationToken) -> Result<(), CoreError> {
     if cancel.is_cancelled() {
         Err(CoreError::Cancelled)
@@ -797,13 +835,70 @@ mod tests {
         fail_readiness: AtomicBool,
         slow_hiddify: AtomicBool,
         hiddify_missing: AtomicBool,
+        helper_missing: AtomicBool,
         starts: AtomicUsize,
         cleanups: AtomicUsize,
     }
 
     #[async_trait]
     impl PlatformBackend for FakeBackend {
+        async fn runtime_health(&self) -> RuntimeHealth {
+            let helper = if self.helper_missing.load(Ordering::SeqCst) {
+                ComponentStatus::new(ComponentPhase::Unavailable, Some("Helper missing".into()))
+            } else {
+                ComponentStatus::new(ComponentPhase::Running, Some("Helper test".into()))
+            };
+            let hiddify = if self.hiddify_missing.load(Ordering::SeqCst) {
+                ComponentStatus::new(ComponentPhase::Unavailable, Some("Hiddify missing".into()))
+            } else {
+                ComponentStatus::new(ComponentPhase::Running, Some("Hiddify ready".into()))
+            };
+            let running = self.process.load(Ordering::SeqCst);
+            let tun = self.tun.load(Ordering::SeqCst);
+            RuntimeHealth {
+                helper,
+                hiddify,
+                mihomo: ComponentStatus::new(
+                    if running {
+                        ComponentPhase::Running
+                    } else {
+                        ComponentPhase::Stopped
+                    },
+                    None,
+                ),
+                tun: ComponentStatus::new(
+                    if tun {
+                        ComponentPhase::Running
+                    } else {
+                        ComponentPhase::Stopped
+                    },
+                    Some("test-tun".into()),
+                ),
+                dns: ComponentStatus::new(
+                    if running {
+                        ComponentPhase::Running
+                    } else {
+                        ComponentPhase::Stopped
+                    },
+                    None,
+                ),
+                providers: if running {
+                    ProviderSummary {
+                        ready: 1,
+                        total: 1,
+                        rules_loaded: 100,
+                        last_refresh: Some(Utc::now()),
+                    }
+                } else {
+                    ProviderSummary::default()
+                },
+            }
+        }
+
         async fn helper_status(&self) -> Result<HelperStatus, CoreError> {
+            if self.helper_missing.load(Ordering::SeqCst) {
+                return Ok(HelperStatus::default());
+            }
             Ok(HelperStatus {
                 available: true,
                 authorized: true,
@@ -976,6 +1071,29 @@ mod tests {
             .await
             .expect("stopped");
         assert_eq!(backend.cleanups.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn startup_without_helper_reports_exact_component_states() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.helper_missing.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+
+        engine
+            .reconcile_startup()
+            .await
+            .expect("reconcile accepted");
+        let snapshot = engine
+            .wait_for_phase(StackPhase::Stopped, Duration::from_secs(2))
+            .await
+            .expect("stopped");
+
+        assert_eq!(snapshot.helper.phase, ComponentPhase::Unavailable);
+        assert_eq!(snapshot.hiddify.phase, ComponentPhase::Running);
+        assert_eq!(snapshot.mihomo.phase, ComponentPhase::Stopped);
+        assert_eq!(snapshot.tun.phase, ComponentPhase::Stopped);
+        assert_eq!(snapshot.dns.phase, ComponentPhase::Stopped);
+        assert!(snapshot.last_error.is_none());
     }
 
     #[test]

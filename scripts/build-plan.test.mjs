@@ -112,12 +112,42 @@ describe("release artifact names", () => {
       readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
     );
 
-    assert.equal(config.build.beforeDevCommand, "pnpm --dir apps/desktop dev");
+    assert.equal(
+      config.build.beforeDevCommand,
+      "pnpm bundle:check && pnpm --dir apps/desktop dev",
+    );
     assert.equal(
       config.build.beforeBuildCommand,
-      "pnpm --dir apps/desktop build",
+      "pnpm bundle:check && pnpm --dir apps/desktop build",
     );
     assert.equal(config.build.frontendDist, "../apps/desktop/dist");
+  });
+
+  it("validates and maps offline rules and Mihomo into every native build", () => {
+    const workspace = JSON.parse(
+      readFileSync(join(root, "package.json"), "utf8"),
+    );
+    const config = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+    );
+    const linux = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.linux.conf.json"), "utf8"),
+    );
+    const windows = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.windows.conf.json"), "utf8"),
+    );
+
+    assert.match(workspace.scripts["bundle:check"], /rules:check/);
+    assert.match(workspace.scripts["bundle:check"], /assets:check/);
+    assert.equal(config.bundle.resources["../resources/rules/"], "rules/");
+    assert.equal(
+      linux.bundle.resources["../vendor/mihomo/linux-x86_64/mihomo"],
+      "dependencies/mihomo",
+    );
+    assert.equal(
+      windows.bundle.resources["../vendor/mihomo/windows-x86_64/mihomo.exe"],
+      "dependencies/mihomo.exe",
+    );
   });
 
   it("starts the native Rust-backed application by default", () => {
@@ -136,6 +166,16 @@ describe("release artifact names", () => {
     assert.match(source, /case "\$\{1:-dev\}" in/);
     assert.match(source, /desktop\) run_dev ;;/);
     assert.match(source, /web\) run_web ;;/);
+  });
+
+  it("presents BiFlow to end users with a tagline, architecture, and FAQ", () => {
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    assert.match(readme, /Right traffic\. Right route/);
+    assert.match(readme, /## Description/);
+    assert.match(readme, /## How it works/);
+    assert.match(readme, /## Architecture/);
+    assert.match(readme, /## Develop/);
+    assert.match(readme, /## FAQ/);
   });
 
   it("requires a green frontend and rust build before a change is done", () => {

@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use iran_split_config::AppConfig;
 use iran_split_core::{
-    CleanupReport, CoreError, Engine, HelperStatus, PlatformBackend, ProcessStatus,
-    ProviderSummary, ReadinessReport, RuntimeGeneration, StackPhase, TunStatus,
+    CleanupReport, ComponentPhase, ComponentStatus, CoreError, Engine, HelperStatus,
+    PlatformBackend, ProcessStatus, ProviderSummary, ReadinessReport, RuntimeGeneration,
+    RuntimeHealth, StackPhase, TunStatus,
 };
 use iran_split_rules::{DirectRulesDocument, RuleSet};
 use std::{sync::Arc, time::Duration};
@@ -98,6 +99,39 @@ struct DemoBackend {
 
 #[async_trait]
 impl PlatformBackend for DemoBackend {
+    async fn runtime_health(&self) -> RuntimeHealth {
+        let running = *self.running.lock().await;
+        RuntimeHealth {
+            helper: ComponentStatus::new(ComponentPhase::Running, Some("Helper demo".into())),
+            hiddify: ComponentStatus::new(ComponentPhase::Running, Some("Demo proxy".into())),
+            mihomo: ComponentStatus::new(
+                if running {
+                    ComponentPhase::Running
+                } else {
+                    ComponentPhase::Stopped
+                },
+                None,
+            ),
+            tun: ComponentStatus::new(
+                if running {
+                    ComponentPhase::Running
+                } else {
+                    ComponentPhase::Stopped
+                },
+                Some("demo-tun".into()),
+            ),
+            dns: ComponentStatus::new(
+                if running {
+                    ComponentPhase::Running
+                } else {
+                    ComponentPhase::Stopped
+                },
+                None,
+            ),
+            providers: ProviderSummary::default(),
+        }
+    }
+
     async fn helper_status(&self) -> Result<HelperStatus, CoreError> {
         Ok(HelperStatus {
             available: true,

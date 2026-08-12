@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "BiFlow",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "identifier": "app.biflow.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --dir apps/desktop dev",
+    "beforeDevCommand": "pnpm bundle:check && pnpm --dir apps/desktop dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm --dir apps/desktop build",
+    "beforeBuildCommand": "pnpm bundle:check && pnpm --dir apps/desktop build",
     "frontendDist": "../apps/desktop/dist"
   },
   "app": {
@@ -35,7 +35,10 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "resources": ["../resources/rules/*", "../resources/licenses/*"],
+    "resources": {
+      "../resources/rules/": "rules/",
+      "../resources/licenses/": "licenses/"
+    },
     "category": "Utility",
     "shortDescription": "Safe Iran split routing through Hiddify",
     "longDescription": "Routes Iranian traffic directly and other traffic through an existing Hiddify connection using a privileged helper.",

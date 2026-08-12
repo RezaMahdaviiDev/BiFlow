@@ -1,2 +1,0 @@
-# Minimal bootstrap snapshot used for offline startup tests.
-2a01:5ec0::/32

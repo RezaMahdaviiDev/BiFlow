@@ -1,4 +1,5 @@
 mod deps;
+mod network;
 mod version;
 
 use chrono::Utc;
@@ -35,6 +36,7 @@ struct AppServices {
     backend: Arc<NativeBackend>,
     rules: RuleManager,
     cloud_rules: CloudRuleStore,
+    network: network::NetworkMonitor,
     paths: AppPaths,
 }
 
@@ -44,6 +46,7 @@ struct AppPaths {
     data: PathBuf,
     cache: PathBuf,
     resources: PathBuf,
+    dependencies: PathBuf,
 }
 
 impl AppPaths {
@@ -57,11 +60,12 @@ impl AppPaths {
         let cache = dirs::cache_dir()
             .ok_or("cache directory is unavailable")?
             .join("biflow");
-        let resources = app
+        let resource_root = app
             .path()
             .resource_dir()
-            .map_err(|error| error.to_string())?
-            .join("rules");
+            .map_err(|error| error.to_string())?;
+        let resources = resource_root.join("rules");
+        let dependencies = resource_root.join("dependencies");
         fs::create_dir_all(&data).map_err(|error| error.to_string())?;
         fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
         Ok(Self {
@@ -69,6 +73,7 @@ impl AppPaths {
             data,
             cache,
             resources,
+            dependencies,
         })
     }
 }
@@ -83,6 +88,7 @@ struct BootstrapResult {
     direct_rules: DirectRulesDocument,
     cloud_rules: CloudRulesStatus,
     dependencies: Vec<deps::DependencyStatus>,
+    network_status: network::NetworkStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +140,7 @@ fn services<R: Runtime>(app: &AppHandle<R>) -> Result<&AppServices, String> {
 #[tauri::command]
 async fn bootstrap_app(app: AppHandle) -> Result<BootstrapResult, String> {
     let services = services(&app)?;
+    services.engine.refresh_health().await;
     let settings = services
         .config_store
         .load_or_create()
@@ -151,7 +158,13 @@ async fn bootstrap_app(app: AppHandle) -> Result<BootstrapResult, String> {
             .status()
             .map_err(|error| error.to_string())?,
         dependencies: deps::dependency_status(&services.paths.data),
+        network_status: network::NetworkStatus::default(),
     })
+}
+
+#[tauri::command]
+async fn get_network_status(app: AppHandle) -> Result<network::NetworkStatus, String> {
+    Ok(services(&app)?.network.check().await)
 }
 
 #[expect(
@@ -327,11 +340,13 @@ fn list_dependencies(app: AppHandle) -> Result<Vec<deps::DependencyStatus>, Stri
 #[tauri::command]
 async fn install_dependency(id: String, app: AppHandle) -> Result<deps::InstallResult, String> {
     let parsed = deps::DependencyId::parse(&id).map_err(|error| error.to_string())?;
-    let data = services(&app)?.paths.data.clone();
-    match deps::install_dependency(parsed, &data).await {
-        Ok(result) => Ok(result),
-        Err(error) => Err(error.to_string()),
-    }
+    let services = services(&app)?;
+    let result =
+        deps::install_dependency(parsed, &services.paths.data, &services.paths.dependencies)
+            .await
+            .map_err(|error| error.to_string())?;
+    services.engine.refresh_health().await;
+    Ok(result)
 }
 
 #[expect(
@@ -635,12 +650,14 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     )
     .map_err(|error| error.to_string())?;
     let cloud_rules = CloudRuleStore::load(paths.resources.clone(), rules_cache);
+    let network = network::NetworkMonitor::new().map_err(|error| error.to_string())?;
     Ok(AppServices {
         config_store,
         engine,
         backend,
         rules,
         cloud_rules,
+        network,
         paths,
     })
 }
@@ -739,6 +756,7 @@ pub fn run() {
             let services = create_services(app.handle()).map_err(std::io::Error::other)?;
             let mut snapshots = services.engine.subscribe();
             let engine = Arc::clone(&services.engine);
+            let health_engine = Arc::clone(&services.engine);
             let handle = app.handle().clone();
             app.manage(services);
             tauri::async_runtime::spawn(async move {
@@ -748,6 +766,20 @@ pub fn run() {
             });
             tauri::async_runtime::spawn(async move {
                 let _ = engine.reconcile_startup().await;
+            });
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if matches!(
+                        health_engine.snapshot().phase,
+                        StackPhase::Stopped
+                            | StackPhase::Running
+                            | StackPhase::Degraded
+                            | StackPhase::Error
+                    ) {
+                        health_engine.refresh_health().await;
+                    }
+                }
             });
             setup_tray(app)?;
             Ok(())
@@ -761,6 +793,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             bootstrap_app,
             get_stack_snapshot,
+            get_network_status,
             start_stack,
             stop_stack,
             restart_stack,

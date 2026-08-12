@@ -8,6 +8,7 @@ import type {
   DiagnosticsReport,
   DirectRulesDocument,
   InstallGuide,
+  NetworkStatus,
   StackSnapshot,
 } from "../api/models";
 
@@ -24,6 +25,7 @@ interface AppStore {
   rules: DirectRulesDocument | null;
   cloudRules: CloudRulesStatus | null;
   dependencies: DependencyStatus[];
+  networkStatus: NetworkStatus | null;
   diagnostics: DiagnosticsReport | null;
   error: string | null;
   installGuide: InstallGuide | null;
@@ -36,6 +38,7 @@ interface AppStore {
   removeRule: (input: string) => Promise<void>;
   refreshRules: () => Promise<void>;
   syncCloudRules: () => Promise<void>;
+  refreshNetworkStatus: () => Promise<void>;
   installDependency: (id: string) => Promise<void>;
   runDiagnostics: () => Promise<void>;
   clearError: () => void;
@@ -59,6 +62,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   rules: null,
   cloudRules: null,
   dependencies: [],
+  networkStatus: null,
   diagnostics: null,
   error: null,
   installGuide: null,
@@ -74,7 +78,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
         rules: boot.direct_rules,
         cloudRules: boot.cloud_rules,
         dependencies: boot.dependencies,
+        networkStatus: boot.network_status,
       });
+      void get().refreshNetworkStatus();
       return desktop.subscribe((snapshot) =>
         set({ snapshot, actionPending: false }),
       );
@@ -150,6 +156,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ cloudRules, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });
+    }
+  },
+  refreshNetworkStatus: async () => {
+    try {
+      const networkStatus = await desktop.getNetworkStatus();
+      set({ networkStatus });
+    } catch (error) {
+      set({
+        networkStatus: {
+          state: "offline",
+          public_ip: null,
+          country_code: null,
+          city: null,
+          checked_at: new Date().toISOString(),
+          detail: message(error),
+        },
+      });
     }
   },
   installDependency: async (id) => {

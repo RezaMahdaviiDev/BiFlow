@@ -1,5 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// The execution environment can set both variables; Node warns before every
+// web-server and worker process unless one is removed before Playwright forks.
+delete process.env.NO_COLOR;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
