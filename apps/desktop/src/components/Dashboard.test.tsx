@@ -7,8 +7,12 @@ import { Dashboard } from "./Dashboard";
 
 vi.mock("../api/desktop", () => ({
   desktop: {
-    start: vi.fn().mockResolvedValue({ operation_id: "op", already_complete: false }),
-    stop: vi.fn().mockResolvedValue({ operation_id: "op", already_complete: false }),
+    start: vi
+      .fn()
+      .mockResolvedValue({ operation_id: "op", already_complete: false }),
+    stop: vi
+      .fn()
+      .mockResolvedValue({ operation_id: "op", already_complete: false }),
     cancel: vi.fn().mockResolvedValue(true),
   },
 }));
@@ -40,9 +44,48 @@ describe("Dashboard", () => {
 
   it("exposes cancellation during an operation", () => {
     render(
-      <Dashboard snapshot={{ ...stopped, phase: "starting_core", operation_id: "operation-1" }} />,
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          phase: "starting_core",
+          operation_id: "operation-1",
+        }}
+      />,
     );
-    expect(screen.getByRole("button", { name: "Cancel operation" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Cancel operation" }),
+    ).toBeEnabled();
     expect(screen.getByRole("status")).toHaveTextContent("starting core");
+  });
+
+  it("shows install actions when Hiddify and Mihomo are missing", async () => {
+    const install = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      snapshot: stopped,
+      actionPending: false,
+      installingId: null,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: false,
+          version: null,
+          path: null,
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: false,
+          version: null,
+          path: null,
+        },
+      ],
+      installDependency: install,
+    });
+    render(<Dashboard snapshot={stopped} />);
+    const buttons = screen.getAllByRole("button", { name: /^Install$/ });
+    expect(buttons).toHaveLength(2);
+    await userEvent.click(buttons[0]!);
+    expect(install).toHaveBeenCalledWith("hiddify");
   });
 });

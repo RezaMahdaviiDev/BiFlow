@@ -1,3 +1,5 @@
+mod cloud;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ipnet::IpNet;
@@ -13,6 +15,11 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tokio::sync::Mutex;
+
+pub use cloud::{
+    fail_safe_urls, provider_entry_count, resolve_provider_path, CloudRuleSetStatus,
+    CloudRuleStore, CloudRulesStatus, CloudSyncError, RuleFetcher,
+};
 
 #[derive(Debug, Error)]
 pub enum RuleError {

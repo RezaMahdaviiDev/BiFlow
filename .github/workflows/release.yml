@@ -42,7 +42,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
-          releaseName: Iran Split v__VERSION__
+          releaseName: BiFlow v__VERSION__
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

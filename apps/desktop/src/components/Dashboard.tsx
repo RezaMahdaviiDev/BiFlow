@@ -1,4 +1,13 @@
-import { Activity, ArrowDownUp, CircleDot, Gauge, Globe2, Network } from "lucide-react";
+import {
+  Activity,
+  ArrowDownUp,
+  CircleDot,
+  Download,
+  Gauge,
+  Globe2,
+  LoaderCircle,
+  Network,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { StackPhase, StackSnapshot } from "../api/models";
 import { useAppStore } from "../store/app";
@@ -14,9 +23,18 @@ const progressPhases: StackPhase[] = [
 
 export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   const { t } = useTranslation();
-  const { actionPending, toggleConnection, cancel, boot } = useAppStore();
+  const {
+    actionPending,
+    toggleConnection,
+    cancel,
+    boot,
+    dependencies,
+    installingId,
+    installDependency,
+  } = useAppStore();
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
-  const operating = progressPhases.includes(snapshot.phase) || snapshot.phase === "stopping";
+  const operating =
+    progressPhases.includes(snapshot.phase) || snapshot.phase === "stopping";
   const progressIndex = progressPhases.indexOf(snapshot.phase);
 
   return (
@@ -24,12 +42,17 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="mb-1 text-sm font-medium text-brand">{t("status")}</p>
-          <h1 id="dashboard-title" className="text-3xl font-semibold tracking-tight">
-            {active ? "Protected split routing is active" : "Ready when you are"}
+          <h1
+            id="dashboard-title"
+            className="text-3xl font-semibold tracking-tight"
+          >
+            {active
+              ? "Protected split routing is active"
+              : "Ready when you are"}
           </h1>
           <p className="mt-2 max-w-2xl text-muted">
-            Iranian and private traffic stays direct. Other traffic follows your existing Hiddify
-            connection.
+            Iranian and private traffic stays direct. Other traffic follows your
+            existing Hiddify connection.
           </p>
         </div>
         <div className="flex gap-2">
@@ -54,10 +77,19 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
       </div>
 
       {operating ? (
-        <div className="rounded-2xl border border-brand/15 bg-brand/5 p-4" role="status">
+        <div
+          className="rounded-2xl border border-brand/15 bg-brand/5 p-4"
+          role="status"
+        >
           <div className="mb-2 flex justify-between text-sm font-medium">
             <span>{snapshot.phase.replaceAll("_", " ")}</span>
-            <span>{Math.max(10, ((progressIndex + 1) / progressPhases.length) * 100).toFixed(0)}%</span>
+            <span>
+              {Math.max(
+                10,
+                ((progressIndex + 1) / progressPhases.length) * 100,
+              ).toFixed(0)}
+              %
+            </span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-brand/10">
             <div
@@ -76,7 +108,11 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           label={t("exitIp")}
           value={snapshot.exit_ip ?? t("noExitIp")}
         />
-        <Metric icon={<Network aria-hidden />} label={t("backend")} value="External Hiddify" />
+        <Metric
+          icon={<Network aria-hidden />}
+          label={t("backend")}
+          value="External Hiddify"
+        />
         <Metric
           icon={<Gauge aria-hidden />}
           label={t("providers")}
@@ -90,10 +126,36 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           <StatusPill phase={snapshot.phase} />
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <Component name="Hiddify" status={snapshot.hiddify.phase} icon={<CircleDot />} />
-          <Component name="Mihomo" status={snapshot.mihomo.phase} icon={<Activity />} />
-          <Component name="TUN" status={snapshot.tun.phase} icon={<ArrowDownUp />} />
-          <Component name="DNS" status={snapshot.dns.phase} icon={<Network />} />
+          <Component
+            name="Hiddify"
+            status={snapshot.hiddify.phase}
+            icon={<CircleDot />}
+            installed={
+              dependencies.find((item) => item.id === "hiddify")?.installed
+            }
+            installing={installingId === "hiddify"}
+            onInstall={() => void installDependency("hiddify")}
+          />
+          <Component
+            name="Mihomo"
+            status={snapshot.mihomo.phase}
+            icon={<Activity />}
+            installed={
+              dependencies.find((item) => item.id === "mihomo")?.installed
+            }
+            installing={installingId === "mihomo"}
+            onInstall={() => void installDependency("mihomo")}
+          />
+          <Component
+            name="TUN"
+            status={snapshot.tun.phase}
+            icon={<ArrowDownUp />}
+          />
+          <Component
+            name="DNS"
+            status={snapshot.dns.phase}
+            icon={<Network />}
+          />
         </div>
       </div>
 
@@ -105,7 +167,15 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   );
 }
 
-function Metric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function Metric({
+  icon,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+}) {
   return (
     <div className="rounded-2xl border border-ink/10 bg-surface p-5 shadow-card">
       <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-brand/10 text-brand">
@@ -123,20 +193,43 @@ function Component({
   name,
   status,
   icon,
+  installed,
+  installing,
+  onInstall,
 }: {
   name: string;
   status: StackSnapshot["mihomo"]["phase"];
   icon: React.ReactNode;
+  installed?: boolean;
+  installing?: boolean;
+  onInstall?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
-    <div className="flex items-center justify-between rounded-2xl border border-ink/10 bg-surface p-4">
-      <div className="flex items-center gap-3">
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-ink/10 bg-surface p-4">
+      <div className="flex min-w-0 items-center gap-3">
         <span className="text-muted" aria-hidden>
           {icon}
         </span>
         <span className="font-semibold">{name}</span>
       </div>
-      <StatusPill phase={status} />
+      {installed === false && onInstall ? (
+        <button
+          type="button"
+          disabled={installing}
+          onClick={onInstall}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+        >
+          {installing ? (
+            <LoaderCircle className="animate-spin" size={14} aria-hidden />
+          ) : (
+            <Download size={14} aria-hidden />
+          )}
+          {installing ? t("installing") : t("install")}
+        </button>
+      ) : (
+        <StatusPill phase={status} />
+      )}
     </div>
   );
 }

@@ -1,7 +1,13 @@
+mod deps;
+mod version;
+
 use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
 use iran_split_core::{Engine, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot};
-use iran_split_rules::{DirectRulesDocument, DohResolver, Outbound, RuleManager, RuleSet};
+use iran_split_rules::{
+    CloudRuleStore, CloudRulesStatus, DirectRulesDocument, DohResolver, Outbound, RuleManager,
+    RuleSet,
+};
 use serde::Serialize;
 use std::{
     fs,
@@ -28,6 +34,7 @@ struct AppServices {
     engine: Arc<Engine<NativeBackend>>,
     backend: Arc<NativeBackend>,
     rules: RuleManager,
+    cloud_rules: CloudRuleStore,
     paths: AppPaths,
 }
 
@@ -43,13 +50,13 @@ impl AppPaths {
     fn discover(app: &AppHandle) -> Result<Self, String> {
         let config = dirs::config_dir()
             .ok_or("configuration directory is unavailable")?
-            .join("iran-split/config.toml");
+            .join("biflow/config.toml");
         let data = dirs::data_local_dir()
             .ok_or("local data directory is unavailable")?
-            .join("iran-split");
+            .join("biflow");
         let cache = dirs::cache_dir()
             .ok_or("cache directory is unavailable")?
-            .join("iran-split");
+            .join("biflow");
         let resources = app
             .path()
             .resource_dir()
@@ -74,6 +81,8 @@ struct BootstrapResult {
     snapshot: StackSnapshot,
     settings: AppConfig,
     direct_rules: DirectRulesDocument,
+    cloud_rules: CloudRulesStatus,
+    dependencies: Vec<deps::DependencyStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,12 +140,17 @@ async fn bootstrap_app(app: AppHandle) -> Result<BootstrapResult, String> {
         .map_err(|error| error.to_string())?
         .redacted();
     Ok(BootstrapResult {
-        app_version: app.package_info().version.to_string(),
+        app_version: version::app_version().to_owned(),
         platform: std::env::consts::OS.into(),
         mock_mode: false,
         snapshot: services.engine.snapshot(),
         settings,
         direct_rules: services.rules.list().await,
+        cloud_rules: services
+            .cloud_rules
+            .status()
+            .map_err(|error| error.to_string())?,
+        dependencies: deps::dependency_status(&services.paths.data),
     })
 }
 
@@ -272,18 +286,61 @@ async fn refresh_direct_rules(app: AppHandle) -> Result<DirectRulesDocument, Str
 }
 
 #[tauri::command]
+fn get_cloud_rules_status(app: AppHandle) -> Result<CloudRulesStatus, String> {
+    services(&app)?
+        .cloud_rules
+        .status()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn sync_cloud_rules(app: AppHandle) -> Result<CloudRulesStatus, String> {
+    services(&app)?
+        .cloud_rules
+        .sync()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_dependencies(app: AppHandle) -> Result<Vec<deps::DependencyStatus>, String> {
+    Ok(deps::dependency_status(&services(&app)?.paths.data))
+}
+
+#[tauri::command]
+async fn install_dependency(id: String, app: AppHandle) -> Result<deps::InstallResult, String> {
+    let parsed = deps::DependencyId::parse(&id).map_err(|error| error.to_string())?;
+    let data = services(&app)?.paths.data.clone();
+    match deps::install_dependency(parsed, &data).await {
+        Ok(result) => Ok(result),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn get_install_guide(id: String) -> Result<deps::InstallGuide, String> {
+    let parsed = deps::DependencyId::parse(&id).map_err(|error| error.to_string())?;
+    Ok(deps::install_guide(parsed))
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    deps::open_allowlisted_url(&url).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn test_route(target: String, app: AppHandle) -> Result<RouteTestResult, String> {
     let services = services(&app)?;
     let document = services.rules.list().await;
-    let domains = read_snapshot_lines(&services.paths.resources.join("iran-domains.txt"))?;
+    let domains = read_snapshot_lines(&services.cloud_rules.resolve("iran-domains.txt"))?;
     let domains = domains
         .into_iter()
         .map(|line| line.trim_start_matches("+.").to_owned())
         .collect::<Vec<_>>();
-    let cidrs = read_snapshot_lines(&services.paths.resources.join("private.txt"))?
+    let cidrs = read_snapshot_lines(&services.cloud_rules.resolve("private.txt"))?
         .into_iter()
         .chain(read_snapshot_lines(
-            &services.paths.resources.join("iran-networks.txt"),
+            &services.cloud_rules.resolve("iran-networks.txt"),
         )?)
         .map(|line| line.parse().map_err(|error| format!("invalid bundled CIDR: {error}")))
         .collect::<Result<Vec<_>, _>>()?;
@@ -472,6 +529,11 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     let config = config_store
         .load_or_create()
         .map_err(|error| error.to_string())?;
+    let rules_cache = paths.cache.join("rules");
+    fs::create_dir_all(&rules_cache).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
+    let mihomo_binary = deps::first_existing(&deps::mihomo_candidates(&paths.data))
+        .unwrap_or_else(|| paths.data.join("bin/mihomo"));
     #[cfg(target_os = "linux")]
     let backend = Arc::new(NativeBackend::new(
         config,
@@ -480,9 +542,12 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
             user_data_dir: paths.data.clone(),
             system_runtime_dir: "/var/lib/iran-split".into(),
             resources_dir: paths.resources.clone(),
-            mihomo_binary: "/opt/iran-split/mihomo".into(),
+            rules_cache_dir: rules_cache.clone(),
+            mihomo_binary,
         },
     ));
+    #[cfg(target_os = "windows")]
+    let _ = config;
     #[cfg(target_os = "windows")]
     let backend = Arc::new(NativeBackend::default());
     let engine = Engine::new(Arc::clone(&backend));
@@ -491,11 +556,13 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         Arc::new(DohResolver::default()),
     )
     .map_err(|error| error.to_string())?;
+    let cloud_rules = CloudRuleStore::load(paths.resources.clone(), rules_cache);
     Ok(AppServices {
         config_store,
         engine,
         backend,
         rules,
+        cloud_rules,
         paths,
     })
 }
@@ -618,6 +685,12 @@ pub fn run() {
             add_direct_rule,
             remove_direct_rule,
             refresh_direct_rules,
+            get_cloud_rules_status,
+            sync_cloud_rules,
+            list_dependencies,
+            install_dependency,
+            get_install_guide,
+            open_external_url,
             run_full_diagnostics,
             test_route,
             query_logs,
@@ -628,5 +701,5 @@ pub fn run() {
 
     builder
         .run(tauri::generate_context!())
-        .expect("Iran Split Desktop failed to start");
+        .expect("BiFlow failed to start");
 }

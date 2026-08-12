@@ -1,0 +1,537 @@
+#![allow(clippy::module_name_repetitions)]
+
+use flate2::read::GzDecoder;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::{
+    fs,
+    io::{Cursor, Read, Write},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+use thiserror::Error;
+
+const USER_AGENT: &str = "BiFlow/0.1.0";
+const MAX_DOWNLOAD_BYTES: usize = 180 * 1024 * 1024;
+const HIDDIFY_VERSION: &str = "v4.1.1";
+const MIHOMO_VERSION: &str = "v1.19.29";
+const MIHOMO_LINUX_SHA256: &str = "9c397be7489538628fae781bc005e4c5b8cd7b0961b8bb2ca815c8150f193577";
+const MIHOMO_WINDOWS_ZIP_SHA256: &str =
+    "1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9";
+
+#[derive(Debug, Error)]
+pub enum DepsError {
+    #[error("dependency I/O failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("download failed: {0}")]
+    Fetch(String),
+    #[error("downloaded file failed integrity checks: {0}")]
+    Integrity(String),
+    #[error("installation failed: {0}")]
+    Install(String),
+    #[error("unknown dependency: {0}")]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyId {
+    Hiddify,
+    Mihomo,
+}
+
+impl DependencyId {
+    pub fn parse(value: &str) -> Result<Self, DepsError> {
+        match value {
+            "hiddify" => Ok(Self::Hiddify),
+            "mihomo" => Ok(Self::Mihomo),
+            other => Err(DepsError::Unknown(other.into())),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hiddify => "hiddify",
+            Self::Mihomo => "mihomo",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DependencyStatus {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub installed: bool,
+    pub version: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallGuide {
+    pub id: &'static str,
+    pub title: String,
+    pub download_url: String,
+    pub steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallResult {
+    pub id: &'static str,
+    pub installed: bool,
+    pub path: Option<String>,
+    pub guide: InstallGuide,
+}
+
+#[must_use]
+pub fn data_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("biflow")
+}
+
+#[must_use]
+pub fn hiddify_candidates(data: &Path) -> Vec<PathBuf> {
+    let mut candidates = vec![
+        data.join("bin/hiddify"),
+        data.join("apps/Hiddify.AppImage"),
+        data.join("apps/Hiddify/Hiddify.exe"),
+        data.join("apps/Hiddify/hiddify.exe"),
+        PathBuf::from("/usr/bin/hiddify"),
+        PathBuf::from("/usr/local/bin/hiddify"),
+        PathBuf::from("/opt/Hiddify/Hiddify"),
+        PathBuf::from("/opt/hiddify/hiddify"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join(".local/bin/hiddify"));
+        candidates.push(home.join(".local/share/Hiddify/hiddify"));
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        candidates.push(local.join("Hiddify/Hiddify.exe"));
+        candidates.push(local.join("Hiddify/hiddify.exe"));
+    }
+    if let Some(programs) = std::env::var_os("ProgramFiles") {
+        let programs = PathBuf::from(programs);
+        candidates.push(programs.join("Hiddify/Hiddify.exe"));
+        candidates.push(programs.join("HiddifyNext/Hiddify.exe"));
+    }
+    candidates
+}
+
+#[must_use]
+pub fn mihomo_candidates(data: &Path) -> Vec<PathBuf> {
+    vec![
+        data.join(mihomo_file_name()),
+        PathBuf::from("/opt/biflow/mihomo"),
+        PathBuf::from("/opt/iran-split/mihomo"),
+        PathBuf::from("/usr/local/bin/mihomo"),
+        PathBuf::from("/usr/bin/mihomo"),
+    ]
+}
+
+#[must_use]
+pub fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|path| path.is_file()).cloned()
+}
+
+#[must_use]
+pub fn dependency_status(data: &Path) -> Vec<DependencyStatus> {
+    vec![
+        status_for("hiddify", "Hiddify", first_existing(&hiddify_candidates(data))),
+        status_for("mihomo", "Mihomo", first_existing(&mihomo_candidates(data))),
+    ]
+}
+
+fn status_for(id: &'static str, name: &'static str, path: Option<PathBuf>) -> DependencyStatus {
+    DependencyStatus {
+        id,
+        name,
+        installed: path.is_some(),
+        version: None,
+        path: path.map(|value| value.to_string_lossy().into_owned()),
+    }
+}
+
+#[must_use]
+pub fn install_guide(id: DependencyId) -> InstallGuide {
+    match (id, std::env::consts::OS) {
+        (DependencyId::Hiddify, "windows") => InstallGuide {
+            id: id.as_str(),
+            title: "Install Hiddify on Windows".into(),
+            download_url: hiddify_windows_url(),
+            steps: vec![
+                "Open the official Hiddify release page and download Hiddify-Windows-Setup-x64.exe.".into(),
+                "Run the installer and accept the Windows permission prompt.".into(),
+                "Finish setup, then restart BiFlow and press Connect.".into(),
+            ],
+        },
+        (DependencyId::Hiddify, _) => InstallGuide {
+            id: id.as_str(),
+            title: "Install Hiddify on Linux".into(),
+            download_url: hiddify_linux_appimage_url(),
+            steps: vec![
+                "Download Hiddify-Linux-x64-AppImage.AppImage from the official GitHub release.".into(),
+                "Make it executable: chmod +x Hiddify-Linux-x64-AppImage.AppImage".into(),
+                "Move it to ~/.local/share/biflow/apps/Hiddify.AppImage".into(),
+                "Restart BiFlow and press Connect.".into(),
+            ],
+        },
+        (DependencyId::Mihomo, "windows") => InstallGuide {
+            id: id.as_str(),
+            title: "Install Mihomo on Windows".into(),
+            download_url: mihomo_windows_url(),
+            steps: vec![
+                "Download mihomo-windows-amd64 zip from the MetaCubeX GitHub release.".into(),
+                "Extract mihomo.exe into %LOCALAPPDATA%\\biflow\\bin\\mihomo.exe".into(),
+                "Restart BiFlow and press Connect.".into(),
+            ],
+        },
+        (DependencyId::Mihomo, _) => InstallGuide {
+            id: id.as_str(),
+            title: "Install Mihomo on Linux".into(),
+            download_url: mihomo_linux_url(),
+            steps: vec![
+                "Download mihomo-linux-amd64 gzip from the MetaCubeX GitHub release.".into(),
+                "Decompress it: gzip -dc mihomo-linux-amd64-*.gz > ~/.local/share/biflow/bin/mihomo".into(),
+                "Make it executable: chmod +x ~/.local/share/biflow/bin/mihomo".into(),
+                "Restart BiFlow and press Connect.".into(),
+            ],
+        },
+    }
+}
+
+pub async fn install_dependency(id: DependencyId, data: &Path) -> Result<InstallResult, DepsError> {
+    fs::create_dir_all(data.join("bin"))?;
+    fs::create_dir_all(data.join("apps"))?;
+    let path = match id {
+        DependencyId::Hiddify => install_hiddify(data).await?,
+        DependencyId::Mihomo => install_mihomo(data).await?,
+    };
+    Ok(InstallResult {
+        id: id.as_str(),
+        installed: path.is_file(),
+        path: Some(path.to_string_lossy().into_owned()),
+        guide: install_guide(id),
+    })
+}
+
+async fn install_hiddify(data: &Path) -> Result<PathBuf, DepsError> {
+    if cfg!(target_os = "windows") {
+        install_hiddify_windows(data).await
+    } else {
+        install_hiddify_linux(data).await
+    }
+}
+
+async fn install_hiddify_linux(data: &Path) -> Result<PathBuf, DepsError> {
+    let bytes = download_first(&[hiddify_linux_appimage_url(), hiddify_linux_appimage_pinned_url()]).await?;
+    if !is_elf(&bytes) {
+        return Err(DepsError::Integrity("Hiddify AppImage is not an ELF binary".into()));
+    }
+    let appimage = data.join("apps/Hiddify.AppImage");
+    write_executable(&appimage, &bytes)?;
+    let link = data.join("bin/hiddify");
+    let _ = fs::remove_file(&link);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&appimage, &link)?;
+    }
+    #[cfg(not(unix))]
+    {
+        fs::copy(&appimage, &link)?;
+    }
+    Ok(appimage)
+}
+
+async fn install_hiddify_windows(data: &Path) -> Result<PathBuf, DepsError> {
+    let bytes = download_first(&[hiddify_windows_portable_url(), hiddify_windows_setup_url()]).await?;
+    if is_zip(&bytes) {
+        let dest = data.join("apps/Hiddify");
+        extract_zip(&bytes, &dest)?;
+        return first_existing(&hiddify_candidates(data)).ok_or_else(|| {
+            DepsError::Install("Hiddify portable archive did not contain Hiddify.exe".into())
+        });
+    }
+    if !is_pe(&bytes) {
+        return Err(DepsError::Integrity("Hiddify installer is not a Windows executable".into()));
+    }
+    let installer = data.join("apps/Hiddify-Setup.exe");
+    fs::write(&installer, bytes)?;
+    let status = std::process::Command::new(&installer)
+        .args(["/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"])
+        .status()
+        .map_err(|error| DepsError::Install(error.to_string()))?;
+    if !status.success() {
+        let _ = std::process::Command::new(&installer).spawn();
+        return Err(DepsError::Install(
+            "silent Hiddify setup did not finish; the installer window was opened instead".into(),
+        ));
+    }
+    first_existing(&hiddify_candidates(data))
+        .ok_or_else(|| DepsError::Install("Hiddify installed but the executable was not found".into()))
+}
+
+async fn install_mihomo(data: &Path) -> Result<PathBuf, DepsError> {
+    let dest = data.join(mihomo_file_name());
+    if cfg!(target_os = "windows") {
+        let bytes = download_first(&[mihomo_windows_url()]).await?;
+        verify_sha256(&bytes, MIHOMO_WINDOWS_ZIP_SHA256)?;
+        let staging = data.join("apps/mihomo-extract");
+        extract_zip(&bytes, &staging)?;
+        let found = find_file(&staging, "mihomo.exe").ok_or_else(|| {
+            DepsError::Install("Mihomo zip did not contain mihomo.exe".into())
+        })?;
+        fs::create_dir_all(dest.parent().unwrap_or(data))?;
+        fs::copy(found, &dest)?;
+        let _ = fs::remove_dir_all(staging);
+    } else {
+        let bytes = download_first(&[mihomo_linux_url()]).await?;
+        let decoded = gunzip(&bytes)?;
+        verify_sha256(&decoded, MIHOMO_LINUX_SHA256)?;
+        if !is_elf(&decoded) {
+            return Err(DepsError::Integrity("Mihomo is not an ELF binary".into()));
+        }
+        write_executable(&dest, &decoded)?;
+    }
+    Ok(dest)
+}
+
+fn mihomo_file_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "bin/mihomo.exe"
+    } else {
+        "bin/mihomo"
+    }
+}
+
+fn hiddify_linux_appimage_url() -> String {
+    "https://github.com/hiddify/hiddify-app/releases/latest/download/Hiddify-Linux-x64-AppImage.AppImage"
+        .into()
+}
+
+fn hiddify_linux_appimage_pinned_url() -> String {
+    format!(
+        "https://github.com/hiddify/hiddify-app/releases/download/{HIDDIFY_VERSION}/Hiddify-Linux-x64-AppImage.AppImage"
+    )
+}
+
+fn hiddify_windows_url() -> String {
+    format!(
+        "https://github.com/hiddify/hiddify-app/releases/download/{HIDDIFY_VERSION}/Hiddify-Windows-Setup-x64.exe"
+    )
+}
+
+fn hiddify_windows_setup_url() -> String {
+    hiddify_windows_url()
+}
+
+fn hiddify_windows_portable_url() -> String {
+    format!(
+        "https://github.com/hiddify/hiddify-app/releases/download/{HIDDIFY_VERSION}/Hiddify-Windows-Portable-x64.zip"
+    )
+}
+
+fn mihomo_linux_url() -> String {
+    format!(
+        "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_VERSION}/mihomo-linux-amd64-{MIHOMO_VERSION}.gz"
+    )
+}
+
+fn mihomo_windows_url() -> String {
+    format!(
+        "https://github.com/MetaCubeX/mihomo/releases/download/{MIHOMO_VERSION}/mihomo-windows-amd64-{MIHOMO_VERSION}.zip"
+    )
+}
+
+fn url_allowed(url: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "https://github.com/hiddify/hiddify-app/releases/",
+        "https://github.com/MetaCubeX/mihomo/releases/",
+    ];
+    PREFIXES.iter().any(|prefix| url.starts_with(prefix))
+}
+
+async fn download_first(urls: &[String]) -> Result<Vec<u8>, DepsError> {
+    let mut last = DepsError::Fetch("no allowlisted download URL succeeded".into());
+    for url in urls {
+        match download(url).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
+}
+
+async fn download(url: &str) -> Result<Vec<u8>, DepsError> {
+    if !url_allowed(url) {
+        return Err(DepsError::Fetch("download URL is not allowlisted".into()));
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .build()
+        .map_err(|error| DepsError::Fetch(error.to_string()))?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| DepsError::Fetch(error.to_string()))?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| DepsError::Fetch(error.to_string()))?;
+    if bytes.len() > MAX_DOWNLOAD_BYTES {
+        return Err(DepsError::Fetch("download exceeded the size limit".into()));
+    }
+    Ok(bytes.to_vec())
+}
+
+fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, DepsError> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut decoded = Vec::new();
+    decoder
+        .read_to_end(&mut decoded)
+        .map_err(|error| DepsError::Integrity(error.to_string()))?;
+    Ok(decoded)
+}
+
+fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), DepsError> {
+    fs::create_dir_all(dest)?;
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| DepsError::Integrity(error.to_string()))?;
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|error| DepsError::Integrity(error.to_string()))?;
+        let Some(relative) = file.enclosed_name() else {
+            continue;
+        };
+        let out = dest.join(relative);
+        if file.is_dir() {
+            fs::create_dir_all(&out)?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut target = fs::File::create(&out)?;
+        std::io::copy(&mut file, &mut target)?;
+    }
+    Ok(())
+}
+
+fn find_file(root: &Path, file_name: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().is_some_and(|name| name == file_name) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn write_executable(path: &Path, bytes: &[u8]) -> Result<(), DepsError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+fn verify_sha256(bytes: &[u8], expected: &str) -> Result<(), DepsError> {
+    let actual = hex::encode(Sha256::digest(bytes));
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(DepsError::Integrity(format!(
+            "SHA-256 mismatch: expected {expected}, got {actual}"
+        )))
+    }
+}
+
+fn is_elf(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && bytes[0] == 0x7f && bytes[1] == b'E' && bytes[2] == b'L' && bytes[3] == b'F'
+}
+
+fn is_pe(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == b'M' && bytes[1] == b'Z'
+}
+
+fn is_zip(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && bytes[0] == b'P' && bytes[1] == b'K'
+}
+
+pub fn open_allowlisted_url(url: &str) -> Result<(), DepsError> {
+    const PREFIXES: &[&str] = &[
+        "https://github.com/hiddify/hiddify-app/releases/",
+        "https://github.com/MetaCubeX/mihomo/releases/",
+        "https://github.com/Chocolate4U/Iran-clash-rules",
+        "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/",
+        "https://cdn.jsdelivr.net/gh/chocolate4u/Iran-clash-rules",
+        "https://cdn.jsdelivr.net/gh/Chocolate4U/Iran-clash-rules",
+    ];
+    if !PREFIXES.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err(DepsError::Fetch("URL is not allowlisted".into()));
+    }
+    let result = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    result.map(|_| ()).map_err(|error| DepsError::Install(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalogs_only_allow_official_release_hosts() {
+        assert!(url_allowed(&hiddify_linux_appimage_url()));
+        assert!(url_allowed(&mihomo_linux_url()));
+        assert!(!url_allowed("https://example.com/hiddify"));
+    }
+
+    #[test]
+    fn linux_install_paths_are_under_user_data() {
+        let data = PathBuf::from("/tmp/biflow-user");
+        let hiddify = hiddify_candidates(&data);
+        assert!(hiddify.iter().any(|path| path.ends_with("apps/Hiddify.AppImage")));
+        assert!(mihomo_candidates(&data)[0].ends_with(mihomo_file_name()));
+    }
+
+    #[test]
+    fn install_guides_name_biflow_paths() {
+        let hiddify = install_guide(DependencyId::Hiddify);
+        assert!(hiddify.download_url.starts_with("https://github.com/hiddify/hiddify-app/releases/"));
+        assert!(!hiddify.steps.is_empty());
+        let mihomo = install_guide(DependencyId::Mihomo);
+        assert!(mihomo.download_url.contains("MetaCubeX/mihomo"));
+        assert!(hiddify.steps.iter().any(|step| step.contains("biflow") || step.contains("Hiddify")));
+    }
+
+    #[test]
+    fn unknown_dependency_id_is_rejected() {
+        assert!(DependencyId::parse("wireguard").is_err());
+        assert_eq!(DependencyId::parse("hiddify").expect("id").as_str(), "hiddify");
+    }
+}

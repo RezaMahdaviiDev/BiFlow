@@ -117,6 +117,7 @@ pub struct LinuxPaths {
     pub user_data_dir: PathBuf,
     pub system_runtime_dir: PathBuf,
     pub resources_dir: PathBuf,
+    pub rules_cache_dir: PathBuf,
     pub mihomo_binary: PathBuf,
 }
 
@@ -183,14 +184,17 @@ impl LinuxBackend {
         .is_ok_and(|result| result.is_ok())
     }
 
-    fn discover_hiddify(config: &AppConfig) -> Option<PathBuf> {
+    fn discover_hiddify(config: &AppConfig, data: &Path) -> Option<PathBuf> {
         if let ExecutableSetting::Path(path) = &config.hiddify.executable {
             return path.is_file().then(|| path.clone());
         }
         let mut candidates = vec![
+            data.join("bin/hiddify"),
+            data.join("apps/Hiddify.AppImage"),
             PathBuf::from("/usr/bin/hiddify"),
             PathBuf::from("/usr/local/bin/hiddify"),
             PathBuf::from("/opt/Hiddify/Hiddify"),
+            PathBuf::from("/opt/hiddify/hiddify"),
         ];
         if let Some(home) = std::env::var_os("HOME") {
             candidates.push(PathBuf::from(home).join(".local/bin/hiddify"));
@@ -234,7 +238,8 @@ impl PlatformBackend for LinuxBackend {
         if Self::hiddify_listening(&config).await {
             return Ok(());
         }
-        let executable = Self::discover_hiddify(&config).ok_or(CoreError::HiddifyNotFound)?;
+        let executable = Self::discover_hiddify(&config, &self.paths.user_data_dir)
+            .ok_or(CoreError::HiddifyNotFound)?;
         let child = Command::new(executable)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -289,13 +294,24 @@ impl PlatformBackend for LinuxBackend {
         };
         let generated = generate_config(&config, Platform::Linux, &runtime_paths, &custom)
             .map_err(|error| CoreError::ConfigInvalid(error.to_string()))?;
-        copy_bootstrap(&self.paths.resources_dir, &staging_root, "private.txt")?;
-        copy_bootstrap(
+        copy_rule_file(
             &self.paths.resources_dir,
+            &self.paths.rules_cache_dir,
+            &staging_root,
+            "private.txt",
+        )?;
+        copy_rule_file(
+            &self.paths.resources_dir,
+            &self.paths.rules_cache_dir,
             &staging_root,
             "iran-domains.txt",
         )?;
-        copy_bootstrap(&self.paths.resources_dir, &staging_root, "iran-networks.txt")?;
+        copy_rule_file(
+            &self.paths.resources_dir,
+            &self.paths.rules_cache_dir,
+            &staging_root,
+            "iran-networks.txt",
+        )?;
         write_custom_provider_files(&staging_root, &custom)?;
         write_atomic(&staging_root.join("config.yaml"), generated.yaml.as_bytes())?;
         let generation = RuntimeGeneration {
@@ -310,6 +326,9 @@ impl PlatformBackend for LinuxBackend {
     }
 
     async fn validate_runtime(&self, generation: &RuntimeGeneration) -> Result<(), CoreError> {
+        if !self.paths.mihomo_binary.is_file() {
+            return Err(CoreError::MihomoNotFound);
+        }
         let prepared = self.prepared().await?;
         if prepared.generation != *generation {
             return Err(CoreError::ConfigInvalid(
@@ -447,8 +466,13 @@ fn platform_error(error: std::io::Error) -> CoreError {
     CoreError::Platform(error.to_string())
 }
 
-fn copy_bootstrap(resources: &Path, staging: &Path, name: &str) -> Result<(), CoreError> {
-    let source = resources.join(name);
+fn copy_rule_file(
+    bundled: &Path,
+    cache: &Path,
+    staging: &Path,
+    name: &str,
+) -> Result<(), CoreError> {
+    let source = iran_split_rules::resolve_provider_path(cache, bundled, name);
     let metadata = fs::symlink_metadata(&source).map_err(platform_error)?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         return Err(CoreError::ConfigInvalid(format!(
@@ -534,6 +558,7 @@ mod tests {
             user_data_dir: directory.path().join("user-data"),
             system_runtime_dir: PathBuf::from("/var/lib/iran-split"),
             resources_dir: resources,
+            rules_cache_dir: directory.path().join("rules-cache"),
             mihomo_binary: directory.path().join("mihomo"),
         };
         let backend = LinuxBackend::new(AppConfig::default(), paths.clone());

@@ -1,0 +1,13 @@
+---
+description: Follow repository AGENTS.md for tests, ADRs, lessons, and versioning
+alwaysApply: true
+---
+
+# Project agent rules
+
+Read and follow `AGENTS.md` in the repository root.
+
+- Keep e2e coverage for primary flows and unit tests for core and UI.
+- After fixing an error, append a lesson to `AGENTS.md`.
+- Add or update an ADR in `docs/adr/` for each behavioral change.
+- Bump only the root `version` file, then run `pnpm version:sync`.

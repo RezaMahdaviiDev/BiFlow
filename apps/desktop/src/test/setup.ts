@@ -1,4 +1,7 @@
+import { cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
+import { afterEach } from "vitest";
+import "../i18n/config";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -19,3 +22,7 @@ if (!globalThis.crypto.randomUUID) {
     value: () => "00000000-0000-4000-8000-000000000000",
   });
 }
+
+afterEach(() => {
+  cleanup();
+});

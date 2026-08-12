@@ -42,6 +42,7 @@ export interface AppError {
     | "open_settings"
     | "install_helper"
     | "choose_hiddify_executable"
+    | "install_dependency"
     | "run_diagnostics"
     | null;
   technical_details: string | null;
@@ -162,6 +163,8 @@ export interface BootstrapResult {
   snapshot: StackSnapshot;
   settings: AppConfig;
   direct_rules: DirectRulesDocument;
+  cloud_rules: CloudRulesStatus;
+  dependencies: DependencyStatus[];
 }
 
 export interface ExportResult {
@@ -173,4 +176,42 @@ export interface UpdateStatus {
   available: boolean;
   version: string | null;
   notes: string | null;
+}
+
+export interface CloudRuleSetStatus {
+  id: string;
+  kind: "domain" | "ip_cidr";
+  entry_count: number;
+  source: string;
+  sha256: string | null;
+}
+
+export interface CloudRulesStatus {
+  domain_count: number;
+  ip_count: number;
+  last_synced_at: string | null;
+  source: string;
+  sets: CloudRuleSetStatus[];
+}
+
+export interface DependencyStatus {
+  id: "hiddify" | "mihomo";
+  name: string;
+  installed: boolean;
+  version: string | null;
+  path: string | null;
+}
+
+export interface InstallGuide {
+  id: string;
+  title: string;
+  download_url: string;
+  steps: string[];
+}
+
+export interface InstallResult {
+  id: string;
+  installed: boolean;
+  path: string | null;
+  guide: InstallGuide;
 }

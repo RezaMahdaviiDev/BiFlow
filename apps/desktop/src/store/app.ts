@@ -3,8 +3,11 @@ import { desktop } from "../api/desktop";
 import type {
   AppConfig,
   BootstrapResult,
+  CloudRulesStatus,
+  DependencyStatus,
   DiagnosticsReport,
   DirectRulesDocument,
+  InstallGuide,
   StackSnapshot,
 } from "../api/models";
 
@@ -13,13 +16,17 @@ type Page = "dashboard" | "rules" | "diagnostics" | "settings";
 interface AppStore {
   loading: boolean;
   actionPending: boolean;
+  installingId: string | null;
   page: Page;
   boot: BootstrapResult | null;
   snapshot: StackSnapshot | null;
   settings: AppConfig | null;
   rules: DirectRulesDocument | null;
+  cloudRules: CloudRulesStatus | null;
+  dependencies: DependencyStatus[];
   diagnostics: DiagnosticsReport | null;
   error: string | null;
+  installGuide: InstallGuide | null;
   setPage: (page: Page) => void;
   initialize: () => Promise<() => void>;
   toggleConnection: () => Promise<void>;
@@ -28,8 +35,11 @@ interface AppStore {
   addRule: (input: string) => Promise<void>;
   removeRule: (input: string) => Promise<void>;
   refreshRules: () => Promise<void>;
+  syncCloudRules: () => Promise<void>;
+  installDependency: (id: string) => Promise<void>;
   runDiagnostics: () => Promise<void>;
   clearError: () => void;
+  clearInstallGuide: () => void;
 }
 
 function message(error: unknown): string {
@@ -41,13 +51,17 @@ function message(error: unknown): string {
 export const useAppStore = create<AppStore>((set, get) => ({
   loading: true,
   actionPending: false,
+  installingId: null,
   page: "dashboard",
   boot: null,
   snapshot: null,
   settings: null,
   rules: null,
+  cloudRules: null,
+  dependencies: [],
   diagnostics: null,
   error: null,
+  installGuide: null,
   setPage: (page) => set({ page }),
   initialize: async () => {
     try {
@@ -58,8 +72,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         snapshot: boot.snapshot,
         settings: boot.settings,
         rules: boot.direct_rules,
+        cloudRules: boot.cloud_rules,
+        dependencies: boot.dependencies,
       });
-      return desktop.subscribe((snapshot) => set({ snapshot, actionPending: false }));
+      return desktop.subscribe((snapshot) =>
+        set({ snapshot, actionPending: false }),
+      );
     } catch (error) {
       set({ loading: false, error: message(error) });
       return () => undefined;
@@ -125,6 +143,30 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ actionPending: false, error: message(error) });
     }
   },
+  syncCloudRules: async () => {
+    set({ actionPending: true, error: null });
+    try {
+      const cloudRules = await desktop.syncCloudRules();
+      set({ cloudRules, actionPending: false });
+    } catch (error) {
+      set({ actionPending: false, error: message(error) });
+    }
+  },
+  installDependency: async (id) => {
+    set({ installingId: id, error: null, installGuide: null });
+    try {
+      const result = await desktop.installDependency(id);
+      const dependencies = await desktop.listDependencies();
+      set({
+        dependencies,
+        installingId: null,
+        installGuide: result.installed ? null : result.guide,
+      });
+    } catch (error) {
+      const guide = await desktop.getInstallGuide(id).catch(() => null);
+      set({ installingId: null, error: message(error), installGuide: guide });
+    }
+  },
   runDiagnostics: async () => {
     set({ actionPending: true, diagnostics: null, error: null });
     try {
@@ -135,4 +177,5 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   clearError: () => set({ error: null }),
+  clearInstallGuide: () => set({ installGuide: null, error: null }),
 }));

@@ -10,7 +10,7 @@ TARGET_DIR="${PROJECT_DIR}/target"
 
 usage() {
   command cat <<'EOF'
-Iran Split Desktop development helper
+BiFlow development helper
 
 Usage: ./dev.sh [command]
 
@@ -18,6 +18,7 @@ Commands:
   dev       Start the React UI with the safe in-browser mock backend (default)
   desktop   Start the complete Tauri desktop in development mode
   check     Run frontend and Rust formatting, linting, type checks, and tests
+  e2e       Run Playwright primary-flow tests against the mock UI
   build     Build optimized frontend, helper, CLI, and Tauri desktop binaries
   package   Build Linux .deb and AppImage packages
   assets    Refresh the local Mihomo development asset after checksum validation
@@ -127,6 +128,13 @@ run_check() {
   cargo test --workspace
 }
 
+run_e2e() {
+  ensure_node_dependencies
+  cd -- "${PROJECT_DIR}"
+  pnpm exec playwright install chromium
+  pnpm test:e2e
+}
+
 run_build() {
   ensure_node_dependencies
   ensure_rust
@@ -166,6 +174,7 @@ main() {
     dev) run_dev ;;
     desktop) run_desktop ;;
     check) run_check ;;
+    e2e) run_e2e ;;
     build) run_build ;;
     package) run_package ;;
     assets) refresh_assets ;;

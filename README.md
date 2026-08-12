@@ -1,6 +1,6 @@
-# Iran Split Desktop
+# BiFlow
 
-Iran Split Desktop is a security-focused Tauri 2 desktop application for routing
+BiFlow is a security-focused Tauri 2 desktop application for routing
 Iranian traffic directly while sending other traffic through an existing Hiddify
 local proxy. The UI always runs as the signed-in user; privileged TUN and route
 operations are isolated in `iran-split-helper`.
@@ -33,6 +33,27 @@ routes, or DNS. For the native desktop and Linux artifacts:
 The packaging command prints the `.deb` and AppImage output directories. It uses
 the checksum-verified Mihomo binary imported from the sibling `clash` stack.
 
+If Hiddify or Mihomo is missing, BiFlow shows an Install button and downloads
+the official Linux or Windows build into the user data directory. If that fails,
+a step-by-step manual install guide is shown.
+
+Iran DIRECT domain and IP lists can be refreshed from
+[Chocolate4U/Iran-clash-rules](https://github.com/Chocolate4U/Iran-clash-rules)
+using GitHub, then jsDelivr, as fail-safe sources. A failed refresh keeps the
+last known good cache or the bundled snapshot.
+
+The application version lives in the root `version` file. Change that file only,
+then run `pnpm version:sync` (also part of `pnpm check` / `pnpm build`).
+
+## Tests
+
+```bash
+pnpm test          # UI unit tests
+cargo test --workspace
+pnpm test:e2e      # Playwright primary flows against the mock UI
+pnpm check         # format, lint, typecheck, unit tests, version sync
+```
+
 The equivalent underlying commands are:
 
 ```bash
@@ -62,6 +83,7 @@ cargo run -p iran-split-cli -- demo
 - Helper IPC is versioned, framed, size-limited, and command-allowlisted.
 - The helper accepts generation identifiers and hashes, never executable paths,
   shell strings, arbitrary URLs, or arbitrary file paths.
+- Third-party downloads use allowlisted GitHub release URLs only.
 - Mihomo's controller binds to loopback and uses a generated non-empty secret.
 
 See [docs/operations/development.md](docs/operations/development.md) for setup,

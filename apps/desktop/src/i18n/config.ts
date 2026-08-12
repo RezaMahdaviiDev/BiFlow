@@ -4,7 +4,8 @@ import { initReactI18next } from "react-i18next";
 const resources = {
   en: {
     translation: {
-      appName: "Iran Split",
+      appName: "BiFlow",
+      tagline: "Split routing control",
       dashboard: "Dashboard",
       rules: "Direct rules",
       diagnostics: "Diagnostics",
@@ -22,16 +23,43 @@ const resources = {
       noExitIp: "Available after connection",
       components: "Connection components",
       lastUpdated: "Last updated",
+      install: "Install",
+      installing: "Installing…",
+      notInstalled: "Not installed",
+      installed: "Installed",
+      installFailedTitle: "Automatic install did not finish",
+      installFailedBody:
+        "BiFlow could not download or place this app. Follow the steps below for your operating system.",
+      openDownload: "Open download page",
+      close: "Close",
+      cloudRules: "Iran cloud rules",
+      cloudRulesHelp:
+        "Domain and IP lists used for DIRECT routing. Updates come from Chocolate4U/Iran-clash-rules with GitHub and jsDelivr fail-safe links.",
+      domains: "Domains",
+      ipRanges: "IP ranges",
+      lastSynced: "Last synced",
+      neverSynced: "Bundled snapshot, not yet synced",
+      updateFromCloud: "Update from cloud",
+      syncing: "Syncing…",
+      customRules: "Your extra DIRECT rules",
+      testFlow: "Test IP or domain",
+      testFlowHelp: "See whether a host would go DIRECT or through the VPN.",
+      testFlowPlaceholder: "digikala.com or 5.22.12.1",
+      testFlowButton: "Test flow",
+      flowResult: "Flow",
       errors: {
         helperUnavailable: "The privileged helper is unavailable.",
         helperUnauthorized: "The current user is not authorized by the helper.",
-        hiddifyNotFound: "Hiddify could not be found.",
-        hiddifyEgressUnavailable: "Hiddify is listening but has no usable egress.",
+        hiddifyNotFound: "Hiddify is not installed.",
+        hiddifyEgressUnavailable:
+          "Hiddify is listening but has no usable egress.",
         configInvalid: "The generated runtime configuration is invalid.",
+        mihomoNotFound: "Mihomo is not installed.",
         mihomoStartFailed: "Mihomo could not start.",
         controllerTimeout: "Mihomo's controller did not become ready in time.",
         providerNotReady: "One or more rule providers are not ready.",
-        tunCleanupFailed: "The owned TUN or routes could not be completely removed.",
+        tunCleanupFailed:
+          "The owned TUN or routes could not be completely removed.",
         operationCancelled: "The operation was cancelled.",
         internal: "An internal error occurred.",
       },
@@ -39,7 +67,8 @@ const resources = {
   },
   fa: {
     translation: {
-      appName: "تقسیم ایران",
+      appName: "BiFlow",
+      tagline: "کنترل مسیریابی دوگانه",
       dashboard: "داشبورد",
       rules: "قوانین مستقیم",
       diagnostics: "عیب‌یابی",
@@ -57,13 +86,55 @@ const resources = {
       noExitIp: "پس از اتصال نمایش داده می‌شود",
       components: "اجزای اتصال",
       lastUpdated: "آخرین بروزرسانی",
+      install: "نصب",
+      installing: "در حال نصب…",
+      notInstalled: "نصب نشده",
+      installed: "نصب شده",
+      installFailedTitle: "نصب خودکار کامل نشد",
+      installFailedBody:
+        "BiFlow نتوانست این برنامه را دانلود یا نصب کند. مراحل زیر را برای سیستم‌عامل خود دنبال کنید.",
+      openDownload: "باز کردن صفحه دانلود",
+      close: "بستن",
+      cloudRules: "قوانین ابری ایران",
+      cloudRulesHelp:
+        "فهرست دامنه و آی‌پی برای مسیر مستقیم. به‌روزرسانی از Chocolate4U/Iran-clash-rules با لینک‌های پشتیبان GitHub و jsDelivr انجام می‌شود.",
+      domains: "دامنه‌ها",
+      ipRanges: "بازه‌های آی‌پی",
+      lastSynced: "آخرین همگام‌سازی",
+      neverSynced: "نسخه همراه برنامه؛ هنوز همگام‌سازی نشده",
+      updateFromCloud: "به‌روزرسانی از ابر",
+      syncing: "در حال همگام‌سازی…",
+      customRules: "قوانین مستقیم اضافی شما",
+      testFlow: "آزمایش آی‌پی یا دامنه",
+      testFlowHelp: "ببینید میزبان مستقیم می‌رود یا از وی‌پی‌ان.",
+      testFlowPlaceholder: "digikala.com یا 5.22.12.1",
+      testFlowButton: "آزمایش مسیر",
+      flowResult: "مسیر",
+      errors: {
+        helperUnavailable: "سرویس کمکی در دسترس نیست.",
+        helperUnauthorized: "کاربر فعلی توسط سرویس کمکی مجاز نیست.",
+        hiddifyNotFound: "هیدیفای نصب نشده است.",
+        hiddifyEgressUnavailable:
+          "هیدیفای در حال گوش دادن است اما خروجی قابل استفاده ندارد.",
+        configInvalid: "پیکربندی زمان اجرا نامعتبر است.",
+        mihomoNotFound: "میهومو نصب نشده است.",
+        mihomoStartFailed: "میهومو نتوانست شروع شود.",
+        controllerTimeout: "کنترل‌کننده میهومو به‌موقع آماده نشد.",
+        providerNotReady: "یک یا چند فراهم‌کننده قانون آماده نیست.",
+        tunCleanupFailed: "تونل یا مسیرها به‌طور کامل حذف نشدند.",
+        operationCancelled: "عملیات لغو شد.",
+        internal: "خطای داخلی رخ داد.",
+      },
     },
   },
 } as const;
 
 void i18n.use(initReactI18next).init({
   resources,
-  lng: localStorage.getItem("iran-split-language") ?? "en",
+  lng:
+    localStorage.getItem("biflow-language") ??
+    localStorage.getItem("iran-split-language") ??
+    "en",
   fallbackLng: "en",
   interpolation: { escapeValue: false },
 });

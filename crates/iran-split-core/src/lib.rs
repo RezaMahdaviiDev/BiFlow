@@ -86,6 +86,7 @@ pub enum ErrorCode {
     ConfigInvalid,
     HelperUnavailable,
     HelperUnauthorized,
+    MihomoNotFound,
     MihomoStartFailed,
     ControllerTimeout,
     ProviderNotReady,
@@ -104,6 +105,7 @@ pub enum Remediation {
     OpenSettings,
     InstallHelper,
     ChooseHiddifyExecutable,
+    InstallDependency,
     RunDiagnostics,
 }
 
@@ -229,6 +231,8 @@ pub enum CoreError {
     HiddifyEgressUnavailable,
     #[error("runtime configuration is invalid: {0}")]
     ConfigInvalid(String),
+    #[error("Mihomo executable was not found")]
+    MihomoNotFound,
     #[error("Mihomo failed to start: {0}")]
     MihomoStartFailed(String),
     #[error("Mihomo controller readiness timed out")]
@@ -265,7 +269,7 @@ impl CoreError {
                 ErrorCode::HiddifyNotFound,
                 "errors.hiddifyNotFound",
                 false,
-                Some(Remediation::ChooseHiddifyExecutable),
+                Some(Remediation::InstallDependency),
             ),
             Self::HiddifyEgressUnavailable => (
                 ErrorCode::HiddifyEgressUnavailable,
@@ -278,6 +282,12 @@ impl CoreError {
                 "errors.configInvalid",
                 false,
                 Some(Remediation::OpenSettings),
+            ),
+            Self::MihomoNotFound => (
+                ErrorCode::MihomoNotFound,
+                "errors.mihomoNotFound",
+                false,
+                Some(Remediation::InstallDependency),
             ),
             Self::MihomoStartFailed(_) => (
                 ErrorCode::MihomoStartFailed,
@@ -751,6 +761,7 @@ mod tests {
         tun: AtomicBool,
         fail_readiness: AtomicBool,
         slow_hiddify: AtomicBool,
+        hiddify_missing: AtomicBool,
         starts: AtomicUsize,
         cleanups: AtomicUsize,
     }
@@ -766,6 +777,9 @@ mod tests {
         }
 
         async fn ensure_hiddify(&self, cancel: CancellationToken) -> Result<(), CoreError> {
+            if self.hiddify_missing.load(Ordering::SeqCst) {
+                return Err(CoreError::HiddifyNotFound);
+            }
             if self.slow_hiddify.load(Ordering::SeqCst) {
                 tokio::select! {
                     () = cancel.cancelled() => return Err(CoreError::Cancelled),
@@ -925,5 +939,34 @@ mod tests {
         };
         let value = serde_json::to_value(snapshot).expect("serialize");
         assert_eq!(value["phase"], "checking_readiness");
+    }
+
+    #[test]
+    fn missing_hiddify_and_mihomo_ask_the_ui_to_install() {
+        let hiddify = CoreError::HiddifyNotFound.to_app_error(Uuid::nil());
+        assert_eq!(hiddify.code, ErrorCode::HiddifyNotFound);
+        assert_eq!(hiddify.remediation, Some(Remediation::InstallDependency));
+        let mihomo = CoreError::MihomoNotFound.to_app_error(Uuid::nil());
+        assert_eq!(mihomo.code, ErrorCode::MihomoNotFound);
+        assert_eq!(mihomo.remediation, Some(Remediation::InstallDependency));
+    }
+
+    #[tokio::test]
+    async fn missing_hiddify_marks_the_stack_error() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.hiddify_missing.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend));
+        engine.start_stack().await.expect("start accepted");
+        let mut receiver = engine.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while receiver.borrow().phase != StackPhase::Error {
+                receiver.changed().await.expect("snapshot update");
+            }
+        })
+        .await
+        .expect("error phase");
+        let error = engine.snapshot().last_error.expect("last error");
+        assert_eq!(error.code, ErrorCode::HiddifyNotFound);
+        assert_eq!(error.remediation, Some(Remediation::InstallDependency));
     }
 }
