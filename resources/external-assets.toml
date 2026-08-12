@@ -1,0 +1,24 @@
+schema_version = 1
+
+[[assets]]
+name = "mihomo-linux-x86_64"
+version = "v1.19.29"
+archive = "mihomo-linux-amd64-v1.19.29.gz"
+archive_sha256 = "60de76a35a6cbf7b4fa4a20f5c257c24345d1d635ab1aa3877022a1997ef413c"
+installed_sha256 = "9c397be7489538628fae781bc005e4c5b8cd7b0961b8bb2ca815c8150f193577"
+url = "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo-linux-amd64-v1.19.29.gz"
+local_source = "/home/devlife/dev/dariush/clash/.tools/mihomo"
+
+[[assets]]
+name = "mihomo-windows-x86_64"
+version = "v1.19.29"
+archive = "mihomo-windows-amd64-v1.19.29.zip"
+archive_sha256 = "1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9"
+url = "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.29/mihomo-windows-amd64-v1.19.29.zip"
+
+[[assets]]
+name = "wintun-windows-x86_64"
+version = "0.14.1"
+archive = "wintun-0.14.1.zip"
+archive_sha256 = "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
+url = "https://www.wintun.net/builds/wintun-0.14.1.zip"

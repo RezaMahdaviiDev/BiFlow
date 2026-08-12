@@ -1,0 +1,42 @@
+[package]
+name = "iran-split-desktop"
+version.workspace = true
+description = "Iran Split Desktop host"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "iran_split_desktop"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.2.0", features = [] }
+
+[dependencies]
+chrono.workspace = true
+dirs.workspace = true
+iran-split-config = { path = "../crates/iran-split-config" }
+iran-split-core = { path = "../crates/iran-split-core" }
+iran-split-ipc = { path = "../crates/iran-split-ipc" }
+iran-split-rules = { path = "../crates/iran-split-rules" }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2.5.1", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.3.0"
+tauri-plugin-single-instance = "2.2.0"
+tauri-plugin-updater = "2.7.1"
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+iran-split-platform-linux = { path = "../crates/iran-split-platform-linux" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+iran-split-platform-win = { path = "../crates/iran-split-platform-win" }
+
+[lints]
+workspace = true

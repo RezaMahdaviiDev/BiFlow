@@ -1,0 +1,23 @@
+{
+  "name": "iran-split-desktop-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.0.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @iran-split/desktop dev",
+    "build": "pnpm --filter @iran-split/desktop build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "pnpm --filter @iran-split/desktop lint",
+    "typecheck": "pnpm --filter @iran-split/desktop typecheck",
+    "test": "pnpm --filter @iran-split/desktop test",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "tauri": "pnpm --filter @iran-split/desktop tauri"
+  },
+  "devDependencies": {
+    "prettier": "3.5.3"
+  }
+}

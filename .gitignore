@@ -1,0 +1,13 @@
+/target/
+/node_modules/
+**/node_modules/
+**/dist/
+**/coverage/
+/.idea/
+/.vscode/
+*.log
+.DS_Store
+src-tauri/gen/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+resources/rules/cache/

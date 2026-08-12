@@ -1,0 +1,28 @@
+[package]
+name = "iran-split-platform-win"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+iran-split-core = { path = "../iran-split-core" }
+iran-split-ipc = { path = "../iran-split-ipc" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.1", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Storage_FileSystem",
+  "Win32_System_IO",
+  "Win32_System_Pipes",
+  "Win32_System_Services",
+  "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+import type { ComponentPhase, StackPhase } from "../api/models";
+
+const colors: Record<ComponentPhase | StackPhase, string> = {
+  uninitialized: "bg-slate-400/15 text-slate-500",
+  unknown: "bg-slate-400/15 text-slate-500",
+  stopped: "bg-slate-400/15 text-slate-500",
+  starting: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  starting_hiddify: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  preparing_runtime: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  validating_config: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  starting_core: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  checking_readiness: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  running: "bg-success/15 text-success",
+  degraded: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  stopping: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  recovering: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  error: "bg-danger/15 text-danger",
+};
+
+export function StatusPill({ phase }: { phase: ComponentPhase | StackPhase }) {
+  return (
+    <span
+      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${colors[phase]}`}
+    >
+      {phase.replaceAll("_", " ")}
+    </span>
+  );
+}

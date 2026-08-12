@@ -1,0 +1,8 @@
+target
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+Cargo.lock
+iran-split-desktop-implementation-roadmap-fa.md
+resources/rules/*.txt

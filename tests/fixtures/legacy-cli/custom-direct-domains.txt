@@ -1,0 +1,4 @@
+# Exact hostnames managed by ./direct-rules.sh.
+# One hostname per line; do not include a scheme, port, path, or wildcard.
+console.kavenegar.com
+way2pay.ir

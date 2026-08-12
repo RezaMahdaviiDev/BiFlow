@@ -1,0 +1,143 @@
+# Declarative split-tunnel policy for Mihomo (the maintained Clash.Meta core).
+# Hiddify supplies the upstream proxy at 127.0.0.1:12334.
+
+mixed-port: 17890
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: info
+ipv6: false
+find-process-mode: always
+external-controller: 127.0.0.1:19090
+secret: ""
+
+profile:
+  store-selected: false
+  store-fake-ip: true
+
+tun:
+  enable: true
+  stack: mixed
+  device: clash-iran
+  auto-route: true
+  auto-redirect: false
+  auto-detect-interface: true
+  strict-route: true
+  dns-hijack:
+    - any:53
+    - tcp://any:53
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  use-system-hosts: true
+  default-nameserver:
+    - 178.22.122.100
+    - 185.51.200.2
+  nameserver-policy:
+    "rule-set:custom-direct-domains":
+      - 178.22.122.100
+      - 185.51.200.2
+    "rule-set:iran-domains":
+      - 178.22.122.100
+      - 185.51.200.2
+  nameserver:
+    - "https://1.1.1.1/dns-query#VPN"
+    - "https://8.8.8.8/dns-query#VPN"
+  proxy-server-nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+  direct-nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+  direct-nameserver-follow-policy: false
+
+sniffer:
+  enable: true
+  force-dns-mapping: true
+  parse-pure-ip: true
+  override-destination: true
+  sniff:
+    HTTP:
+      ports: [80, 8080-8880]
+    TLS:
+      ports: [443, 8443]
+    QUIC:
+      ports: [443, 8443]
+
+proxies:
+  - name: Hiddify
+    type: socks5
+    server: 127.0.0.1
+    port: 12334
+    udp: true
+
+proxy-groups:
+  - name: VPN
+    type: select
+    proxies:
+      - Hiddify
+
+rule-providers:
+  custom-direct-domains:
+    type: file
+    behavior: domain
+    format: text
+    path: ./ruleset/custom-direct-domains.txt
+  custom-direct-ips:
+    type: file
+    behavior: ipcidr
+    format: text
+    path: ./ruleset/custom-direct-ips.txt
+  private-networks:
+    type: http
+    behavior: ipcidr
+    format: text
+    url: "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release/private.txt"
+    path: ./ruleset/private.txt
+    interval: 86400
+    proxy: VPN
+  iran-domains:
+    type: http
+    behavior: domain
+    format: text
+    url: "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release/ir.txt"
+    path: ./ruleset/ir.txt
+    interval: 86400
+    proxy: VPN
+  iran-networks:
+    type: http
+    behavior: ipcidr
+    format: text
+    url: "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release/ircidr.txt"
+    path: ./ruleset/ircidr.txt
+    interval: 86400
+    proxy: VPN
+
+rules:
+  # Prevent a recursive loop: Hiddify's own tunnel sockets must leave directly.
+  - PROCESS-NAME,hiddify,DIRECT
+  - PROCESS-NAME-WILDCARD,*Hiddify*,DIRECT
+  - PROCESS-NAME,tailscaled,DIRECT
+
+  # Keep loopback/LAN/Tailscale/Docker traffic local.
+  - DOMAIN,localhost,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR6,::1/128,DIRECT,no-resolve
+  - RULE-SET,private-networks,DIRECT,no-resolve
+
+  # Locally managed exceptions are updated through the controller without
+  # stopping Mihomo. IP matching is only for literal-IP connections.
+  - RULE-SET,custom-direct-domains,DIRECT
+  - RULE-SET,custom-direct-ips,DIRECT,no-resolve
+
+  # Iranian domains and Iranian IPv4/IPv6 ranges bypass Hiddify.
+  - RULE-SET,iran-domains,DIRECT
+  - RULE-SET,iran-networks,DIRECT,no-resolve
+
+  # Everything else goes to Hiddify's local SOCKS endpoint.
+  - MATCH,VPN

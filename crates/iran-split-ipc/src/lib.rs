@@ -1,0 +1,297 @@
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::{collections::BTreeMap, io};
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use uuid::Uuid;
+
+pub const PROTOCOL_VERSION: u16 = 1;
+pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Envelope<T> {
+    pub protocol_version: u16,
+    pub request_id: Uuid,
+    pub payload: T,
+}
+
+impl<T> Envelope<T> {
+    #[must_use]
+    pub fn new(payload: T) -> Self {
+        Self {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: Uuid::new_v4(),
+            payload,
+        }
+    }
+
+    #[must_use]
+    pub const fn reply<U>(&self, payload: U) -> Envelope<U> {
+        Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: self.request_id,
+            payload,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "command", content = "arguments", rename_all = "snake_case")]
+pub enum HelperCommand {
+    Hello {
+        client_version: String,
+        supported_protocols: Vec<u16>,
+    },
+    GetServiceStatus,
+    RegisterRuntimeGeneration {
+        generation_id: Uuid,
+        config_sha256: String,
+    },
+    StartMihomo {
+        generation_id: Uuid,
+        config_sha256: String,
+    },
+    StopMihomo,
+    RestartMihomo {
+        generation_id: Uuid,
+        config_sha256: String,
+    },
+    GetMihomoProcessStatus,
+    CleanupOwnedNetworkState,
+    CollectServiceLogs {
+        max_entries: u16,
+    },
+    PrepareForUpdate,
+}
+
+impl HelperCommand {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::Hello {
+                supported_protocols,
+                ..
+            } if supported_protocols.is_empty() || supported_protocols.len() > 8 => Err(
+                ProtocolError::InvalidMessage("supported protocol list must contain 1-8 items".into()),
+            ),
+            Self::RegisterRuntimeGeneration { config_sha256, .. }
+            | Self::StartMihomo { config_sha256, .. }
+            | Self::RestartMihomo { config_sha256, .. }
+                if !valid_sha256(config_sha256) =>
+            {
+                Err(ProtocolError::InvalidMessage(
+                    "generation SHA-256 must be 64 lowercase hexadecimal characters".into(),
+                ))
+            }
+            Self::CollectServiceLogs { max_entries } if *max_entries == 0 || *max_entries > 2_000 => {
+                Err(ProtocolError::InvalidMessage(
+                    "log request must contain between 1 and 2000 entries".into(),
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    #[must_use]
+    pub const fn audit_name(&self) -> &'static str {
+        match self {
+            Self::Hello { .. } => "hello",
+            Self::GetServiceStatus => "get_service_status",
+            Self::RegisterRuntimeGeneration { .. } => "register_runtime_generation",
+            Self::StartMihomo { .. } => "start_mihomo",
+            Self::StopMihomo => "stop_mihomo",
+            Self::RestartMihomo { .. } => "restart_mihomo",
+            Self::GetMihomoProcessStatus => "get_mihomo_process_status",
+            Self::CleanupOwnedNetworkState => "cleanup_owned_network_state",
+            Self::CollectServiceLogs { .. } => "collect_service_logs",
+            Self::PrepareForUpdate => "prepare_for_update",
+        }
+    }
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "result", content = "value", rename_all = "snake_case")]
+pub enum HelperReply {
+    Hello(HelloReply),
+    ServiceStatus(ServiceStatus),
+    GenerationRegistered { generation_id: Uuid },
+    ProcessStatus(ProcessStatus),
+    CleanupReport(CleanupReport),
+    Logs(Vec<ServiceLogEntry>),
+    ReadyForUpdate,
+    Ack,
+    Error(HelperError),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelloReply {
+    pub helper_version: String,
+    pub selected_protocol: u16,
+    pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceStatus {
+    pub helper_version: String,
+    pub protocol_version: u16,
+    pub authorized: bool,
+    pub active_generation: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub generation_id: Option<Uuid>,
+    pub started_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CleanupReport {
+    pub process_stopped: bool,
+    pub tun_removed: bool,
+    pub routes_removed: u32,
+    pub dns_restored: bool,
+    pub warnings: Vec<String>,
+}
+
+impl CleanupReport {
+    #[must_use]
+    pub fn clean(&self) -> bool {
+        self.process_stopped && self.tun_removed && self.dns_restored && self.warnings.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceLogEntry {
+    pub timestamp: String,
+    pub level: String,
+    pub event: String,
+    #[serde(default)]
+    pub fields: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HelperError {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Error)]
+pub enum ProtocolError {
+    #[error("IPC I/O failed: {0}")]
+    Io(#[from] io::Error),
+    #[error("IPC JSON is malformed: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("IPC message length {actual} exceeds the {maximum}-byte limit")]
+    Oversized { actual: usize, maximum: usize },
+    #[error("unsupported protocol version {actual}; expected {expected}")]
+    VersionMismatch { actual: u16, expected: u16 },
+    #[error("invalid IPC message: {0}")]
+    InvalidMessage(String),
+}
+
+pub async fn write_frame<W, T>(writer: &mut W, message: &T) -> Result<(), ProtocolError>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize,
+{
+    let bytes = serde_json::to_vec(message)?;
+    if bytes.len() > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::Oversized {
+            actual: bytes.len(),
+            maximum: MAX_MESSAGE_BYTES,
+        });
+    }
+    let length = u32::try_from(bytes.len()).map_err(|_| ProtocolError::Oversized {
+        actual: bytes.len(),
+        maximum: MAX_MESSAGE_BYTES,
+    })?;
+    writer.write_all(&length.to_be_bytes()).await?;
+    writer.write_all(&bytes).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+pub async fn read_frame<R, T>(reader: &mut R) -> Result<T, ProtocolError>
+where
+    R: AsyncRead + Unpin,
+    T: DeserializeOwned,
+{
+    let mut length_bytes = [0_u8; 4];
+    reader.read_exact(&mut length_bytes).await?;
+    let length = u32::from_be_bytes(length_bytes) as usize;
+    if length > MAX_MESSAGE_BYTES {
+        return Err(ProtocolError::Oversized {
+            actual: length,
+            maximum: MAX_MESSAGE_BYTES,
+        });
+    }
+    if length == 0 {
+        return Err(ProtocolError::InvalidMessage(
+            "zero-length IPC frame".into(),
+        ));
+    }
+    let mut bytes = vec![0_u8; length];
+    reader.read_exact(&mut bytes).await?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+pub fn validate_envelope<T>(message: &Envelope<T>) -> Result<(), ProtocolError> {
+    if message.protocol_version != PROTOCOL_VERSION {
+        return Err(ProtocolError::VersionMismatch {
+            actual: message.protocol_version,
+            expected: PROTOCOL_VERSION,
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn framed_round_trip_preserves_request_id() {
+        let (mut client, mut server) = tokio::io::duplex(4_096);
+        let expected = Envelope::new(HelperCommand::GetServiceStatus);
+        let request_id = expected.request_id;
+        let sender = tokio::spawn(async move { write_frame(&mut client, &expected).await });
+        let actual: Envelope<HelperCommand> = read_frame(&mut server).await.expect("read frame");
+        sender.await.expect("join").expect("write frame");
+        assert_eq!(actual.request_id, request_id);
+        validate_envelope(&actual).expect("valid envelope");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_length_before_allocating() {
+        let (mut client, mut server) = tokio::io::duplex(16);
+        client
+            .write_all(&((MAX_MESSAGE_BYTES as u32) + 1).to_be_bytes())
+            .await
+            .expect("write length");
+        let error = read_frame::<_, Envelope<HelperCommand>>(&mut server)
+            .await
+            .expect_err("oversized frame");
+        assert!(matches!(error, ProtocolError::Oversized { .. }));
+    }
+
+    #[test]
+    fn validates_generation_hash_and_log_bound() {
+        let invalid = HelperCommand::StartMihomo {
+            generation_id: Uuid::new_v4(),
+            config_sha256: "../config".into(),
+        };
+        assert!(invalid.validate().is_err());
+        assert!(HelperCommand::CollectServiceLogs { max_entries: 2_001 }
+            .validate()
+            .is_err());
+    }
+}

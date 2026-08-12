@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Iran Split",
+  "version": "0.1.0",
+  "identifier": "app.iransplit.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../apps/desktop dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm --dir ../apps/desktop build",
+    "frontendDist": "../apps/desktop/dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "Iran Split",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 560,
+        "center": true,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "resources": ["../resources/rules/*", "../resources/licenses/*"],
+    "category": "Utility",
+    "shortDescription": "Safe Iran split routing through Hiddify",
+    "longDescription": "Routes Iranian traffic directly and other traffic through an existing Hiddify connection using a privileged helper.",
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": ["https://updates.iran-split.example/stable/{{target}}/{{arch}}/{{current_version}}"],
+      "dialog": false,
+      "pubkey": "REPLACE_WITH_RELEASE_PUBLIC_KEY"
+    }
+  }
+}

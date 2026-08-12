@@ -1,0 +1,4 @@
+# Minimal bootstrap snapshot used for offline startup tests.
+5.22.0.0/16
+5.23.112.0/21
+31.2.128.0/17
