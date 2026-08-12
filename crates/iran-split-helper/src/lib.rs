@@ -59,6 +59,12 @@ pub struct HelperSettings {
 }
 
 impl HelperSettings {
+    /// Loads and validates a root-owned helper configuration file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the path is unsafe, its contents cannot be read or
+    /// decoded, or a setting violates the helper's security constraints.
     pub fn load(path: &Path) -> Result<Self, HelperServiceError> {
         let metadata = fs::symlink_metadata(path)?;
         if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
@@ -162,6 +168,12 @@ impl Supervisor {
         &self.settings
     }
 
+    /// Validates and publishes an immutable runtime generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the generation path, files, or hash are invalid,
+    /// or publishing the generation fails.
     pub async fn register_generation(
         &self,
         generation_id: Uuid,
@@ -215,6 +227,12 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Starts Mihomo from a previously registered runtime generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the binary fails integrity checks, the generation
+    /// is not registered, or the child process cannot be managed.
     pub async fn start(
         &self,
         generation_id: Uuid,
@@ -281,6 +299,11 @@ impl Supervisor {
         Ok(status)
     }
 
+    /// Stops the helper-owned Mihomo process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process cannot be inspected or stopped.
     pub async fn stop(&self) -> Result<ProcessStatus, HelperServiceError> {
         let mut current = self.child.lock().await;
         if let Some(managed) = current.as_mut() {
@@ -298,6 +321,11 @@ impl Supervisor {
         })
     }
 
+    /// Returns the current helper-owned process status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the child process status cannot be inspected.
     pub async fn status(&self) -> Result<ProcessStatus, HelperServiceError> {
         let mut current = self.child.lock().await;
         if let Some(managed) = current.as_mut() {
@@ -308,6 +336,11 @@ impl Supervisor {
         Ok(process_status(current.as_ref()))
     }
 
+    /// Stops Mihomo and removes the helper-owned network interface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process or network cleanup fails.
     pub async fn cleanup(&self) -> Result<CleanupReport, HelperServiceError> {
         let process_stopped = !self.stop().await?.running;
         let interface_path = Path::new("/sys/class/net").join(&self.settings.tun_name);

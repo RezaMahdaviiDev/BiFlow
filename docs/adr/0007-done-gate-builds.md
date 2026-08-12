@@ -10,10 +10,10 @@ Agents could finish a change after editing files even when the frontend or Rust 
 
 ## Decision
 
-`AGENTS.md` has a hard **Done gate**: every change must pass frontend `pnpm check` + `pnpm build` and Rust `cargo test --workspace` + `cargo build --workspace` with zero failures before the task is done. Missing toolchains must be installed, not skipped. Clippy style warnings are not the done gate.
+`AGENTS.md` has a hard **Done gate**: prove the parts that changed with zero failures and zero project warnings. Frontend changes run `pnpm check` + `pnpm build`. Rust changes run `cargo test -p <crate>` plus `cargo clippy -p <crate> --all-targets -- -D warnings` for each touched workspace crate. Do not `cargo clean`, and do not run `cargo test --workspace` plus `cargo build --workspace` after every task. A wide Cargo change uses one incremental `cargo test --workspace` plus warning-denying workspace Clippy. Missing toolchains must be installed, not skipped.
 
 ## Consequences
 
-- Tasks take longer but land green.
-- `./dev.sh check` covers formatting, lint, and tests; the gate still requires production builds (`pnpm build`, `cargo build --workspace`).
-- Pedantic Clippy remains available for review, but a red `-D warnings` run does not block done if the app builds and tests pass.
+- Incremental Cargo rebuilds only dirty crates; a cold `target/` still compiles dependencies once.
+- `./dev.sh check` covers formatting, lint, and tests; frontend production build remains `pnpm build` when the UI changed.
+- Pedantic Clippy diagnostics are blocking; every project warning must be fixed before completion.

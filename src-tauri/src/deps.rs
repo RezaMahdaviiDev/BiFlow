@@ -85,13 +85,6 @@ pub struct InstallResult {
 }
 
 #[must_use]
-pub fn data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("biflow")
-}
-
-#[must_use]
 pub fn hiddify_candidates(data: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![
         data.join("bin/hiddify"),
@@ -478,11 +471,11 @@ async fn download(url: &str) -> Result<Vec<u8>, DepsError> {
 
 fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, DepsError> {
     let mut decoder = GzDecoder::new(bytes);
-    let mut decoded = Vec::new();
+    let mut output = Vec::new();
     decoder
-        .read_to_end(&mut decoded)
+        .read_to_end(&mut output)
         .map_err(|error| DepsError::Integrity(error.to_string()))?;
-    Ok(decoded)
+    Ok(output)
 }
 
 fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), DepsError> {

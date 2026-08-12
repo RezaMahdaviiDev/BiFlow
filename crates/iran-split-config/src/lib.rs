@@ -282,6 +282,12 @@ impl ConfigStore {
         Self { path: path.into() }
     }
 
+    /// Loads the stored configuration, creating a validated default when absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the file cannot be read, parsed, migrated,
+    /// validated, or atomically persisted.
     pub fn load_or_create(&self) -> Result<AppConfig, ConfigError> {
         if !self.path.exists() {
             let config = AppConfig::default();
@@ -291,6 +297,12 @@ impl ConfigStore {
         self.load()
     }
 
+    /// Loads, migrates, and validates the stored configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] for I/O or TOML failures, unsupported schema
+    /// versions, failed migrations, or invalid configuration values.
     pub fn load(&self) -> Result<AppConfig, ConfigError> {
         let source = fs::read_to_string(&self.path)?;
         let mut value: toml::Value = toml::from_str(&source)?;
@@ -317,6 +329,12 @@ impl ConfigStore {
         Ok(config)
     }
 
+    /// Validates and atomically saves a configuration at the expected revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] when the current configuration cannot be loaded,
+    /// the revision conflicts, validation fails, or atomic persistence fails.
     pub fn save(
         &self,
         mut config: AppConfig,

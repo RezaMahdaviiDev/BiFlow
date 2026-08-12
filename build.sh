@@ -4,6 +4,7 @@ set -Eeuo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 TARGET_DIR="${PROJECT_DIR}/target"
 CRATE_BIN="iran-split-desktop"
+BUILD_VERSION=""
 WINDOWS_TARGET=""
 WINDOWS_TAURI_ARGS=()
 NODE_VERSION="22.15.2"
@@ -29,6 +30,21 @@ have() {
 
 plan() {
   node "${PROJECT_DIR}/scripts/build-plan.mjs" "$1"
+}
+
+assert_build_version() {
+  local current
+  current="$(plan version)"
+  [[ -n "${BUILD_VERSION}" && "${current}" == "${BUILD_VERSION}" ]] || \
+    die "version changed during the build: started with ${BUILD_VERSION:-unset}, now ${current}"
+}
+
+linux_deb_name() {
+  command printf 'BiFlow_%s_amd64.deb\n' "${BUILD_VERSION}"
+}
+
+windows_installer_name() {
+  command printf 'BiFlow_%s_x64-setup.exe\n' "${BUILD_VERSION}"
 }
 
 usage() {
@@ -219,7 +235,6 @@ ensure_linux_desktop_dependencies() {
   source /etc/os-release
   case "${ID:-}" in
     ubuntu|debian|linuxmint|pop)
-      apt_update_once
       local indicator="libappindicator3-dev"
       if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
         indicator="libayatana-appindicator3-dev"
@@ -267,7 +282,9 @@ ensure_windows_cross_from_linux() {
   fi
   if have cargo-xwin; then
     WINDOWS_TARGET="x86_64-pc-windows-msvc"
-    WINDOWS_TAURI_ARGS=(--runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis)
+    # On a Unix host, Tauri selects NSIS from the Windows target. Passing
+    # `--bundles nsis` is rejected by the host CLI before target detection.
+    WINDOWS_TAURI_ARGS=(--runner cargo-xwin --target x86_64-pc-windows-msvc)
     log "Windows cross-compile toolchain (cargo-xwin) is ready"
     return 0
   fi
@@ -275,7 +292,7 @@ ensure_windows_cross_from_linux() {
   have x86_64-w64-mingw32-gcc || die "MinGW-w64 is missing after package install"
   export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
   WINDOWS_TARGET="x86_64-pc-windows-gnu"
-  WINDOWS_TAURI_ARGS=(--target x86_64-pc-windows-gnu --bundles nsis)
+  WINDOWS_TAURI_ARGS=(--target x86_64-pc-windows-gnu)
   log "Windows cross-compile toolchain (MinGW-w64) is ready"
 }
 
@@ -288,25 +305,20 @@ copy_one() {
   log "wrote ${destination}"
 }
 
-first_match() {
-  local directory="$1"
-  local pattern="$2"
-  [[ -d "${directory}" ]] || return 1
-  local match
-  match="$(command find "${directory}" -maxdepth 1 -type f -name "${pattern}" | command sort | command head -n 1)"
-  [[ -n "${match}" ]] || return 1
-  command printf '%s\n' "${match}"
-}
-
 collect_linux() {
-  local source dest
-  source="$(first_match "${TARGET_DIR}/release/bundle/deb" "*.deb")" || \
-    die "Linux .deb was not produced under ${TARGET_DIR}/release/bundle/deb"
-  dest="${PROJECT_DIR}/$(plan linux.dir)/$(plan linux.deb)"
+  assert_build_version
+  local source dest package_version
+  source="${TARGET_DIR}/release/bundle/deb/$(linux_deb_name)"
+  [[ -f "${source}" ]] || die "expected Linux package is missing: ${source}"
+  package_version="$(dpkg-deb -f "${source}" Version)"
+  [[ "${package_version}" == "${BUILD_VERSION}" ]] || \
+    die "Linux package version mismatch: expected ${BUILD_VERSION}, got ${package_version}"
+  dest="${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)"
   copy_one "${source}" "${dest}"
 }
 
 collect_windows() {
+  assert_build_version
   local triple="${1:-}"
   local prefix="${TARGET_DIR}/release"
   if [[ -n "${triple}" ]]; then
@@ -314,17 +326,17 @@ collect_windows() {
   fi
   local exe setup dest_exe dest_setup
   exe="${prefix}/${CRATE_BIN}.exe"
-  setup="$(first_match "${prefix}/bundle/nsis" "*setup.exe")" || \
-    die "Windows NSIS installer was not produced under ${prefix}/bundle/nsis"
+  setup="${prefix}/bundle/nsis/$(windows_installer_name)"
   dest_exe="${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.exe)"
-  dest_setup="${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.installer)"
+  dest_setup="${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)"
   copy_one "${exe}" "${dest_exe}"
   copy_one "${setup}" "${dest_setup}"
 }
 
 build_linux() {
   [[ "$(host_os)" == "linux" ]] || die "Linux .deb packages must be built on Linux"
-  log "Building Linux .deb for BiFlow $(plan version)"
+  assert_build_version
+  log "Building Linux .deb for BiFlow ${BUILD_VERSION}"
   (cd -- "${PROJECT_DIR}" && pnpm tauri build --bundles deb)
   collect_linux
 }
@@ -335,10 +347,10 @@ build_windows() {
   if [[ "${os}" == "windows" ]]; then
     WINDOWS_TARGET=""
     WINDOWS_TAURI_ARGS=(--bundles nsis)
-    log "Building Windows .exe and NSIS installer for BiFlow $(plan version)"
+    log "Building Windows .exe and NSIS installer for BiFlow ${BUILD_VERSION}"
   elif [[ "${os}" == "linux" ]]; then
     [[ -n "${WINDOWS_TARGET:-}" ]] || die "Windows cross-compile toolchain was not prepared"
-    log "Cross-compiling Windows .exe and NSIS installer for BiFlow $(plan version) (${WINDOWS_TARGET})"
+    log "Cross-compiling Windows .exe and NSIS installer for BiFlow ${BUILD_VERSION} (${WINDOWS_TARGET})"
   else
     die "Windows packages require Windows or Linux"
   fi
@@ -347,14 +359,15 @@ build_windows() {
 }
 
 print_summary() {
+  assert_build_version
   log ""
-  log "BiFlow $(plan version) artifacts:"
-  [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(plan linux.deb)" ]] && \
-    log "  Linux deb:          $(plan linux.dir)/$(plan linux.deb)"
+  log "BiFlow ${BUILD_VERSION} artifacts:"
+  [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)" ]] && \
+    log "  Linux deb:          $(plan linux.dir)/$(linux_deb_name)"
   [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.exe)" ]] && \
     log "  Windows app:        $(plan windows.dir)/$(plan windows.exe)"
-  [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.installer)" ]] && \
-    log "  Windows installer:  $(plan windows.dir)/$(plan windows.installer)"
+  [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)" ]] && \
+    log "  Windows installer:  $(plan windows.dir)/$(windows_installer_name)"
 }
 
 ensure_requirements() {
@@ -394,6 +407,8 @@ main() {
 
   ensure_requirements "${target}"
   (cd -- "${PROJECT_DIR}" && pnpm version:sync)
+  BUILD_VERSION="$(plan version)"
+  assert_build_version
 
   case "${target}" in
     linux) build_linux ;;

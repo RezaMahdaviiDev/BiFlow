@@ -60,7 +60,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn demo() -> Result<(), CoreError> {
-    let engine = Engine::new(Arc::new(DemoBackend::default()));
+    let engine = Engine::new(
+        Arc::new(DemoBackend::default()),
+        &tokio::runtime::Handle::current(),
+    );
     let mut updates = engine.subscribe();
     let printer = tokio::spawn(async move {
         while updates.changed().await.is_ok() {

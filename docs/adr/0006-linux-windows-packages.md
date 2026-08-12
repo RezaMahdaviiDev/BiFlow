@@ -15,8 +15,11 @@ Operators need installable artifacts: a Debian package on Linux, and on Windows 
 - Windows output is the app binary `artifacts/windows/BiFlow.exe` and an NSIS installer `artifacts/windows/BiFlow_<version>_x64-setup.exe`.
 - Artifact names are derived from the root `version` file via `scripts/build-plan.mjs`.
 - `./build.sh` is one-shot: it checks for Node 22, pnpm, Rust (from `rust-toolchain.toml`), Linux desktop libraries, NSIS, and `cargo-xwin`, and installs anything missing before building.
-- Linux builds natively. Windows builds natively on Windows, or from Linux with `cargo-xwin` (MSVC) or MinGW-w64 plus NSIS (`makensis`).
+- Requirement checks do not update apt indexes or request root access when every required Debian package is already installed. Package index updates are deferred until a missing package must be installed.
+- Linux builds natively. Windows builds natively on Windows, or from Linux with `cargo-xwin` (MSVC) or MinGW-w64 plus NSIS (`makensis`). The Linux Tauri CLI must not receive `--bundles nsis`; it derives NSIS from the Windows target triple and then invokes the host `makensis`.
 - `cargo-xwin` is pinned to `0.19.2`. Newer releases require rustc 1.89, which is above this repo's 1.88 toolchain.
+- The Tauri CLI is a root workspace development dependency and runs from the repository root. This keeps `src-tauri/tauri.conf.json` discoverable; the frontend package must not proxy Tauri through a pnpm filter because filtered scripts run from `apps/desktop`. Tauri's shell hooks are also workspace-root-relative (`apps/desktop`), while `frontendDist` is configuration-file-relative (`../apps/desktop/dist`).
+- `build.sh` snapshots the synchronized version before compiling, selects exact versioned bundle paths, verifies the Debian package's embedded version, and aborts if the root version changes during the build.
 - In-app Hiddify/Mihomo install remains the way third-party binaries are obtained; packaging does not vendor Mihomo from a sibling repo.
 
 ## Consequences

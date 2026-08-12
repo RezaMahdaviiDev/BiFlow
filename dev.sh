@@ -15,8 +15,9 @@ BiFlow development helper
 Usage: ./dev.sh [command]
 
 Commands:
-  dev       Start the React UI with the safe in-browser mock backend (default)
-  desktop   Start the complete Tauri desktop in development mode
+  dev       Compile and start the complete native Tauri application (default)
+  desktop   Alias for dev
+  web       Start only the React UI with the safe in-browser mock backend
   check     Run frontend and Rust formatting, linting, type checks, and tests
   e2e       Run Playwright primary-flow tests against the mock UI
   build     Build optimized frontend, helper, CLI, and Tauri desktop binaries
@@ -32,10 +33,10 @@ Release packages for Linux (.deb) and Windows (.exe + NSIS installer):
   ./build.sh linux
   ./build.sh windows
 
-The desktop/package commands require Rust 1.88 and WebKitGTK 4.1 development
-packages. Windows packages also need NSIS and a Windows Rust target. The dev
-command only requires Node.js and pnpm and never touches TUN, routes, DNS, or
-system services.
+The dev/desktop/package commands require Rust 1.88 and WebKitGTK 4.1
+development packages. Windows packages also need NSIS and a Windows Rust
+target. The web command only requires Node.js and pnpm and never touches TUN,
+routes, DNS, or system services.
 EOF
 }
 
@@ -81,7 +82,18 @@ ensure_node_dependencies() {
   fi
 }
 
+activate_rust_path() {
+  local account_home rust_bin_dir
+  account_home="$(command getent passwd "$(command id -u)" | command cut -d: -f6)"
+  [[ -n "${account_home}" ]] || die "could not determine the current account home directory"
+  rust_bin_dir="${account_home}/.cargo/bin"
+  if [[ -x "${rust_bin_dir}/cargo" ]]; then
+    export PATH="${rust_bin_dir}:${PATH}"
+  fi
+}
+
 ensure_rust() {
+  activate_rust_path
   need_command cargo
   need_command rustc
   local actual
@@ -108,7 +120,7 @@ print_paths() {
     "Windows:  ${PROJECT_DIR}/artifacts/windows/"
 }
 
-run_dev() {
+run_web() {
   ensure_node_dependencies
   command printf 'Starting the safe UI mock at http://127.0.0.1:1420\n'
   command printf 'This mode does not start Mihomo, create a TUN, or change routes.\n'
@@ -116,7 +128,7 @@ run_dev() {
   exec pnpm dev --host 127.0.0.1
 }
 
-run_desktop() {
+run_dev() {
   ensure_node_dependencies
   ensure_rust
   ensure_linux_desktop_dependencies
@@ -173,7 +185,8 @@ main() {
   cd -- "${PROJECT_DIR}"
   case "${1:-dev}" in
     dev) run_dev ;;
-    desktop) run_desktop ;;
+    desktop) run_dev ;;
+    web) run_web ;;
     check) run_check ;;
     e2e) run_e2e ;;
     build) run_build ;;

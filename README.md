@@ -17,14 +17,17 @@ Prerequisites:
 - Linux desktop builds: WebKitGTK 4.1 and GTK 3 development packages
 
 ```bash
-./dev.sh dev
+./dev.sh
 ```
 
-This starts the UI with a deterministic mock transport and cannot modify TUN,
-routes, or DNS. For the native desktop and Linux artifacts:
+This compiles and starts the complete native Tauri application, so the React UI
+uses the Rust command and event bridge. `./dev.sh desktop` is an equivalent
+explicit alias. To run only the browser UI with its deterministic mock transport
+(which cannot modify TUN, routes, or DNS), use `./dev.sh web`.
+
+For checks and Linux artifacts:
 
 ```bash
-./dev.sh desktop
 ./dev.sh check
 ./dev.sh build
 ./build.sh            # Linux .deb and Windows .exe + NSIS installer

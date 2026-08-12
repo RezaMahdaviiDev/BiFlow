@@ -1,6 +1,6 @@
 {
   "name": "iran-split-desktop-workspace",
-  "version": "1.0.5",
+  "version": "1.0.7",
   "private": true,
   "packageManager": "pnpm@9.0.1",
   "engines": {
@@ -22,10 +22,11 @@
     "test:e2e": "playwright test",
     "precheck": "node scripts/sync-version.mjs",
     "check": "pnpm version:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts",
-    "tauri": "pnpm --filter @iran-split/desktop tauri"
+    "tauri": "tauri"
   },
   "devDependencies": {
     "@playwright/test": "1.54.2",
+    "@tauri-apps/cli": "2.5.0",
     "prettier": "3.5.3"
   }
 }

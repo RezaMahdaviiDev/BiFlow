@@ -392,8 +392,12 @@ impl<B: PlatformBackend> std::fmt::Debug for Engine<B> {
 }
 
 impl<B: PlatformBackend> Engine<B> {
+    /// Creates an engine and schedules its worker on `runtime`.
+    ///
+    /// Passing the runtime explicitly allows GUI setup code to construct the
+    /// engine outside an entered Tokio context without panicking.
     #[must_use]
-    pub fn new(backend: Arc<B>) -> Arc<Self> {
+    pub fn new(backend: Arc<B>, runtime: &tokio::runtime::Handle) -> Arc<Self> {
         let (queue, receiver) = mpsc::channel(16);
         let (snapshots, _) = watch::channel(StackSnapshot::default());
         let engine = Arc::new(Self {
@@ -403,7 +407,7 @@ impl<B: PlatformBackend> Engine<B> {
             operations: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
         });
-        tokio::spawn(Self::worker(Arc::clone(&engine), receiver));
+        runtime.spawn(Self::worker(Arc::clone(&engine), receiver));
         engine
     }
 
@@ -416,10 +420,22 @@ impl<B: PlatformBackend> Engine<B> {
         self.snapshots.subscribe()
     }
 
+    /// Queues startup reconciliation of helper and network state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
+    /// longer available.
     pub async fn reconcile_startup(&self) -> Result<OperationAccepted, CoreError> {
         self.accept(OperationKind::Reconcile).await
     }
 
+    /// Queues a stack start, or reports success when already running.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
+    /// longer available.
     pub async fn start_stack(&self) -> Result<OperationAccepted, CoreError> {
         if self.snapshot().phase == StackPhase::Running {
             return Ok(OperationAccepted {
@@ -430,6 +446,12 @@ impl<B: PlatformBackend> Engine<B> {
         self.accept(OperationKind::Start).await
     }
 
+    /// Cancels an in-progress start and queues a stack stop.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
+    /// longer available.
     pub async fn stop_stack(&self) -> Result<OperationAccepted, CoreError> {
         if self.snapshot().phase == StackPhase::Stopped && self.operations.lock().await.is_empty() {
             return Ok(OperationAccepted {
@@ -448,6 +470,12 @@ impl<B: PlatformBackend> Engine<B> {
         self.accept(OperationKind::Stop).await
     }
 
+    /// Queues a stop followed by a start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::QueueUnavailable`] when either operation cannot be
+    /// queued.
     pub async fn restart_stack(&self) -> Result<(OperationAccepted, OperationAccepted), CoreError> {
         let stop = self.stop_stack().await?;
         let start = self.accept(OperationKind::Start).await?;
@@ -713,6 +741,13 @@ impl<B: PlatformBackend> Engine<B> {
         self.snapshots.send_replace(snapshot);
     }
 
+    /// Waits until the stack reaches `desired`, reports an error phase, or times out.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::Platform`] if the stack enters its error phase,
+    /// [`CoreError::QueueUnavailable`] if snapshot delivery closes, or
+    /// [`CoreError::ControllerTimeout`] when `timeout` elapses.
     pub async fn wait_for_phase(
         &self,
         desired: StackPhase,
@@ -861,7 +896,7 @@ mod tests {
     #[tokio::test]
     async fn start_and_stop_are_idempotent() {
         let backend = Arc::new(FakeBackend::default());
-        let engine = Engine::new(Arc::clone(&backend));
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
         let first = engine.start_stack().await.expect("start accepted");
         let duplicate = engine.start_stack().await.expect("duplicate accepted");
         assert_eq!(first.operation_id, duplicate.operation_id);
@@ -897,7 +932,7 @@ mod tests {
     async fn failed_readiness_rolls_back_owned_state() {
         let backend = Arc::new(FakeBackend::default());
         backend.fail_readiness.store(true, Ordering::SeqCst);
-        let engine = Engine::new(Arc::clone(&backend));
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
         engine.start_stack().await.expect("start accepted");
         let mut receiver = engine.subscribe();
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -915,7 +950,7 @@ mod tests {
     async fn stop_cancels_an_in_progress_start_then_cleans() {
         let backend = Arc::new(FakeBackend::default());
         backend.slow_hiddify.store(true, Ordering::SeqCst);
-        let engine = Engine::new(Arc::clone(&backend));
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
         engine.start_stack().await.expect("start accepted");
         tokio::time::sleep(Duration::from_millis(20)).await;
         engine.stop_stack().await.expect("stop accepted");
@@ -931,7 +966,7 @@ mod tests {
         let backend = Arc::new(FakeBackend::default());
         backend.process.store(true, Ordering::SeqCst);
         backend.tun.store(true, Ordering::SeqCst);
-        let engine = Engine::new(Arc::clone(&backend));
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
         engine
             .reconcile_startup()
             .await
@@ -954,6 +989,14 @@ mod tests {
     }
 
     #[test]
+    fn engine_can_be_constructed_outside_an_entered_runtime() {
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+        let engine = Engine::new(Arc::new(FakeBackend::default()), runtime.handle());
+
+        assert_eq!(engine.snapshot().phase, StackPhase::Uninitialized);
+    }
+
+    #[test]
     fn missing_hiddify_and_mihomo_ask_the_ui_to_install() {
         let hiddify = CoreError::HiddifyNotFound.to_app_error(Uuid::nil());
         assert_eq!(hiddify.code, ErrorCode::HiddifyNotFound);
@@ -967,7 +1010,7 @@ mod tests {
     async fn missing_hiddify_marks_the_stack_error() {
         let backend = Arc::new(FakeBackend::default());
         backend.hiddify_missing.store(true, Ordering::SeqCst);
-        let engine = Engine::new(Arc::clone(&backend));
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
         engine.start_stack().await.expect("start accepted");
         let mut receiver = engine.subscribe();
         tokio::time::timeout(Duration::from_secs(2), async {

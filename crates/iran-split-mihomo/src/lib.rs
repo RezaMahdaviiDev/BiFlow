@@ -81,6 +81,10 @@ struct MihomoConfigDocument {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this serializable DTO mirrors Mihomo's TUN configuration schema"
+)]
 struct TunConfig {
     enable: bool,
     stack: String,
@@ -108,6 +112,10 @@ struct DnsConfig {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "this serializable DTO mirrors Mihomo's sniffer configuration schema"
+)]
 struct SnifferConfig {
     enable: bool,
     force_dns_mapping: bool,
@@ -148,6 +156,16 @@ struct RuleProvider {
     path: String,
 }
 
+/// Generates a validated Mihomo YAML document and its SHA-256 digest.
+///
+/// # Errors
+///
+/// Returns [`MihomoError::InvalidConfig`] when application or custom-rule
+/// settings are invalid, or [`MihomoError::Yaml`] when serialization fails.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the function assembles one declarative Mihomo configuration document"
+)]
 pub fn generate_config(
     app: &AppConfig,
     platform: Platform,
@@ -317,6 +335,12 @@ fn validate_custom_rules(document: &DirectRulesDocument) -> Result<(), MihomoErr
     Ok(())
 }
 
+/// Asks a Mihomo binary to validate a generated configuration file.
+///
+/// # Errors
+///
+/// Returns an error when the validation process cannot run, times out, or
+/// rejects the configuration.
 pub async fn validate_with_binary(
     binary: &Path,
     config_path: &Path,
@@ -351,6 +375,12 @@ pub struct ControllerClient {
 }
 
 impl ControllerClient {
+    /// Creates a client restricted to a loopback Mihomo controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `host` is not a loopback IP address, the secret is
+    /// empty, or the HTTP client cannot be constructed.
     pub fn new(host: &str, port: u16, secret: impl Into<String>) -> Result<Self, MihomoError> {
         let address: IpAddr = host.parse().map_err(|_| {
             MihomoError::InvalidConfig("controller host must be an IP address".into())
@@ -386,6 +416,11 @@ impl ControllerClient {
             .bearer_auth(&self.secret)
     }
 
+    /// Reads the running Mihomo version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the controller request or response decoding fails.
     pub async fn version(&self) -> Result<VersionResponse, MihomoError> {
         Ok(self
             .get("/version")
@@ -396,6 +431,11 @@ impl ControllerClient {
             .await?)
     }
 
+    /// Reads the active Mihomo configuration from the controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the controller request or response decoding fails.
     pub async fn configs(&self) -> Result<Value, MihomoError> {
         Ok(self
             .get("/configs")
@@ -406,6 +446,12 @@ impl ControllerClient {
             .await?)
     }
 
+    /// Summarizes the readiness and rule count of configured rule providers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the controller request fails, its response cannot
+    /// be decoded, or it omits the provider map.
     pub async fn provider_summary(&self) -> Result<ProviderStatus, MihomoError> {
         let value = self
             .get("/providers/rules")
@@ -441,6 +487,12 @@ impl ControllerClient {
         })
     }
 
+    /// Replaces the active Mihomo configuration without restarting the process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the controller request fails or does not return
+    /// HTTP 204 No Content.
     pub async fn hot_reload(&self, config_path: &Path) -> Result<(), MihomoError> {
         let response = self
             .client
@@ -455,6 +507,12 @@ impl ControllerClient {
         Ok(())
     }
 
+    /// Waits until Mihomo and every rule provider are ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MihomoError::Cancelled`] when cancelled or
+    /// [`MihomoError::ReadinessTimeout`] after the supplied timeout.
     pub async fn wait_until_ready(
         &self,
         timeout: Duration,
@@ -480,6 +538,8 @@ impl ControllerClient {
         }
     }
 
+    /// Opens a controller WebSocket and returns its asynchronous log receiver.
+    #[must_use]
     pub fn stream_logs(&self, level: &str) -> mpsc::Receiver<Result<MihomoLog, MihomoError>> {
         let (sender, receiver) = mpsc::channel(128);
         let url = format!(
@@ -560,6 +620,12 @@ pub struct ExitIpResponse {
     pub ip: String,
 }
 
+/// Resolves the public egress IP through the configured Hiddify SOCKS proxy.
+///
+/// # Errors
+///
+/// Returns an error when the proxy/client cannot be configured, the request
+/// fails, or the service returns an invalid IP address.
 pub async fn probe_hiddify_egress(
     host: &str,
     port: u16,

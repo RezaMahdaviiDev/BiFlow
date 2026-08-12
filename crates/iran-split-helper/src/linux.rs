@@ -10,6 +10,12 @@ use tracing::{info, warn};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Runs the Linux helper service and accepts authenticated local IPC clients.
+///
+/// # Errors
+///
+/// Returns an error when configuration, socket setup, or client acceptance
+/// fails.
 pub async fn run_linux(config_path: &Path) -> Result<(), HelperServiceError> {
     let settings = HelperSettings::load(config_path)?;
     let socket_path = settings.socket_path.clone();

@@ -45,6 +45,12 @@ pub enum DirectTarget {
 }
 
 impl DirectTarget {
+    /// Parses an exact domain or IP address into a direct-routing target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError::InvalidRule`] when the input is not a valid IP
+    /// address or normalized domain.
     pub fn parse(input: &str) -> Result<Self, RuleError> {
         let input = input.trim();
         if let Ok(address) = input.parse::<IpAddr>() {
@@ -62,6 +68,12 @@ impl DirectTarget {
     }
 }
 
+/// Normalizes and validates an exact domain name for direct routing.
+///
+/// # Errors
+///
+/// Returns [`RuleError::InvalidRule`] for URLs, paths, wildcards, user info,
+/// invalid IDNA, or malformed DNS labels.
 pub fn normalize_domain(input: &str) -> Result<String, RuleError> {
     let candidate = input.trim().trim_end_matches('.').to_lowercase();
     if candidate.is_empty()
@@ -209,6 +221,11 @@ impl std::fmt::Debug for RuleManager {
 }
 
 impl RuleManager {
+    /// Loads the direct-rule document at `path`, or starts empty when absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError`] when the document cannot be read or decoded.
     pub fn load(path: impl Into<PathBuf>, resolver: Arc<dyn Resolver>) -> Result<Self, RuleError> {
         let path = path.into();
         let document = if path.exists() {
@@ -227,6 +244,12 @@ impl RuleManager {
         self.document.lock().await.clone()
     }
 
+    /// Adds an exact domain or IP rule at the expected document revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError`] for invalid input, DNS resolution failure, a
+    /// revision conflict, or an atomic persistence failure.
     pub async fn add(
         &self,
         input: &str,
@@ -257,6 +280,12 @@ impl RuleManager {
         Ok(document.clone())
     }
 
+    /// Removes an exact domain or IP rule at the expected document revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError`] for invalid input, a revision conflict, or an
+    /// atomic persistence failure.
     pub async fn remove(
         &self,
         input: &str,
@@ -274,6 +303,11 @@ impl RuleManager {
         Ok(document.clone())
     }
 
+    /// Refreshes resolved IP addresses for every stored domain rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError`] when DNS resolution or atomic persistence fails.
     pub async fn refresh(&self) -> Result<DirectRulesDocument, RuleError> {
         let domains = {
             let document = self.document.lock().await;
@@ -386,6 +420,12 @@ impl RuleSet {
         set
     }
 
+    /// Chooses the outbound route for an exact domain or IP target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError::InvalidRule`] when `target` is neither a valid IP
+    /// address nor a normalized domain.
     pub fn decide(&self, target: &str) -> Result<RouteDecision, RuleError> {
         if let Ok(address) = target.parse::<IpAddr>() {
             return Ok(self.decide_ip(address));

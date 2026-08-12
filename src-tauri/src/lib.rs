@@ -154,6 +154,10 @@ async fn bootstrap_app(app: AppHandle) -> Result<BootstrapResult, String> {
     })
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle command arguments by value"
+)]
 #[tauri::command]
 fn get_stack_snapshot(app: AppHandle) -> Result<StackSnapshot, String> {
     Ok(services(&app)?.engine.snapshot())
@@ -202,6 +206,10 @@ async fn cancel_operation(app: AppHandle, operation_id: Uuid) -> Result<bool, St
     Ok(services(&app)?.engine.cancel_operation(operation_id).await)
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle command arguments by value"
+)]
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<AppConfig, String> {
     Ok(services(&app)?
@@ -211,6 +219,10 @@ fn get_settings(app: AppHandle) -> Result<AppConfig, String> {
         .redacted())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle command arguments by value"
+)]
 #[tauri::command]
 fn validate_settings(mut draft: AppConfig, app: AppHandle) -> Result<Vec<ValidationIssue>, String> {
     let current = services(&app)?
@@ -282,6 +294,10 @@ async fn refresh_direct_rules(app: AppHandle) -> Result<DirectRulesDocument, Str
         .map_err(|error| error.to_string())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle command arguments by value"
+)]
 #[tauri::command]
 fn get_cloud_rules_status(app: AppHandle) -> Result<CloudRulesStatus, String> {
     services(&app)?
@@ -299,6 +315,10 @@ async fn sync_cloud_rules(app: AppHandle) -> Result<CloudRulesStatus, String> {
         .map_err(|error| error.to_string())
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle command arguments by value"
+)]
 #[tauri::command]
 fn list_dependencies(app: AppHandle) -> Result<Vec<deps::DependencyStatus>, String> {
     Ok(deps::dependency_status(&services(&app)?.paths.data))
@@ -314,12 +334,20 @@ async fn install_dependency(id: String, app: AppHandle) -> Result<deps::InstallR
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command strings into owned values"
+)]
 #[tauri::command]
 fn get_install_guide(id: String) -> Result<deps::InstallGuide, String> {
     let parsed = deps::DependencyId::parse(&id).map_err(|error| error.to_string())?;
     Ok(deps::install_guide(parsed))
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri deserializes command strings into owned values"
+)]
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     deps::open_allowlisted_url(&url).map_err(|error| error.to_string())
@@ -462,6 +490,10 @@ async fn query_logs(
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects AppHandle command arguments by value"
+)]
 #[tauri::command]
 fn export_support_bundle(app: AppHandle) -> Result<ExportResult, String> {
     let services = services(&app)?;
@@ -595,7 +627,8 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     let _ = config;
     #[cfg(target_os = "windows")]
     let backend = Arc::new(NativeBackend::default());
-    let engine = Engine::new(Arc::clone(&backend));
+    let runtime = tauri::async_runtime::handle();
+    let engine = Engine::new(Arc::clone(&backend), runtime.inner());
     let rules = RuleManager::load(
         paths.data.join("direct-rules.json"),
         Arc::new(DohResolver::default()),
@@ -690,16 +723,20 @@ fn show_main<R: Runtime>(app: &AppHandle<R>) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Starts the `BiFlow` Tauri application and blocks on its event loop.
+///
+/// # Panics
+///
+/// Panics when Tauri cannot initialize or run the application event loop.
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            show_main(app)
+            show_main(app);
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(|app| {
-            let services =
-                create_services(app.handle()).map_err(|error| std::io::Error::other(error))?;
+            let services = create_services(app.handle()).map_err(std::io::Error::other)?;
             let mut snapshots = services.engine.subscribe();
             let engine = Arc::clone(&services.engine);
             let handle = app.handle().clone();

@@ -62,6 +62,12 @@ impl HelperClient {
         }
     }
 
+    /// Sends one validated command to the privileged helper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation, connection, protocol negotiation, or
+    /// the helper operation fails.
     pub async fn request(&self, command: HelperCommand) -> Result<HelperReply, LinuxBackendError> {
         command.validate()?;
         let mut stream = tokio::time::timeout(IPC_TIMEOUT, UnixStream::connect(&self.socket_path))
@@ -152,6 +158,12 @@ impl LinuxBackend {
         *self.config.write().await = config;
     }
 
+    /// Reads at most `maximum` recent helper service log entries.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the helper exchange fails or returns an unexpected
+    /// reply variant.
     pub async fn service_logs(
         &self,
         maximum: u16,
@@ -283,7 +295,7 @@ impl PlatformBackend for LinuxBackend {
             .user_data_dir
             .join("runtime/generations")
             .join(generation_id.to_string());
-        fs::create_dir_all(&staging_root).map_err(platform_error)?;
+        fs::create_dir_all(&staging_root).map_err(|error| platform_error(&error))?;
         let runtime_root = self
             .paths
             .system_runtime_dir
@@ -298,7 +310,7 @@ impl PlatformBackend for LinuxBackend {
         };
         let rules_path = self.paths.user_data_dir.join("direct-rules.json");
         let custom: DirectRulesDocument = if rules_path.exists() {
-            serde_json::from_slice(&fs::read(rules_path).map_err(platform_error)?)
+            serde_json::from_slice(&fs::read(rules_path).map_err(|error| platform_error(&error))?)
                 .map_err(|error| CoreError::ConfigInvalid(error.to_string()))?
         } else {
             DirectRulesDocument::default()
@@ -475,7 +487,7 @@ impl PlatformBackend for LinuxBackend {
     }
 }
 
-fn platform_error(error: std::io::Error) -> CoreError {
+fn platform_error(error: &std::io::Error) -> CoreError {
     CoreError::Platform(error.to_string())
 }
 
@@ -486,13 +498,13 @@ fn copy_rule_file(
     name: &str,
 ) -> Result<(), CoreError> {
     let source = iran_split_rules::resolve_provider_path(cache, bundled, name);
-    let metadata = fs::symlink_metadata(&source).map_err(platform_error)?;
+    let metadata = fs::symlink_metadata(&source).map_err(|error| platform_error(&error))?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         return Err(CoreError::ConfigInvalid(format!(
             "bootstrap rule {name} is not a regular file"
         )));
     }
-    let bytes = fs::read(source).map_err(platform_error)?;
+    let bytes = fs::read(source).map_err(|error| platform_error(&error))?;
     write_atomic(&staging.join(name), &bytes)
 }
 
@@ -539,13 +551,18 @@ fn write_atomic(path: &Path, content: &[u8]) -> Result<(), CoreError> {
     let parent = path
         .parent()
         .ok_or_else(|| CoreError::ConfigInvalid("runtime file has no parent".into()))?;
-    fs::create_dir_all(parent).map_err(platform_error)?;
-    let mut temporary = NamedTempFile::new_in(parent).map_err(platform_error)?;
-    temporary.write_all(content).map_err(platform_error)?;
-    temporary.as_file().sync_all().map_err(platform_error)?;
+    fs::create_dir_all(parent).map_err(|error| platform_error(&error))?;
+    let mut temporary = NamedTempFile::new_in(parent).map_err(|error| platform_error(&error))?;
+    temporary
+        .write_all(content)
+        .map_err(|error| platform_error(&error))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| platform_error(&error))?;
     temporary
         .persist(path)
-        .map_err(|error| platform_error(error.error))?;
+        .map_err(|error| platform_error(&error.error))?;
     Ok(())
 }
 

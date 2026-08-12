@@ -12,10 +12,12 @@ Primary flows (install, connect, cloud rules, route test) can regress independen
 
 - **Unit tests:** Vitest + Testing Library for UI/store/mock; `cargo test --workspace` for core, rules, and installers.
 - **E2E tests:** Playwright against `pnpm dev` (mock transport) covering install → connect, cloud rule sync, custom rules, and DIRECT/VPN diagnostics.
+- **Interactive development:** `./dev.sh` compiles and launches native Tauri by default so manual demonstrations exercise the React-to-Rust bridge. Browser/mock development is explicit through `./dev.sh web`; `desktop` is retained as a native alias.
 - Mock module state is reset through `window.__BIFLOW_RESET_MOCK` so e2e tests stay isolated without restarting Vite.
 - E2E is a separate CI job from `pnpm check` because it needs a browser.
 
 ## Consequences
 
 - Fast feedback on logic without a signed helper.
+- Running `./dev.sh` proves native startup rather than silently demonstrating the mock backend.
 - E2E does not prove TUN/helper behavior; those remain release-gate VM tests.

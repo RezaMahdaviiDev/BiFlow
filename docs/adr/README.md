@@ -11,3 +11,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0005](./0005-cloud-rule-fail-safe.md)          | Fail-safe Iran rule updates        | Accepted |
 | [0006](./0006-linux-windows-packages.md)        | Linux and Windows release packages | Accepted |
 | [0007](./0007-done-gate-builds.md)              | Build-and-test done gate           | Accepted |
+| [0008](./0008-tauri-async-runtime.md)           | Explicit Tauri async runtime       | Accepted |

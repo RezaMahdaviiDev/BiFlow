@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.5"
+version = "1.0.7"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.88"
@@ -52,6 +52,7 @@ zip = { version = "3.0.0", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+warnings = "deny"
 
 [workspace.lints.clippy]
 all = "warn"

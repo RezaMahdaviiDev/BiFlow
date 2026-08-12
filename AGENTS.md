@@ -4,16 +4,18 @@ Follow these rules in every change. If a rule is missing or a new failure mode a
 
 ## Done gate (hard rule)
 
-A change is **not done** until both the frontend and Rust app build and test with **zero failures**. Do not report the task complete, skip the gate, or leave a red command.
+A change is **not done** until the parts you touched build and test with **zero failures and zero warnings from project code**. Do not report the task complete, skip the gate, or leave a warning or red command.
 
-After every change, run:
+After every change, run only what that change affects:
 
-1. Frontend: `pnpm check` and `pnpm build`
-2. Rust: `cargo test --workspace` and `cargo build --workspace`
+1. Frontend (TypeScript, UI, scripts, or package manifests): `pnpm check` and `pnpm build`
+2. Rust (`.rs`, crate `Cargo.toml`, or `Cargo.lock`): `cargo test -p <crate>` and `cargo clippy -p <crate> --all-targets -- -D warnings` for each **changed workspace crate**. Cargo already rebuilds only dirty units. Do **not** `cargo clean`. Do **not** run `cargo test --workspace` and `cargo build --workspace` after every task.
+
+If many crates or workspace dependencies changed, use one incremental `cargo test --workspace` plus `cargo clippy --workspace --all-targets -- -D warnings`. Do not follow them with a second full `cargo build --workspace`.
 
 If Node, pnpm, or Cargo is missing, install it first (see `./build.sh`) and re-run. A missing toolchain is not a pass.
 
-If any command fails, fix it in the same change and re-run the full gate. Do not treat Clippy style warnings as a substitute for a green `cargo build`.
+If a required command fails or emits a warning from project code, fix it in the same change and re-run that command. Do not hide warnings with a broad `allow`; a narrow suppression is acceptable only when the condition is intentional and documented at the suppression site. Hundreds of `Compiling` lines mean a cold `target/` cache, not a required full rebuild.
 
 ## Testing
 
@@ -53,14 +55,21 @@ If any command fails, fix it in the same change and re-run the full gate. Do not
 - The Zustand store is a process singleton. App tests that change `page` must reset store state in `beforeEach`, or the next test stays on Settings and never sees the dashboard heading.
 - `getByRole(..., { name: "Install" })` substring-matches **Installing…**. Use `{ name: /^Install$/ }` in Vitest and `{ exact: true }` in Playwright.
 - `scripts/sync-version.mjs` must only sync manifests when it is the process entry point. Importing `readAppVersion` from tests or `build-plan.mjs` must not rewrite `package.json`.
-- After installing rustup, the same shell must prepend `$HOME/.cargo/bin` (or `source "$HOME/.cargo/env"`) or `cargo` is still missing. `./build.sh` does this before every toolchain check.
+- After installing rustup, the same shell must prepend `$HOME/.cargo/bin` (or `source "$HOME/.cargo/env"`) or `cargo` is still missing. Both `./build.sh` and `./dev.sh` do this before every toolchain check, including clean/non-interactive shells.
 - Hiddify/Mihomo Install buttons must use PATH and `~/.local/bin`, not only `~/.local/share/biflow`. Mock UI reads the same locations at Vite startup; Playwright still forces missing deps via `sessionStorage` so e2e can test Install.
 - `zip` 2.6.1 is yanked on crates.io; pin `3.0.0` (2.4.2 also exists) or `cargo build` cannot resolve the crate.
 - Edition 2021 + rustc 1.88 does not allow `if cond && let Some(...)` let-chains. Split into nested `if`.
 - `u32::from([100, 64, 0, 0])` does not compile; use `u32::from_be_bytes([100, 64, 0, 0])` for CGNAT `100.64.0.0/10`.
-- Workspace Clippy is `pedantic`. The done gate is `cargo test` + `cargo build`, not `clippy -D warnings` (that fails on style nits like `must_use_candidate`).
+- Workspace Clippy is `pedantic`, and warnings are errors. The Rust gate includes incremental `cargo clippy -p <changed crate> --all-targets -- -D warnings`; fix every diagnostic before completion.
 - `iran-split-cli` uses `toml::from_str` in `main`; add `toml.workspace = true` or `cargo test --workspace` fails compiling the CLI binary tests.
 - Tauri `bundle.resources` globs must match at least one file. Keep `resources/licenses/NOTICE.txt` so `../resources/licenses/*` does not fail the desktop build script.
 - After `execute(..., request.payload)`, do not call `request.reply(...)`; `payload` was moved. Copy `request_id` / `protocol_version` first, then build a new `Envelope`.
 - `iran-split-mihomo` tests use `chrono::Utc::now()`; add `chrono` under `[dev-dependencies]` or `cargo test --workspace` fails.
 - Latest `cargo-xwin` (0.20+) needs rustc 1.89. Pin `0.19.2` in `build.sh` so Windows cross-compile install works on the repo toolchain 1.88.
+- Run the Tauri CLI from the workspace root, which owns `src-tauri`. Do not delegate the root `tauri` script through `pnpm --filter @iran-split/desktop`; pnpm changes into `apps/desktop`, and Tauri then cannot discover `src-tauri/tauri.conf.json`. Tauri shell hooks also run from the workspace root, so `beforeDevCommand` / `beforeBuildCommand` use `apps/desktop`; `frontendDist` remains config-relative as `../apps/desktop/dist`.
+- `./dev.sh` and `./dev.sh dev` must compile and launch the native Tauri application so the UI uses Rust commands and events. Keep browser/mock development behind the explicit `./dev.sh web` command; `desktop` remains a native alias.
+- Build requirement checks must not run `apt-get update` or request `sudo` when all packages are already installed. Let `apt_install_missing` update package indexes only after it finds a missing package.
+- Do not `cargo clean` or re-run `cargo test --workspace` plus `cargo build --workspace` after every task. That recompiles hundreds of dependency crates. Use `cargo test -p <changed crate>` so Cargo rebuilds only dirty units.
+- A Linux Tauri CLI only accepts Linux values for `--bundles`. For a Windows cross-build, pass `--runner cargo-xwin --target x86_64-pc-windows-msvc` without `--bundles nsis`; Tauri selects NSIS from the target and uses host `makensis`.
+- Snapshot the root version at build start, select exact versioned source artifacts, and reject a mid-build version change. Never copy the first wildcard match or label a package with a version different from its embedded metadata.
+- Tauri's synchronous `setup` callback is not entered into a Tokio reactor. Do not call `tokio::spawn` implicitly from constructors used there; pass `tauri::async_runtime::handle().inner()` into the Rust engine and spawn through that explicit handle. Keep a regression test that constructs the engine outside an entered runtime.

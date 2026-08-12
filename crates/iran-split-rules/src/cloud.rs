@@ -226,6 +226,11 @@ impl CloudRuleStore {
         resolve_provider_path(&self.cache_dir, &self.bundled_dir, name)
     }
 
+    /// Returns status from a complete cache, falling back to bundled rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CloudSyncError`] when cached metadata cannot be read or decoded.
     pub fn status(&self) -> Result<CloudRulesStatus, CloudSyncError> {
         let meta = self.read_meta()?;
         let cache_complete = CATALOG
@@ -239,6 +244,13 @@ impl CloudRuleStore {
         Ok(self.bundled_status())
     }
 
+    /// Downloads, validates, and atomically publishes every cloud rule set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CloudSyncError`] for download, encoding, validation, metadata,
+    /// or atomic persistence failures. Existing cached rules remain available
+    /// when a replacement cannot be published.
     pub async fn sync(&self) -> Result<CloudRulesStatus, CloudSyncError> {
         fs::create_dir_all(&self.cache_dir)?;
         let mut sets = Vec::with_capacity(CATALOG.len());
@@ -387,6 +399,7 @@ fn write_atomic(path: &Path, content: &[u8]) -> Result<(), CloudSyncError> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::fmt::Write as _;
 
     struct MapFetcher {
         responses: HashMap<String, Result<Vec<u8>, String>>,
@@ -405,15 +418,19 @@ mod tests {
 
     fn domain_payload(count: usize) -> Vec<u8> {
         (0..count)
-            .map(|index| format!("+.example{index}.ir\n"))
-            .collect::<String>()
+            .fold(String::new(), |mut payload, index| {
+                writeln!(payload, "+.example{index}.ir").expect("write to string");
+                payload
+            })
             .into_bytes()
     }
 
     fn cidr_payload(count: usize) -> Vec<u8> {
         (0..count)
-            .map(|index| format!("203.0.{index}.0/24\n"))
-            .collect::<String>()
+            .fold(String::new(), |mut payload, index| {
+                writeln!(payload, "203.0.{index}.0/24").expect("write to string");
+                payload
+            })
             .into_bytes()
     }
 

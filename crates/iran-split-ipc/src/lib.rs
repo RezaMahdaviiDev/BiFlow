@@ -64,6 +64,12 @@ pub enum HelperCommand {
 }
 
 impl HelperCommand {
+    /// Validates bounded command arguments before helper execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::InvalidMessage`] for an empty or oversized
+    /// protocol list, malformed generation hash, or out-of-range log request.
     pub fn validate(&self) -> Result<(), ProtocolError> {
         match self {
             Self::Hello {
@@ -201,6 +207,12 @@ pub enum ProtocolError {
     InvalidMessage(String),
 }
 
+/// Writes one length-prefixed JSON message to an asynchronous stream.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError`] when serialization fails, the encoded message is
+/// oversized, or the stream cannot be written or flushed.
 pub async fn write_frame<W, T>(writer: &mut W, message: &T) -> Result<(), ProtocolError>
 where
     W: AsyncWrite + Unpin,
@@ -223,6 +235,12 @@ where
     Ok(())
 }
 
+/// Reads one bounded length-prefixed JSON message from an asynchronous stream.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError`] for I/O failure, a zero-length or oversized frame,
+/// or malformed JSON.
 pub async fn read_frame<R, T>(reader: &mut R) -> Result<T, ProtocolError>
 where
     R: AsyncRead + Unpin,
@@ -247,6 +265,12 @@ where
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// Verifies that an envelope uses this crate's protocol version.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::VersionMismatch`] when the peer uses another
+/// protocol version.
 pub fn validate_envelope<T>(message: &Envelope<T>) -> Result<(), ProtocolError> {
     if message.protocol_version != PROTOCOL_VERSION {
         return Err(ProtocolError::VersionMismatch {
@@ -277,8 +301,9 @@ mod tests {
     #[tokio::test]
     async fn rejects_oversized_length_before_allocating() {
         let (mut client, mut server) = tokio::io::duplex(16);
+        let oversized = u32::try_from(MAX_MESSAGE_BYTES).expect("message limit fits u32") + 1;
         client
-            .write_all(&((MAX_MESSAGE_BYTES as u32) + 1).to_be_bytes())
+            .write_all(&oversized.to_be_bytes())
             .await
             .expect("write length");
         let error = read_frame::<_, Envelope<HelperCommand>>(&mut server)
