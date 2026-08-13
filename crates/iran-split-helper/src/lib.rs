@@ -277,6 +277,14 @@ impl Supervisor {
             .arg(&config_path)
             .current_dir(&generation_root)
             .env_clear()
+            .env(
+                "PATH",
+                if cfg!(windows) {
+                    r"C:\Windows\System32;C:\Windows"
+                } else {
+                    "/usr/sbin:/usr/bin:/sbin:/bin"
+                },
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

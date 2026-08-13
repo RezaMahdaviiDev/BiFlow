@@ -30,8 +30,8 @@ pub enum MihomoError {
     ValidationProcess(std::io::Error),
     #[error("Mihomo rejected the generated configuration: {0}")]
     ValidationRejected(String),
-    #[error("Mihomo readiness check timed out")]
-    ReadinessTimeout,
+    #[error("Mihomo readiness check timed out: {0}")]
+    ReadinessTimeout(String),
     #[error("operation was cancelled")]
     Cancelled,
     #[error("log WebSocket failed: {0}")]
@@ -169,7 +169,7 @@ struct RuleProvider {
 pub fn generate_config(
     app: &AppConfig,
     platform: Platform,
-    paths: &RuntimePaths,
+    _paths: &RuntimePaths,
     custom_rules: &DirectRulesDocument,
 ) -> Result<GeneratedConfig, MihomoError> {
     let issues = app.validate();
@@ -188,14 +188,7 @@ pub fn generate_config(
         ));
     }
 
-    let hiddify_processes = match platform {
-        Platform::Linux => ["hiddify", "Hiddify", "hiddify-app", "tailscaled"].as_slice(),
-        Platform::Windows => ["Hiddify.exe", "HiddifyNext.exe"].as_slice(),
-    };
-    let mut rules = hiddify_processes
-        .iter()
-        .map(|name| format!("PROCESS-NAME,{name},DIRECT"))
-        .collect::<Vec<_>>();
+    let mut rules = process_bypass_rules(platform);
     rules.extend([
         "DOMAIN-SUFFIX,localhost,DIRECT".into(),
         "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve".into(),
@@ -286,7 +279,7 @@ pub fn generate_config(
             kind: "select".into(),
             proxies: vec!["Hiddify".into()],
         }],
-        rule_providers: providers(paths),
+        rule_providers: providers(),
         rules,
     };
     validate_custom_rules(custom_rules)?;
@@ -295,17 +288,39 @@ pub fn generate_config(
     Ok(GeneratedConfig { yaml, sha256 })
 }
 
-fn providers(paths: &RuntimePaths) -> BTreeMap<String, RuleProvider> {
+fn process_bypass_rules(platform: Platform) -> Vec<String> {
+    match platform {
+        Platform::Linux => vec![
+            "PROCESS-NAME,hiddify,DIRECT".into(),
+            "PROCESS-NAME-WILDCARD,*Hiddify*,DIRECT".into(),
+            "PROCESS-NAME,tailscaled,DIRECT".into(),
+            "PROCESS-NAME,iran-split-desktop,DIRECT".into(),
+            "PROCESS-NAME,iran-split-desk,DIRECT".into(),
+            "PROCESS-NAME,BiFlow,DIRECT".into(),
+        ],
+        Platform::Windows => vec![
+            "PROCESS-NAME,hiddify.exe,DIRECT".into(),
+            "PROCESS-NAME,Hiddify.exe,DIRECT".into(),
+            "PROCESS-NAME,HiddifyNext.exe,DIRECT".into(),
+            "PROCESS-NAME-WILDCARD,*Hiddify*,DIRECT".into(),
+            "PROCESS-NAME,tailscaled.exe,DIRECT".into(),
+            "PROCESS-NAME,iran-split-desktop.exe,DIRECT".into(),
+            "PROCESS-NAME,BiFlow.exe,DIRECT".into(),
+        ],
+    }
+}
+
+fn providers() -> BTreeMap<String, RuleProvider> {
     [
-        ("private-networks", "ipcidr", &paths.private_networks),
-        ("iran-domains", "domain", &paths.iran_domains),
-        ("iran-networks", "ipcidr", &paths.iran_networks),
+        ("private-networks", "ipcidr", "private.txt"),
+        ("iran-domains", "domain", "iran-domains.txt"),
+        ("iran-networks", "ipcidr", "iran-networks.txt"),
         (
             "custom-direct-domains",
             "domain",
-            &paths.custom_direct_domains,
+            "custom-direct-domains.txt",
         ),
-        ("custom-direct-ips", "ipcidr", &paths.custom_direct_ips),
+        ("custom-direct-ips", "ipcidr", "custom-direct-ips.txt"),
     ]
     .into_iter()
     .map(|(name, behavior, path)| {
@@ -315,11 +330,48 @@ fn providers(paths: &RuntimePaths) -> BTreeMap<String, RuleProvider> {
                 kind: "file".into(),
                 behavior: behavior.into(),
                 format: "text".into(),
-                path: path.to_string_lossy().into_owned(),
+                path: path.into(),
             },
         )
     })
     .collect()
+}
+
+const OPTIONAL_RULE_PROVIDERS: [&str; 2] = ["custom-direct-domains", "custom-direct-ips"];
+
+fn summarize_rule_providers(value: &Value) -> Result<ProviderStatus, MihomoError> {
+    let providers = value
+        .get("providers")
+        .and_then(Value::as_object)
+        .ok_or_else(|| MihomoError::InvalidConfig("controller omitted providers map".into()))?;
+    let total = u32::try_from(providers.len()).unwrap_or(u32::MAX);
+    let ready = providers
+        .iter()
+        .filter(|(name, provider)| rule_provider_is_ready(name, provider))
+        .count();
+    let rules_loaded = providers
+        .values()
+        .filter_map(|provider| provider.get("ruleCount").and_then(Value::as_u64))
+        .sum();
+    Ok(ProviderStatus {
+        ready: u32::try_from(ready).unwrap_or(u32::MAX),
+        total,
+        rules_loaded,
+    })
+}
+
+fn rule_provider_is_ready(name: &str, provider: &Value) -> bool {
+    if !provider.get("error").is_none_or(Value::is_null) {
+        return false;
+    }
+    if OPTIONAL_RULE_PROVIDERS.contains(&name) {
+        return true;
+    }
+    provider
+        .get("ruleCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        > 0
 }
 
 fn validate_custom_rules(document: &DirectRulesDocument) -> Result<(), MihomoError> {
@@ -346,23 +398,38 @@ pub async fn validate_with_binary(
     config_path: &Path,
     timeout: Duration,
 ) -> Result<(), MihomoError> {
+    let workdir = config_path.parent().ok_or_else(|| {
+        MihomoError::InvalidConfig("configuration path must include a parent directory".into())
+    })?;
     let output = tokio::time::timeout(
         timeout,
         Command::new(binary)
             .arg("-t")
+            .arg("-d")
+            .arg(workdir)
             .arg("-f")
             .arg(config_path)
             .kill_on_drop(true)
             .output(),
     )
     .await
-    .map_err(|_| MihomoError::ReadinessTimeout)?
+    .map_err(|_| {
+        MihomoError::ReadinessTimeout("configuration validation process timed out".into())
+    })?
     .map_err(MihomoError::ValidationProcess)?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(MihomoError::ValidationRejected(
-            stderr.chars().take(4_096).collect(),
-        ));
+        let details = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let details = details.trim();
+        let message = if details.is_empty() {
+            "Mihomo rejected the configuration without details".into()
+        } else {
+            details.chars().take(4_096).collect()
+        };
+        return Err(MihomoError::ValidationRejected(message));
     }
     Ok(())
 }
@@ -460,31 +527,7 @@ impl ControllerClient {
             .error_for_status()?
             .json::<Value>()
             .await?;
-        let providers = value
-            .get("providers")
-            .and_then(Value::as_object)
-            .ok_or_else(|| MihomoError::InvalidConfig("controller omitted providers map".into()))?;
-        let total = u32::try_from(providers.len()).unwrap_or(u32::MAX);
-        let ready = providers
-            .values()
-            .filter(|provider| {
-                provider.get("error").is_none_or(Value::is_null)
-                    && provider
-                        .get("ruleCount")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                        > 0
-            })
-            .count();
-        let rules_loaded = providers
-            .values()
-            .filter_map(|provider| provider.get("ruleCount").and_then(Value::as_u64))
-            .sum();
-        Ok(ProviderStatus {
-            ready: u32::try_from(ready).unwrap_or(u32::MAX),
-            total,
-            rules_loaded,
-        })
+        summarize_rule_providers(&value)
     }
 
     /// Replaces the active Mihomo configuration without restarting the process.
@@ -519,17 +562,30 @@ impl ControllerClient {
         cancel: CancellationToken,
     ) -> Result<ProviderStatus, MihomoError> {
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut last_status;
         loop {
             if cancel.is_cancelled() {
                 return Err(MihomoError::Cancelled);
             }
-            if let (Ok(_), Ok(providers)) = (self.version().await, self.provider_summary().await) {
-                if providers.total > 0 && providers.ready == providers.total {
-                    return Ok(providers);
+            match (self.version().await, self.provider_summary().await) {
+                (Ok(_), Ok(providers)) => {
+                    last_status = format!(
+                        "providers {}/{} ready, {} rules loaded",
+                        providers.ready, providers.total, providers.rules_loaded
+                    );
+                    if providers.total > 0 && providers.ready == providers.total {
+                        return Ok(providers);
+                    }
+                }
+                (Err(error), _) => {
+                    last_status = format!("controller unavailable: {error}");
+                }
+                (Ok(_), Err(error)) => {
+                    last_status = format!("provider status unavailable: {error}");
                 }
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(MihomoError::ReadinessTimeout);
+                return Err(MihomoError::ReadinessTimeout(last_status));
             }
             tokio::select! {
                 () = cancel.cancelled() => return Err(MihomoError::Cancelled),
@@ -637,18 +693,25 @@ pub async fn probe_hiddify_egress(
         .connect_timeout(timeout)
         .timeout(timeout)
         .build()?;
-    let response = client
-        .get("https://api.ipify.org?format=json")
+    client
+        .get("https://www.gstatic.com/generate_204")
         .send()
         .await?
-        .error_for_status()?
-        .json::<ExitIpResponse>()
-        .await?;
-    response
-        .ip
-        .parse::<IpAddr>()
-        .map_err(|_| MihomoError::InvalidConfig("egress service returned an invalid IP".into()))?;
-    Ok(response.ip)
+        .error_for_status()?;
+    let ip_response = client
+        .get("https://api.ipify.org?format=json")
+        .send()
+        .await
+        .ok()
+        .filter(|item| item.status().is_success());
+    if let Some(ip_response) = ip_response {
+        if let Ok(payload) = ip_response.json::<ExitIpResponse>().await {
+            if payload.ip.parse::<IpAddr>().is_ok() {
+                return Ok(payload.ip);
+            }
+        }
+    }
+    Ok("unknown".into())
 }
 
 #[cfg(test)]
@@ -685,7 +748,15 @@ mod tests {
             .contains("external-controller: 127.0.0.1:19090"));
         assert!(generated.yaml.contains("secret:"));
         assert!(generated.yaml.contains("PROCESS-NAME,hiddify,DIRECT"));
+        assert!(generated
+            .yaml
+            .contains("PROCESS-NAME-WILDCARD,*Hiddify*,DIRECT"));
+        assert!(generated
+            .yaml
+            .contains("PROCESS-NAME,iran-split-desk,DIRECT"));
         assert!(generated.yaml.contains("MATCH,VPN"));
+        assert!(generated.yaml.contains("path: private.txt"));
+        assert!(!generated.yaml.contains("/runtime/"));
         assert_eq!(generated.sha256.len(), 64);
     }
 
@@ -700,11 +771,96 @@ mod tests {
         .expect("config");
         assert!(generated.yaml.contains("strict-route: true"));
         assert!(generated.yaml.contains("PROCESS-NAME,Hiddify.exe,DIRECT"));
+        assert!(generated
+            .yaml
+            .contains("PROCESS-NAME-WILDCARD,*Hiddify*,DIRECT"));
+        assert!(generated.yaml.contains("PROCESS-NAME,BiFlow.exe,DIRECT"));
     }
 
     #[test]
     fn controller_rejects_remote_binding_and_empty_secret() {
         assert!(ControllerClient::new("0.0.0.0", 9090, "secret").is_err());
         assert!(ControllerClient::new("127.0.0.1", 9090, "").is_err());
+    }
+
+    #[test]
+    fn empty_custom_providers_count_as_ready() {
+        let summary = summarize_rule_providers(&serde_json::json!({
+            "providers": {
+                "custom-direct-domains": { "ruleCount": 0 },
+                "custom-direct-ips": { "ruleCount": 0 },
+                "iran-domains": { "ruleCount": 12 },
+                "iran-networks": { "ruleCount": 4 },
+                "private-networks": { "ruleCount": 8 }
+            }
+        }))
+        .expect("summary");
+        assert_eq!(summary.ready, 5);
+        assert_eq!(summary.total, 5);
+        assert_eq!(summary.rules_loaded, 24);
+    }
+
+    #[test]
+    fn bundled_provider_without_rules_is_not_ready() {
+        let summary = summarize_rule_providers(&serde_json::json!({
+            "providers": {
+                "custom-direct-domains": { "ruleCount": 0 },
+                "iran-domains": { "ruleCount": 0 },
+                "iran-networks": { "ruleCount": 4 },
+                "private-networks": { "ruleCount": 8 }
+            }
+        }))
+        .expect("summary");
+        assert_eq!(summary.ready, 3);
+        assert_eq!(summary.total, 4);
+    }
+
+    #[test]
+    fn provider_error_is_not_ready() {
+        let summary = summarize_rule_providers(&serde_json::json!({
+            "providers": {
+                "custom-direct-domains": { "error": "read failed", "ruleCount": 0 },
+                "iran-domains": { "ruleCount": 12 }
+            }
+        }))
+        .expect("summary");
+        assert_eq!(summary.ready, 1);
+        assert_eq!(summary.total, 2);
+    }
+
+    #[tokio::test]
+    async fn validates_generated_config_with_vendored_mihomo_binary() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("workspace root");
+        let mihomo = workspace.join("vendor/mihomo/linux-x86_64/mihomo");
+        if !mihomo.is_file() {
+            eprintln!("skipping vendored Mihomo validation: {}", mihomo.display());
+            return;
+        }
+
+        let generation = tempfile::tempdir().expect("tempdir");
+        let rules = workspace.join("resources/rules");
+        for name in ["private.txt", "iran-domains.txt", "iran-networks.txt"] {
+            std::fs::copy(rules.join(name), generation.path().join(name)).expect("rule file");
+        }
+        std::fs::write(generation.path().join("custom-direct-domains.txt"), "")
+            .expect("custom domains");
+        std::fs::write(generation.path().join("custom-direct-ips.txt"), "").expect("custom ips");
+
+        let generated = generate_config(
+            &AppConfig::default(),
+            Platform::Linux,
+            &paths(),
+            &DirectRulesDocument::default(),
+        )
+        .expect("config");
+        let config_path = generation.path().join("config.yaml");
+        std::fs::write(&config_path, generated.yaml.as_bytes()).expect("config yaml");
+
+        validate_with_binary(&mihomo, &config_path, Duration::from_secs(30))
+            .await
+            .expect("mihomo should accept the generated configuration");
     }
 }

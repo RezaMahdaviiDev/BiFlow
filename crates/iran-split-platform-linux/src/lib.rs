@@ -197,6 +197,7 @@ pub struct LinuxBackend {
     paths: LinuxPaths,
     prepared: Mutex<Option<PreparedGeneration>>,
     launched_hiddify: Mutex<Option<Child>>,
+    hiddify_exit_ip: Mutex<Option<String>>,
 }
 
 impl LinuxBackend {
@@ -208,6 +209,7 @@ impl LinuxBackend {
             paths,
             prepared: Mutex::new(None),
             launched_hiddify: Mutex::new(None),
+            hiddify_exit_ip: Mutex::new(None),
         }
     }
 
@@ -433,6 +435,66 @@ impl LinuxBackend {
             .clone()
             .ok_or_else(|| CoreError::ConfigInvalid("runtime has not been prepared".into()))
     }
+
+    async fn probe_hiddify_until_ready(
+        &self,
+        config: &AppConfig,
+        cancel: CancellationToken,
+    ) -> Result<(), CoreError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+        let mut last_cause;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(CoreError::Cancelled);
+            }
+            match probe_hiddify_egress(
+                &config.hiddify.host,
+                config.hiddify.port,
+                Duration::from_secs(5),
+            )
+            .await
+            {
+                Ok(exit_ip) => {
+                    info!(
+                        event = "hiddify.egress_ready",
+                        section = "hiddify_process",
+                        initiator = "linux_platform_backend",
+                        cause = "socks_probe",
+                        trace_route = "desktop_engine->linux_platform_backend->hiddify_egress",
+                        "Hiddify SOCKS egress is reachable"
+                    );
+                    *self.hiddify_exit_ip.lock().await = Some(exit_ip);
+                    return Ok(());
+                }
+                Err(error) => {
+                    last_cause = error.to_string();
+                    warn!(
+                        event = "hiddify.egress_probe_failed",
+                        section = "hiddify_process",
+                        initiator = "linux_platform_backend",
+                        cause = %error,
+                        trace_route = "desktop_engine->linux_platform_backend->hiddify_egress",
+                        "Hiddify SOCKS egress probe failed; retrying before TUN starts"
+                    );
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                error!(
+                    event = "hiddify.egress_probe_exhausted",
+                    section = "hiddify_process",
+                    initiator = "linux_platform_backend",
+                    cause = last_cause.as_str(),
+                    trace_route = "desktop_engine->linux_platform_backend->hiddify_egress",
+                    "Hiddify was listening but SOCKS egress did not become ready"
+                );
+                return Err(CoreError::HiddifyEgressUnavailable);
+            }
+            tokio::select! {
+                () = cancel.cancelled() => return Err(CoreError::Cancelled),
+                () = tokio::time::sleep(Duration::from_millis(500)) => {}
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -494,33 +556,33 @@ impl PlatformBackend for LinuxBackend {
 
     async fn ensure_hiddify(&self, cancel: CancellationToken) -> Result<(), CoreError> {
         let config = self.config.read().await.clone();
-        if Self::hiddify_listening(&config).await {
-            return Ok(());
+        if !Self::hiddify_listening(&config).await {
+            let executable = Self::discover_hiddify(&config, &self.paths.user_data_dir)
+                .ok_or(CoreError::HiddifyNotFound)?;
+            let child = Command::new(executable)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(false)
+                .spawn()
+                .map_err(|error| CoreError::Platform(error.to_string()))?;
+            *self.launched_hiddify.lock().await = Some(child);
+            let deadline = tokio::time::Instant::now()
+                + Duration::from_secs(config.hiddify.start_timeout_seconds);
+            loop {
+                if Self::hiddify_listening(&config).await {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(CoreError::HiddifyEgressUnavailable);
+                }
+                tokio::select! {
+                    () = cancel.cancelled() => return Err(CoreError::Cancelled),
+                    () = tokio::time::sleep(Duration::from_millis(250)) => {}
+                }
+            }
         }
-        let executable = Self::discover_hiddify(&config, &self.paths.user_data_dir)
-            .ok_or(CoreError::HiddifyNotFound)?;
-        let child = Command::new(executable)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(false)
-            .spawn()
-            .map_err(|error| CoreError::Platform(error.to_string()))?;
-        *self.launched_hiddify.lock().await = Some(child);
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_secs(config.hiddify.start_timeout_seconds);
-        loop {
-            if Self::hiddify_listening(&config).await {
-                return Ok(());
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(CoreError::HiddifyEgressUnavailable);
-            }
-            tokio::select! {
-                () = cancel.cancelled() => return Err(CoreError::Cancelled),
-                () = tokio::time::sleep(Duration::from_millis(250)) => {}
-            }
-        }
+        self.probe_hiddify_until_ready(&config, cancel).await
     }
 
     async fn prepare_runtime(&self) -> Result<RuntimeGeneration, CoreError> {
@@ -532,17 +594,12 @@ impl PlatformBackend for LinuxBackend {
             .join("runtime/generations")
             .join(generation_id.to_string());
         fs::create_dir_all(&staging_root).map_err(|error| platform_error(&error))?;
-        let runtime_root = self
-            .paths
-            .system_runtime_dir
-            .join("generations")
-            .join(generation_id.to_string());
         let runtime_paths = RuntimePaths {
-            private_networks: runtime_root.join("private.txt"),
-            iran_domains: runtime_root.join("iran-domains.txt"),
-            iran_networks: runtime_root.join("iran-networks.txt"),
-            custom_direct_domains: runtime_root.join("custom-direct-domains.txt"),
-            custom_direct_ips: runtime_root.join("custom-direct-ips.txt"),
+            private_networks: PathBuf::from("private.txt"),
+            iran_domains: PathBuf::from("iran-domains.txt"),
+            iran_networks: PathBuf::from("iran-networks.txt"),
+            custom_direct_domains: PathBuf::from("custom-direct-domains.txt"),
+            custom_direct_ips: PathBuf::from("custom-direct-ips.txt"),
         };
         let rules_path = self.paths.user_data_dir.join("direct-rules.json");
         let custom: DirectRulesDocument = if rules_path.exists() {
@@ -634,52 +691,57 @@ impl PlatformBackend for LinuxBackend {
             HelperReply::ProcessStatus(status) if !status.running => {}
             _ => return Err(CoreError::Platform("helper did not stop Mihomo".into())),
         }
+        Ok(())
+    }
+
+    async fn stop_user_proxy(&self) -> Result<(), CoreError> {
         let config = self.config.read().await.clone();
-        if config.hiddify.stop_with_stack {
-            if let Some(mut child) = self.launched_hiddify.lock().await.take() {
-                let trace_id = Uuid::new_v4();
-                if let Err(cause) = child.start_kill() {
-                    warn!(
-                        event = "hiddify.stop_signal_failed",
-                        section = "hiddify_process",
-                        initiator = "linux_platform_backend",
-                        cause = %cause,
-                        trace_id = %trace_id,
-                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
-                        "could not send the stop signal to the Hiddify child process"
-                    );
-                }
-                match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
-                    Ok(Ok(status)) => info!(
-                        event = "hiddify.process_stopped",
-                        section = "hiddify_process",
-                        initiator = "linux_platform_backend",
-                        cause = "stop_with_stack",
-                        trace_id = %trace_id,
-                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
-                        exit_status = %status,
-                        "Hiddify child process stopped"
-                    ),
-                    Ok(Err(cause)) => warn!(
-                        event = "hiddify.wait_failed",
-                        section = "hiddify_process",
-                        initiator = "linux_platform_backend",
-                        cause = %cause,
-                        trace_id = %trace_id,
-                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
-                        "could not collect the stopped Hiddify child process"
-                    ),
-                    Err(cause) => warn!(
-                        event = "hiddify.stop_timed_out",
-                        section = "hiddify_process",
-                        initiator = "linux_platform_backend",
-                        cause = %cause,
-                        trace_id = %trace_id,
-                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
-                        timeout_seconds = 5_u64,
-                        "Hiddify child process did not stop before the timeout"
-                    ),
-                }
+        if !config.hiddify.stop_with_stack {
+            return Ok(());
+        }
+        if let Some(mut child) = self.launched_hiddify.lock().await.take() {
+            let trace_id = Uuid::new_v4();
+            if let Err(cause) = child.start_kill() {
+                warn!(
+                    event = "hiddify.stop_signal_failed",
+                    section = "hiddify_process",
+                    initiator = "linux_platform_backend",
+                    cause = %cause,
+                    trace_id = %trace_id,
+                    trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                    "could not send the stop signal to the Hiddify child process"
+                );
+            }
+            match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                Ok(Ok(status)) => info!(
+                    event = "hiddify.process_stopped",
+                    section = "hiddify_process",
+                    initiator = "linux_platform_backend",
+                    cause = "stop_with_stack",
+                    trace_id = %trace_id,
+                    trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                    exit_status = %status,
+                    "Hiddify child process stopped"
+                ),
+                Ok(Err(cause)) => warn!(
+                    event = "hiddify.wait_failed",
+                    section = "hiddify_process",
+                    initiator = "linux_platform_backend",
+                    cause = %cause,
+                    trace_id = %trace_id,
+                    trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                    "could not collect the stopped Hiddify child process"
+                ),
+                Err(cause) => warn!(
+                    event = "hiddify.stop_timed_out",
+                    section = "hiddify_process",
+                    initiator = "linux_platform_backend",
+                    cause = %cause,
+                    trace_id = %trace_id,
+                    trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                    timeout_seconds = 5_u64,
+                    "Hiddify child process did not stop before the timeout"
+                ),
             }
         }
         Ok(())
@@ -720,20 +782,59 @@ impl PlatformBackend for LinuxBackend {
             config.mihomo.controller_secret,
         )
         .map_err(|error| CoreError::ConfigInvalid(error.to_string()))?;
-        let providers = controller
+        info!(
+            event = "mihomo.readiness_wait_started",
+            section = "runtime_health",
+            initiator = "linux_platform_backend",
+            cause = "core_started",
+            trace_route = "desktop_engine->linux_platform_backend->mihomo_controller",
+            "waiting for the Mihomo controller and rule providers"
+        );
+        let providers = match controller
             .wait_until_ready(Duration::from_secs(20), cancel.clone())
             .await
-            .map_err(|error| CoreError::Platform(error.to_string()))?;
+        {
+            Ok(providers) => {
+                info!(
+                    event = "mihomo.readiness_wait_completed",
+                    section = "runtime_health",
+                    initiator = "linux_platform_backend",
+                    cause = "none",
+                    trace_route = "desktop_engine->linux_platform_backend->mihomo_controller",
+                    ready = providers.ready,
+                    total = providers.total,
+                    rules_loaded = providers.rules_loaded,
+                    "Mihomo controller and rule providers are ready"
+                );
+                providers
+            }
+            Err(error) => {
+                error!(
+                    event = "mihomo.readiness_wait_failed",
+                    section = "runtime_health",
+                    initiator = "linux_platform_backend",
+                    cause = %error,
+                    trace_route = "desktop_engine->linux_platform_backend->mihomo_controller",
+                    "Mihomo readiness wait failed"
+                );
+                return Err(CoreError::Platform(error.to_string()));
+            }
+        };
         if cancel.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
-        let exit_ip = probe_hiddify_egress(
-            &config.hiddify.host,
-            config.hiddify.port,
-            Duration::from_secs(10),
-        )
-        .await
-        .map_err(|_| CoreError::HiddifyEgressUnavailable)?;
+        let exit_ip = self.hiddify_exit_ip.lock().await.clone();
+        if exit_ip.is_none() {
+            error!(
+                event = "hiddify.egress_missing_after_tun",
+                section = "runtime_health",
+                initiator = "linux_platform_backend",
+                cause = "pre_tun_probe_missing",
+                trace_route = "desktop_engine->linux_platform_backend->hiddify_egress",
+                "Hiddify egress was not confirmed before TUN start"
+            );
+            return Err(CoreError::HiddifyEgressUnavailable);
+        }
         Ok(ReadinessReport {
             controller_ready: true,
             egress_ready: true,
@@ -743,7 +844,7 @@ impl PlatformBackend for LinuxBackend {
                 rules_loaded: providers.rules_loaded,
                 last_refresh: Some(chrono::Utc::now()),
             },
-            exit_ip: Some(exit_ip),
+            exit_ip,
         })
     }
 
@@ -881,10 +982,8 @@ mod tests {
         assert_eq!(names.len(), 6);
         assert!(names.contains(std::ffi::OsStr::new("config.yaml")));
         let config = fs::read_to_string(root.join("config.yaml")).expect("config");
-        assert!(config.contains(&format!(
-            "/var/lib/iran-split/generations/{}",
-            generation.generation_id
-        )));
+        assert!(config.contains("path: private.txt"));
+        assert!(!config.contains("/var/lib/iran-split/generations/"));
     }
 
     #[test]

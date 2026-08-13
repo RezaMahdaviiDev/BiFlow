@@ -117,11 +117,12 @@ need WebKitGTK 4.1 and GTK 3 development packages.
 ```
 
 `./dev.sh` and `./dev.sh desktop` compile the real app and, on Linux, ask for
-`sudo` to run a hardened transient helper for your developer UID. The helper,
-its verified Mihomo copy, configuration, socket, and runtime stay under
-`/run/biflow-dev-<uid>` and are stopped/removed when `dev.sh` exits. Run the
-script as your normal account, not as root. `./dev.sh web` never touches TUN,
-routes, DNS, or system services.
+`sudo` to run a hardened transient helper for your developer UID. The helper
+socket and runtime stay under `/run/biflow-dev-<uid>`; verified helper and
+Mihomo binaries live under `/var/lib/biflow-dev-<uid>` because `/run` is
+typically mounted `noexec`. Everything is stopped and removed when `dev.sh`
+exits. Run the script as your normal account, not as root. `./dev.sh web` never
+touches TUN, routes, DNS, or system services.
 
 Release packages:
 

@@ -9,12 +9,15 @@ EXPECTED_MIHOMO_SHA256="9c397be7489538628fae781bc005e4c5b8cd7b0961b8bb2ca815c815
 TARGET_DIR="${PROJECT_DIR}/target"
 DEV_HELPER_UNIT=""
 DEV_HELPER_ROOT=""
+DEV_HELPER_LIB_ROOT=""
 DEV_HELPER_SOCKET=""
 DEV_HELPER_RUNTIME=""
 DEV_HELPER_MIHOMO=""
+DEV_HELPER_EXECUTABLE=""
 DEV_HELPER_CONFIG_TEMP=""
 DEV_HELPER_STARTED=0
 DEV_HELPER_ROOT_CREATED=0
+DEV_HELPER_LIB_ROOT_CREATED=0
 DEV_HELPER_LOCK_FD=""
 
 usage() {
@@ -116,6 +119,8 @@ read_dev_tun_name() {
 validate_dev_helper_targets() {
   [[ "${DEV_HELPER_ROOT}" =~ ^/run/biflow-dev-[0-9]+$ ]] || \
     die "refusing unsafe development helper root: ${DEV_HELPER_ROOT}"
+  [[ "${DEV_HELPER_LIB_ROOT}" =~ ^/var/lib/biflow-dev-[0-9]+$ ]] || \
+    die "refusing unsafe development helper lib root: ${DEV_HELPER_LIB_ROOT}"
   [[ "${DEV_HELPER_UNIT}" =~ ^biflow-dev-helper-[0-9]+\.service$ ]] || \
     die "refusing unsafe development helper unit: ${DEV_HELPER_UNIT}"
 }
@@ -143,6 +148,16 @@ cleanup_dev_helper() {
       cleanup_status=1
     fi
     DEV_HELPER_ROOT_CREATED=0
+  fi
+  if [[ "${DEV_HELPER_LIB_ROOT_CREATED}" -eq 1 ]]; then
+    if [[ "${DEV_HELPER_LIB_ROOT}" =~ ^/var/lib/biflow-dev-[0-9]+$ ]]; then
+      run_root rm -rf -- "${DEV_HELPER_LIB_ROOT}" || cleanup_status=1
+    else
+      command printf 'warning: refused unsafe helper lib cleanup target: %s\n' \
+        "${DEV_HELPER_LIB_ROOT}" >&2
+      cleanup_status=1
+    fi
+    DEV_HELPER_LIB_ROOT_CREATED=0
   fi
   if [[ "${original_status}" -eq 0 && "${cleanup_status}" -ne 0 ]]; then
     return "${cleanup_status}"
@@ -193,9 +208,11 @@ prepare_dev_helper() {
 
   DEV_HELPER_UNIT="biflow-dev-helper-${developer_uid}.service"
   DEV_HELPER_ROOT="/run/biflow-dev-${developer_uid}"
+  DEV_HELPER_LIB_ROOT="/var/lib/biflow-dev-${developer_uid}"
   DEV_HELPER_SOCKET="${DEV_HELPER_ROOT}/helper.sock"
   DEV_HELPER_RUNTIME="${DEV_HELPER_ROOT}/runtime"
-  DEV_HELPER_MIHOMO="${DEV_HELPER_ROOT}/bin/mihomo"
+  DEV_HELPER_EXECUTABLE="${DEV_HELPER_LIB_ROOT}/bin/iran-split-helper"
+  DEV_HELPER_MIHOMO="${DEV_HELPER_LIB_ROOT}/bin/mihomo"
   validate_dev_helper_targets
 
   command printf 'Building the privileged development helper...\n'
@@ -227,20 +244,21 @@ prepare_dev_helper() {
     run_root systemctl stop "${DEV_HELPER_UNIT}"
   fi
   run_root systemctl reset-failed "${DEV_HELPER_UNIT}" >/dev/null 2>&1 || true
-  run_root rm -rf -- "${DEV_HELPER_ROOT}"
+  run_root rm -rf -- "${DEV_HELPER_ROOT}" "${DEV_HELPER_LIB_ROOT}"
   run_root install -d -o root -g "${developer_gid}" -m 0750 "${DEV_HELPER_ROOT}"
   DEV_HELPER_ROOT_CREATED=1
-  run_root install -d -o root -g root -m 0755 "${DEV_HELPER_ROOT}/bin"
+  run_root install -d -o root -g root -m 0755 "${DEV_HELPER_LIB_ROOT}/bin"
+  DEV_HELPER_LIB_ROOT_CREATED=1
   run_root install -d -o root -g root -m 0700 "${DEV_HELPER_RUNTIME}"
   run_root install -o root -g root -m 0755 "${helper_source}" \
-    "${DEV_HELPER_ROOT}/bin/iran-split-helper"
+    "${DEV_HELPER_EXECUTABLE}"
   run_root install -o root -g root -m 0755 "${VENDORED_MIHOMO}" \
     "${DEV_HELPER_MIHOMO}"
   run_root install -o root -g root -m 0600 "${DEV_HELPER_CONFIG_TEMP}" \
     "${DEV_HELPER_ROOT}/helper.toml"
   command rm -f -- "${DEV_HELPER_CONFIG_TEMP}"
   DEV_HELPER_CONFIG_TEMP=""
-  [[ "$(sha256_of "${DEV_HELPER_ROOT}/bin/iran-split-helper")" == "${helper_hash}" ]] || \
+  [[ "$(sha256_of "${DEV_HELPER_EXECUTABLE}")" == "${helper_hash}" ]] || \
     die "root-owned development helper copy failed checksum verification"
   [[ "$(sha256_of "${DEV_HELPER_MIHOMO}")" == "${mihomo_hash}" ]] || \
     die "root-owned development Mihomo copy failed checksum verification"
@@ -264,8 +282,9 @@ prepare_dev_helper() {
     --property PrivateTmp=yes \
     --property ProtectSystem=strict \
     --property ProtectHome=read-only \
-    --property "ReadWritePaths=${DEV_HELPER_ROOT}" \
-    -- "${DEV_HELPER_ROOT}/bin/iran-split-helper" \
+    --property DeviceAllow="/dev/net/tun rw" \
+    --property "ReadWritePaths=${DEV_HELPER_ROOT} ${DEV_HELPER_LIB_ROOT}" \
+    -- "${DEV_HELPER_EXECUTABLE}" \
     --config "${DEV_HELPER_ROOT}/helper.toml"
   DEV_HELPER_STARTED=1
 

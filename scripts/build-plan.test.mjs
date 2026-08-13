@@ -208,10 +208,13 @@ describe("release artifact names", () => {
     assert.match(source, /KillMode=control-group/);
     assert.match(source, /NoNewPrivileges=yes/);
     assert.match(source, /ProtectSystem=strict/);
+    assert.match(source, /DeviceAllow="\/dev\/net\/tun rw"/);
     assert.match(source, /another native BiFlow development session/);
+    assert.match(source, /sha256_of "\$\{DEV_HELPER_EXECUTABLE\}"/);
     assert.match(source, /sha256_of "\$\{DEV_HELPER_MIHOMO\}"/);
     assert.match(source, /systemctl stop "\$\{DEV_HELPER_UNIT\}"/);
     assert.match(source, /\^\/run\/biflow-dev-\[0-9\]\+\$/);
+    assert.match(source, /\^\/var\/lib\/biflow-dev-\[0-9\]\+\$/);
     assert.ok(mockWeb);
     assert.match(mockWeb[1], /exec pnpm dev --host 127\.0\.0\.1/);
     assert.match(source, /case "\$\{1:-dev\}" in/);

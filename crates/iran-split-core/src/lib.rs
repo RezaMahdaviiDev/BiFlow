@@ -363,6 +363,9 @@ pub trait PlatformBackend: Send + Sync + 'static {
     async fn validate_runtime(&self, generation: &RuntimeGeneration) -> Result<(), CoreError>;
     async fn start_core(&self, generation: &RuntimeGeneration) -> Result<(), CoreError>;
     async fn stop_core(&self) -> Result<(), CoreError>;
+    async fn stop_user_proxy(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
     async fn core_process(&self) -> Result<ProcessStatus, CoreError>;
     async fn tun_status(&self) -> Result<TunStatus, CoreError>;
     async fn check_readiness(
@@ -825,6 +828,7 @@ impl<B: PlatformBackend> Engine<B> {
     async fn run_stop(&self, operation_id: Uuid) -> Result<(), CoreError> {
         self.transition(StackPhase::Stopping, operation_id);
         self.backend.stop_core().await?;
+        self.backend.stop_user_proxy().await?;
         let report = self.backend.cleanup_owned_state().await?;
         let tun = self.backend.tun_status().await?;
         if tun.active || !report.clean() {

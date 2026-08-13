@@ -18,3 +18,7 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0012](./0012-tag-releases-and-deny.md)         | Atomic tag releases and deny policy | Accepted |
 | [0013](./0013-session-debug-log.md)             | Permanent structured debug log      | Accepted |
 | [0014](./0014-windows-ci-line-endings.md)       | Windows CI line endings and fsync   | Accepted |
+| [0015](./0015-dev-helper-noexec-run.md)         | Dev helper binaries off noexec /run | Accepted |
+| [0016](./0016-mihomo-relative-rule-paths.md)    | Mihomo relative rule-provider paths | Accepted |
+| [0017](./0017-empty-custom-providers-ready.md)  | Empty custom providers are ready    | Accepted |
+| [0018](./0018-hiddify-egress-before-tun.md)     | Probe Hiddify egress before TUN     | Accepted |
