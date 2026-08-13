@@ -60,10 +60,10 @@ const PRODUCTION_SYSTEM_RUNTIME: &str = "/var/lib/iran-split";
 fn linux_helper_paths() -> (PathBuf, PathBuf) {
     #[cfg(debug_assertions)]
     {
-        return linux_helper_paths_with_overrides(
+        linux_helper_paths_with_overrides(
             std::env::var_os("BIFLOW_DEV_HELPER_SOCKET"),
             std::env::var_os("BIFLOW_DEV_SYSTEM_RUNTIME"),
-        );
+        )
     }
     #[cfg(not(debug_assertions))]
     {
@@ -89,10 +89,7 @@ fn linux_helper_paths_with_overrides(
 fn linux_mihomo_binary(default: PathBuf) -> PathBuf {
     #[cfg(debug_assertions)]
     {
-        return linux_mihomo_binary_with_override(
-            default,
-            std::env::var_os("BIFLOW_DEV_MIHOMO_BINARY"),
-        );
+        linux_mihomo_binary_with_override(default, std::env::var_os("BIFLOW_DEV_MIHOMO_BINARY"))
     }
     #[cfg(not(debug_assertions))]
     {
@@ -702,11 +699,11 @@ async fn query_logs(
     diagnostics::trace_action("diagnostics", "tauri_command", "query_logs", async move {
         #[cfg(target_os = "linux")]
         {
-            return services(&app)?
+            services(&app)?
                 .backend
                 .service_logs(maximum.clamp(1, 2_000))
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(|error| error.to_string())
         }
         #[cfg(target_os = "windows")]
         {

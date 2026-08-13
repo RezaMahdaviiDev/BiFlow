@@ -18,8 +18,9 @@ Windows GitHub Actions failed in two places:
 
 - Add root `.gitattributes` with `-text` for `resources/rules/*.txt`,
   `manifest.json`, and `SNAPSHOT.md`.
-- Set `git config core.autocrlf false` on Windows runners in CI and release
-  build jobs after checkout.
+- Set `git config --global core.autocrlf false` on Windows runners **before**
+  `actions/checkout`. Setting it after checkout leaves already-converted files
+  in the working tree.
 - Make `sync_directory` Unix-only; Windows uses a no-op while keeping atomic
   file writes via `NamedTempFile::persist`.
 

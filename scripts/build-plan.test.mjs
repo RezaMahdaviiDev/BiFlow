@@ -182,8 +182,16 @@ describe("release artifact names", () => {
       "utf8",
     );
     const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-    assert.match(release, /core\.autocrlf false/);
-    assert.match(ci, /core\.autocrlf false/);
+    assert.match(release, /git config --global core\.autocrlf false/);
+    assert.match(ci, /git config --global core\.autocrlf false/);
+    const rustJob = ci.split(/^\s*rust:/m)[1]?.split(/^\s*security:/m)[0];
+    assert.ok(rustJob, "CI rust job is missing");
+    const autocrlf = rustJob.indexOf("git config --global core.autocrlf false");
+    const checkout = rustJob.indexOf("actions/checkout@v4");
+    assert.ok(
+      autocrlf >= 0 && checkout > autocrlf,
+      "Windows autocrlf must be set before checkout",
+    );
   });
 
   it("starts the native Rust-backed application by default", () => {
@@ -287,6 +295,30 @@ describe("release artifact names", () => {
     assert.doesNotMatch(workflow, /mihomo/i);
     assert.match(workflow, /ADR 0004/);
     assert.match(ci, /cargo deny check/);
+    assert.match(ci, /fail-fast:\s*false/);
+    assert.match(ci, /swatinem\/rust-cache@v2/);
+    assert.match(ci, /workspaces:\s*["']\. -> target["']/);
+    assert.match(workflow, /swatinem\/rust-cache@v2/);
+    assert.match(workflow, /workspaces:\s*["']\. -> target["']/);
+    assert.match(workflow, /choco install nsis/);
+    assert.doesNotMatch(ci, /workspaces:\s*["']\.\/src-tauri -> target["']/);
+    const rustJob = ci.split(/^\s*rust:/m)[1]?.split(/^\s*security:/m)[0];
+    assert.ok(rustJob);
+    assert.match(rustJob, /fail-fast:\s*false/);
+    assert.match(rustJob, /ubuntu-24\.04/);
+    assert.match(rustJob, /windows-2025/);
+    const buildJob = workflow
+      .split(/^\s*build:/m)[1]
+      ?.split(/^\s*publish:/m)[0];
+    assert.ok(buildJob);
+    const autocrlf = buildJob.indexOf(
+      "git config --global core.autocrlf false",
+    );
+    const checkout = buildJob.indexOf("actions/checkout@v4");
+    assert.ok(
+      autocrlf >= 0 && checkout > autocrlf,
+      "Release Windows autocrlf must be set before checkout",
+    );
   });
 
   it("allows MPL-2.0 and other lockfile licenses without a blanket allow", () => {

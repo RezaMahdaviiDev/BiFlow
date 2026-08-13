@@ -22,3 +22,5 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0016](./0016-mihomo-relative-rule-paths.md)    | Mihomo relative rule-provider paths | Accepted |
 | [0017](./0017-empty-custom-providers-ready.md)  | Empty custom providers are ready    | Accepted |
 | [0018](./0018-hiddify-egress-before-tun.md)     | Probe Hiddify egress before TUN     | Accepted |
+| [0019](./0019-clippy-cfg-tail-expressions.md)   | Clippy cfg tail expressions         | Accepted |
+| [0020](./0020-native-linux-windows-ci.md)       | Native Linux and Windows CI         | Accepted |

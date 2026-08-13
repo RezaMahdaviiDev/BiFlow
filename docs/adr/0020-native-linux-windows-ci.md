@@ -1,0 +1,48 @@
+# ADR 0020: Native Linux and Windows GitHub runners
+
+## Status
+
+Accepted
+
+## Context
+
+All GitHub Actions runs through `v1.1.4` failed. Ubuntu Clippy stopped the
+workflow, and the Windows rust job was cancelled because the CI matrix used
+the default `fail-fast: true`. Linux-only development never compiled
+`#[cfg(windows)]` modules, so Windows Clippy (named pipes, helper service,
+NSIS packaging) never ran.
+
+Official sources:
+
+- Tauri v2 GitHub pipeline: native OS matrix, `fail-fast: false`,
+  `dtolnay/rust-toolchain`, `swatinem/rust-cache@v2`, WebKitGTK 4.1 on Ubuntu,
+  `tauri-apps/tauri-action@v1` on each OS.
+  https://v2.tauri.app/distribute/pipelines/github/
+- Tauri v2 prerequisites: Linux `libwebkit2gtk-4.1-dev`; Windows MSVC +
+  WebView2. https://v2.tauri.app/start/prerequisites/
+- GitHub `windows-2025` (now `windows-latest`) does not ship NSIS. Windows
+  Server 2022 did. https://github.com/actions/runner-images/issues/12677
+- This workspace is a root Cargo workspace. Rust artifacts live in `./target`,
+  not `src-tauri/target`. The Tauri template cache path
+  `./src-tauri -> target` would miss the cache.
+
+## Decision
+
+- Keep native runners: `ubuntu-24.04` for Linux packages and host Clippy,
+  `windows-2025` for Windows Clippy, tests, and NSIS. Do not cross-compile the
+  GitHub Windows installer from Linux.
+- Set `fail-fast: false` on the CI rust matrix so both OS jobs finish.
+- Cache with `swatinem/rust-cache@v2` and `workspaces: ". -> target"`.
+- Set `git config --global core.autocrlf false` **before** `actions/checkout`
+  on Windows. `.gitattributes` `-text` still pins bundled rule bytes.
+- Install NSIS with Chocolatey on `windows-2025` before `tauri-action`.
+- Keep cfg-gated Rust as tail expressions so host Clippy on either OS does not
+  hit `clippy::needless_return`.
+- Local Linux packaging may still use `cargo-xwin`; GitHub release packaging
+  stays on a native Windows runner.
+
+## Consequences
+
+Windows-only code is compiled on every CI push. A Linux Clippy failure no
+longer hides a Windows failure. Tag releases can produce NSIS installers on
+images that no longer preinstall `makensis`.

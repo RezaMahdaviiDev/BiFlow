@@ -7,9 +7,15 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 # Tag v* publishes Linux .deb + AppImage and Windows portable .exe + NSIS.
 # Third-party VPN apps stay in-app (ADR 0004); this workflow does not vendor them.
 # Build jobs only upload workflow artifacts. The final job publishes all four together.
+# Native runners follow the official Tauri GitHub pipeline: Linux WebKitGTK 4.1 on
+# Ubuntu 24.04, Windows MSVC + WebView2 on windows-2025. Do not cross-compile the
+# Windows installer from Linux here; the Linux Tauri CLI rejects --bundles nsis.
 
 concurrency:
   group: release-${{ github.ref }}
@@ -18,6 +24,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,6 +37,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
       - name: Verify tag matches the version file
         shell: bash
         run: |
@@ -39,7 +49,7 @@ jobs:
             exit 1
           fi
       - name: Install Linux desktop dependencies
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm exec playwright install --with-deps chromium
@@ -61,12 +71,13 @@ jobs:
           - platform: windows-2025
             args: --bundles nsis
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
       - name: Disable CRLF conversion on Windows
         if: runner.os == 'Windows'
         shell: bash
-        run: git config core.autocrlf false
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
           version: 9.0.1
@@ -75,9 +86,22 @@ jobs:
           node-version: 24
           cache: pnpm
       - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2t64
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2t64
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          $nsis = "${env:ProgramFiles(x86)}\NSIS"
+          if (Test-Path $nsis) {
+            Add-Content -Path $env:GITHUB_PATH -Value $nsis
+          }
+          Get-Command makensis -ErrorAction Stop
       - run: pnpm install --frozen-lockfile
       - uses: tauri-apps/tauri-action@v1
         with:

@@ -59,7 +59,7 @@ impl PlatformBackend for WindowsBackend {
     async fn helper_status(&self) -> Result<HelperStatus, CoreError> {
         #[cfg(windows)]
         {
-            return windows_impl::helper_status().await;
+            windows_impl::helper_status().await
         }
         #[cfg(not(windows))]
         unavailable()

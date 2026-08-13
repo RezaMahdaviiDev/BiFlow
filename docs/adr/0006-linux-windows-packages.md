@@ -26,4 +26,4 @@ Operators need installable artifacts: a Debian package on Linux, and on Windows 
 
 - `./dev.sh package` delegates to `./build.sh linux`.
 - Cross-compiling Windows from Linux installs NSIS and `cargo-xwin` (or MinGW) instead of printing a manual install recipe.
-- Signed production releases use the OS matrix in `.github/workflows/release.yml`, triggered only when a `v*` tag is pushed. Verification runs first, Linux builds `.deb` and AppImage, and Windows builds the portable `.exe` and NSIS installer on a native runner. A final job publishes all four workflow artifacts together. The Linux Tauri CLI must not receive `--bundles nsis`.
+- Signed production releases use the OS matrix in `.github/workflows/release.yml`, triggered only when a `v*` tag is pushed. Verification runs first, Linux builds `.deb` and AppImage, and Windows builds the portable `.exe` and NSIS installer on a native runner. A final job publishes all four workflow artifacts together. The Linux Tauri CLI must not receive `--bundles nsis`. GitHub `windows-2025` does not ship NSIS; the release job installs it before `tauri-action`.

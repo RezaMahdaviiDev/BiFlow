@@ -7,7 +7,7 @@ Accepted
 ## Context
 
 Connect reached Mihomo readiness (`providers 5/5`) and then failed within
-~200ms with `Hiddify egress did not become ready`. The SOCKS probe ran *after*
+~200ms with `Hiddify egress did not become ready`. The SOCKS probe ran _after_
 TUN was up. Hiddify AppImage traffic uses `/proc` comm `Hiddify-Linux-x`,
 which was not in the PROCESS-NAME DIRECT list, so outbound proxy packets could
 be captured by TUN and the probe failed immediately. Rollback then SIGKILL'd
