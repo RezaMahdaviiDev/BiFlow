@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0022](./0022-biflow-owned-rules.md)
 
 ## Context
 

@@ -39,10 +39,39 @@ describe("mock transport", () => {
     });
   });
 
-  it("resyncs cloud rule counts from the fail-safe source", async () => {
+  it("resyncs cloud rule counts from the BiFlow snapshot", async () => {
     const synced = await mockApi.syncCloudRules();
-    expect(synced.source).toBe("jsdelivr");
+    expect(synced.source).toBe("devlifeX/BiFlow");
+    expect(synced.snapshot_revision).toBeTruthy();
     expect(synced.last_synced_at).toBeTruthy();
     expect(synced.domain_count).toBeGreaterThan(62_829);
+  });
+
+  it("reports an available mock update when session storage requests it", async () => {
+    sessionStorage.setItem("biflow-mock-update-available", "1");
+    await expect(mockApi.checkUpdate()).resolves.toMatchObject({
+      available: true,
+      version: "9.9.9",
+    });
+  });
+
+  it("emits download progress during mock install", async () => {
+    sessionStorage.setItem("biflow-mock-update-available", "1");
+    const phases: string[] = [];
+    const unsubscribe = mockApi.subscribeUpdateProgress((progress) => {
+      phases.push(progress.phase);
+    });
+    await mockApi.installUpdate();
+    unsubscribe();
+    expect(phases).toContain("downloading");
+    expect(phases.at(-1)).toBe("restarting");
+  });
+
+  it("fails mock install when signature verification is forced to fail", async () => {
+    sessionStorage.setItem("biflow-mock-update-available", "1");
+    sessionStorage.setItem("biflow-mock-update-fail", "1");
+    await expect(mockApi.installUpdate()).rejects.toThrow(
+      /signature verification failed/i,
+    );
   });
 });

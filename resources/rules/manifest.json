@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
   "repository": "Chocolate4U/Iran-clash-rules",
+  "runtime_repository": "devlifeX/BiFlow",
+  "license": "GPL-3.0",
   "branch": "release",
   "commit": "767ef8bf56739c436f72e7489cc86b5f79a926e6",
   "fetched_at": "2026-08-12T22:57:04.774Z",

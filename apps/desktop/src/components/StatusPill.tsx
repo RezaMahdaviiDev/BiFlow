@@ -12,6 +12,7 @@ const colors: Record<ComponentPhase | StackPhase, string> = {
   starting_core: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   checking_readiness: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   running: "bg-success/15 text-success",
+  paused: "bg-sky-400/15 text-sky-700 dark:text-sky-300",
   degraded: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   unavailable: "bg-danger/15 text-danger",
   stopping: "bg-amber-400/15 text-amber-600 dark:text-amber-300",

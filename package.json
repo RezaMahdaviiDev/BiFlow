@@ -1,10 +1,10 @@
 {
   "name": "iran-split-desktop-workspace",
-  "version": "1.1.10",
+  "version": "1.2.0",
   "private": true,
   "packageManager": "pnpm@9.0.1",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "version:sync": "node scripts/sync-version.mjs",
@@ -19,7 +19,7 @@
     "typecheck": "pnpm --filter @iran-split/desktop typecheck",
     "test": "pnpm --filter @iran-split/desktop test",
     "test:scripts": "node --test scripts/*.test.mjs",
-    "rules:update": "node scripts/sync-rules.mjs",
+    "rules:update": "./scripts/update-rules.sh",
     "rules:check": "node scripts/sync-rules.mjs --check",
     "assets:check": "node scripts/check-bundled-assets.mjs",
     "bundle:check": "pnpm rules:check && pnpm assets:check",

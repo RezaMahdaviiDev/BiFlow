@@ -13,13 +13,12 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::info;
 
-const GITHUB_RAW: &str = "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release";
-const JSDELIVR: &str = "https://cdn.jsdelivr.net/gh/chocolate4u/Iran-clash-rules@release";
-const JSDELIVR_FASTLY: &str = "https://fastly.jsdelivr.net/gh/chocolate4u/Iran-clash-rules@release";
-const GITHUB_RELEASE: &str =
-    "https://github.com/Chocolate4U/Iran-clash-rules/releases/latest/download";
+const BIFLOW_REPOSITORY: &str = "devlifeX/BiFlow";
+const BIFLOW_MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/devlifeX/BiFlow/main/resources/rules/manifest.json";
+const BIFLOW_RAW_PREFIX: &str = "https://raw.githubusercontent.com/devlifeX/BiFlow/";
 const META_FILE: &str = "sync-meta.json";
 const MAX_BYTES: usize = 20 * 1024 * 1024;
 
@@ -47,7 +46,6 @@ pub enum ProviderKind {
 #[derive(Debug, Clone, Copy)]
 struct CatalogEntry {
     local_name: &'static str,
-    remote_name: &'static str,
     kind: ProviderKind,
     min_entries: u64,
 }
@@ -55,32 +53,42 @@ struct CatalogEntry {
 const CATALOG: [CatalogEntry; 3] = [
     CatalogEntry {
         local_name: "iran-domains.txt",
-        remote_name: "ir.txt",
         kind: ProviderKind::Domain,
         min_entries: 1_000,
     },
     CatalogEntry {
         local_name: "iran-networks.txt",
-        remote_name: "ircidr.txt",
         kind: ProviderKind::IpCidr,
         min_entries: 100,
     },
     CatalogEntry {
         local_name: "private.txt",
-        remote_name: "private.txt",
         kind: ProviderKind::IpCidr,
         min_entries: 5,
     },
 ];
 
-#[must_use]
-pub fn fail_safe_urls(remote_name: &str) -> Vec<String> {
-    vec![
-        format!("{GITHUB_RAW}/{remote_name}"),
-        format!("{JSDELIVR}/{remote_name}"),
-        format!("{JSDELIVR_FASTLY}/{remote_name}"),
-        format!("{GITHUB_RELEASE}/{remote_name}"),
-    ]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteManifest {
+    schema_version: u32,
+    commit: String,
+    rules: Vec<RemoteManifestRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteManifestRule {
+    file: String,
+    kind: String,
+    entry_count: u64,
+    sha256: String,
+}
+
+fn manifest_fetch_url() -> &'static str {
+    BIFLOW_MANIFEST_URL
+}
+
+fn snapshot_file_url(commit: &str, file: &str) -> String {
+    format!("{BIFLOW_RAW_PREFIX}{commit}/resources/rules/{file}")
 }
 
 #[must_use]
@@ -106,6 +114,41 @@ fn provider_lines(text: &str) -> impl Iterator<Item = &str> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+fn manifest_kind(value: &str) -> Option<ProviderKind> {
+    match value {
+        "domain" => Some(ProviderKind::Domain),
+        "ip_cidr" => Some(ProviderKind::IpCidr),
+        _ => None,
+    }
+}
+
+fn validate_manifest(manifest: &RemoteManifest) -> Result<(), CloudSyncError> {
+    if manifest.schema_version != 1 {
+        return Err(CloudSyncError::Fetch(format!(
+            "unsupported manifest schema version {}",
+            manifest.schema_version
+        )));
+    }
+    if manifest.commit.len() != 40
+        || !manifest
+            .commit
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(CloudSyncError::Fetch(
+            "manifest commit is not a 40-character hex SHA".into(),
+        ));
+    }
+    if manifest.rules.len() != CATALOG.len() {
+        return Err(CloudSyncError::Fetch(format!(
+            "manifest lists {} rules; expected {}",
+            manifest.rules.len(),
+            CATALOG.len()
+        )));
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -176,6 +219,7 @@ pub struct CloudRulesStatus {
     pub ip_count: u64,
     pub last_synced_at: Option<DateTime<Utc>>,
     pub source: String,
+    pub snapshot_revision: Option<String>,
     pub sets: Vec<CloudRuleSetStatus>,
 }
 
@@ -183,6 +227,7 @@ pub struct CloudRulesStatus {
 struct SyncMeta {
     last_synced_at: Option<DateTime<Utc>>,
     source: String,
+    snapshot_revision: Option<String>,
     sets: Vec<CloudRuleSetStatus>,
 }
 
@@ -258,34 +303,21 @@ impl CloudRuleStore {
             section = "cloud_rules",
             initiator = "cloud_rule_store",
             cause = "user_request",
-            trace_route = "tauri_command->cloud_rule_store->fail_safe_sources",
+            trace_route = "tauri_command->cloud_rule_store->biflow_manifest",
             provider_count = CATALOG.len(),
             "cloud rule synchronization started"
         );
         fs::create_dir_all(&self.cache_dir)?;
-        let mut sets = Vec::with_capacity(CATALOG.len());
-        let mut used_source = String::from("bundled");
-        for entry in CATALOG {
-            let (bytes, source) = self.download_entry(entry).await?;
-            let text = std::str::from_utf8(&bytes)
-                .map_err(|_| CloudSyncError::InvalidSet(entry.local_name.into()))?;
-            let count = provider_entry_count(text);
-            if count < entry.min_entries {
-                return Err(CloudSyncError::InvalidSet(entry.local_name.into()));
-            }
-            write_atomic(&self.cache_dir.join(entry.local_name), &bytes)?;
-            used_source.clone_from(&source);
-            sets.push(CloudRuleSetStatus {
-                id: entry.local_name.trim_end_matches(".txt").to_owned(),
-                kind: entry.kind,
-                entry_count: count,
-                source,
-                sha256: Some(sha256_hex(&bytes)),
-            });
+        let manifest = self.fetch_manifest().await?;
+        validate_manifest(&manifest)?;
+        let (pending, sets) = self.download_manifest_generation(&manifest).await?;
+        for (name, bytes) in pending {
+            write_atomic(&self.cache_dir.join(name), &bytes)?;
         }
         let meta = SyncMeta {
             last_synced_at: Some(Utc::now()),
-            source: used_source,
+            source: BIFLOW_REPOSITORY.into(),
+            snapshot_revision: Some(manifest.commit),
             sets,
         };
         write_atomic(
@@ -297,6 +329,7 @@ impl CloudRuleStore {
             ip_count: 0,
             last_synced_at: meta.last_synced_at,
             source: meta.source,
+            snapshot_revision: meta.snapshot_revision,
             sets: meta.sets,
         });
         info!(
@@ -311,6 +344,72 @@ impl CloudRuleStore {
             "cloud rule synchronization completed"
         );
         Ok(status)
+    }
+
+    async fn download_manifest_generation(
+        &self,
+        manifest: &RemoteManifest,
+    ) -> Result<(Vec<(&'static str, Vec<u8>)>, Vec<CloudRuleSetStatus>), CloudSyncError> {
+        let mut pending = Vec::with_capacity(CATALOG.len());
+        let mut sets = Vec::with_capacity(CATALOG.len());
+        for entry in CATALOG {
+            let rule = manifest
+                .rules
+                .iter()
+                .find(|rule| rule.file == entry.local_name)
+                .ok_or_else(|| {
+                    CloudSyncError::Fetch(format!(
+                        "manifest is missing provider file {}",
+                        entry.local_name
+                    ))
+                })?;
+            let Some(kind) = manifest_kind(&rule.kind) else {
+                return Err(CloudSyncError::Fetch(format!(
+                    "manifest has unsupported kind for {}",
+                    entry.local_name
+                )));
+            };
+            if kind != entry.kind {
+                return Err(CloudSyncError::Fetch(format!(
+                    "manifest kind mismatch for {}",
+                    entry.local_name
+                )));
+            }
+            let url = snapshot_file_url(&manifest.commit, &rule.file);
+            let bytes = self.fetcher.fetch(&url).await?;
+            if bytes.len() > MAX_BYTES {
+                return Err(CloudSyncError::Fetch(format!(
+                    "response exceeded {MAX_BYTES} bytes"
+                )));
+            }
+            let digest = sha256_hex(&bytes);
+            if digest != rule.sha256 {
+                return Err(CloudSyncError::InvalidSet(format!(
+                    "{} sha256 mismatch",
+                    entry.local_name
+                )));
+            }
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| CloudSyncError::InvalidSet(entry.local_name.into()))?;
+            let count = provider_entry_count(text);
+            if count < entry.min_entries || count != rule.entry_count {
+                return Err(CloudSyncError::InvalidSet(entry.local_name.into()));
+            }
+            pending.push((entry.local_name, bytes));
+            sets.push(CloudRuleSetStatus {
+                id: entry.local_name.trim_end_matches(".txt").to_owned(),
+                kind: entry.kind,
+                entry_count: count,
+                source: BIFLOW_REPOSITORY.into(),
+                sha256: Some(digest),
+            });
+        }
+        Ok((pending, sets))
+    }
+
+    async fn fetch_manifest(&self) -> Result<RemoteManifest, CloudSyncError> {
+        let bytes = self.fetcher.fetch(manifest_fetch_url()).await?;
+        serde_json::from_slice(&bytes).map_err(CloudSyncError::from)
     }
 
     fn bundled_status(&self) -> Result<CloudRulesStatus, CloudSyncError> {
@@ -332,7 +431,7 @@ impl CloudRuleStore {
                 sha256: Some(sha256_hex(&bytes)),
             });
         }
-        Ok(summarize(sets, None, "bundled"))
+        Ok(summarize(sets, None, "bundled", None))
     }
 
     fn read_meta(&self) -> Result<SyncMeta, CloudSyncError> {
@@ -341,48 +440,6 @@ impl CloudRuleStore {
             return Ok(SyncMeta::default());
         }
         Ok(serde_json::from_slice(&fs::read(path)?)?)
-    }
-
-    async fn download_entry(
-        &self,
-        entry: CatalogEntry,
-    ) -> Result<(Vec<u8>, String), CloudSyncError> {
-        let mut last_error = CloudSyncError::Fetch("no fail-safe URL succeeded".into());
-        for url in fail_safe_urls(entry.remote_name) {
-            match self.fetcher.fetch(&url).await {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    if provider_entry_count(&text) >= entry.min_entries {
-                        return Ok((bytes, source_label(&url)));
-                    }
-                    last_error = CloudSyncError::InvalidSet(entry.local_name.into());
-                    warn!(
-                        event = "cloud_rules.source_rejected",
-                        section = "cloud_rules",
-                        initiator = "fail_safe_fetcher",
-                        cause = "provider_below_minimum_entries",
-                        trace_route = "cloud_rule_store->fail_safe_source->validation",
-                        provider = entry.local_name,
-                        source = source_label(&url),
-                        "cloud rule source returned an incomplete provider"
-                    );
-                }
-                Err(error) => {
-                    warn!(
-                        event = "cloud_rules.source_failed",
-                        section = "cloud_rules",
-                        initiator = "fail_safe_fetcher",
-                        cause = %error,
-                        trace_route = "cloud_rule_store->fail_safe_source->next_source",
-                        provider = entry.local_name,
-                        source = source_label(&url),
-                        "cloud rule source failed; trying the next source"
-                    );
-                    last_error = error;
-                }
-            }
-        }
-        Err(last_error)
     }
 }
 
@@ -394,6 +451,7 @@ fn status_from_meta(meta: &SyncMeta) -> Option<CloudRulesStatus> {
         meta.sets.clone(),
         meta.last_synced_at,
         &meta.source,
+        meta.snapshot_revision.clone(),
     ))
 }
 
@@ -401,6 +459,7 @@ fn summarize(
     sets: Vec<CloudRuleSetStatus>,
     last_synced_at: Option<DateTime<Utc>>,
     source: &str,
+    snapshot_revision: Option<String>,
 ) -> CloudRulesStatus {
     let domain_count = sets
         .iter()
@@ -417,17 +476,8 @@ fn summarize(
         ip_count,
         last_synced_at,
         source: source.to_owned(),
+        snapshot_revision,
         sets,
-    }
-}
-
-fn source_label(url: &str) -> String {
-    if url.contains("jsdelivr.net") {
-        "jsdelivr".into()
-    } else if url.contains("releases/latest") {
-        "github-release".into()
-    } else {
-        "github".into()
     }
 }
 
@@ -480,15 +530,55 @@ mod tests {
             .into_bytes()
     }
 
+    fn manifest_for(commit: &str, rules: &[(&str, ProviderKind, u64, &str)]) -> RemoteManifest {
+        RemoteManifest {
+            schema_version: 1,
+            commit: commit.to_owned(),
+            rules: rules
+                .iter()
+                .map(|(file, kind, count, digest)| RemoteManifestRule {
+                    file: (*file).into(),
+                    kind: match kind {
+                        ProviderKind::Domain => "domain",
+                        ProviderKind::IpCidr => "ip_cidr",
+                    }
+                    .into(),
+                    entry_count: *count,
+                    sha256: (*digest).into(),
+                })
+                .collect(),
+        }
+    }
+
+    fn seed_bundled(bundled: &Path) {
+        fs::create_dir_all(bundled).expect("bundled");
+        fs::write(bundled.join("iran-domains.txt"), "+.old.ir\n").expect("domains");
+        fs::write(bundled.join("iran-networks.txt"), "1.2.3.0/24\n").expect("networks");
+        fs::write(bundled.join("private.txt"), "10.0.0.0/8\n").expect("private");
+    }
+
     #[test]
-    fn fail_safe_chain_prefers_github_then_jsdelivr() {
-        let urls = fail_safe_urls("ir.txt");
-        assert!(urls[0].starts_with(
-            "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release/ir.txt"
-        ));
-        assert!(urls[1].contains("cdn.jsdelivr.net"));
-        assert!(urls[2].contains("fastly.jsdelivr.net"));
-        assert!(urls[3].contains("releases/latest/download/ir.txt"));
+    fn runtime_urls_use_only_biflow_repository() {
+        assert!(manifest_fetch_url().starts_with(BIFLOW_RAW_PREFIX));
+        let file_url = snapshot_file_url("abc123def4567890abc123def4567890abc123de", "iran-domains.txt");
+        assert!(file_url.starts_with(BIFLOW_RAW_PREFIX));
+        assert!(file_url.ends_with("/resources/rules/iran-domains.txt"));
+    }
+
+    #[test]
+    fn runtime_source_has_no_third_party_rule_hosts() {
+        const FORBIDDEN: &[&str] = &["Chocolate4U", "jsdelivr", "Iran-clash-rules"];
+        for line in include_str!("cloud.rs").lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("const ") && trimmed.contains("https://") {
+                for forbidden in FORBIDDEN {
+                    assert!(
+                        !trimmed.contains(forbidden),
+                        "runtime URL constant must not reference {forbidden}: {trimmed}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -506,25 +596,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_uses_next_fail_safe_url_and_keeps_last_good_on_later_failure() {
+    async fn sync_fetches_manifest_then_files_and_keeps_last_good_on_failure() {
         let directory = tempfile::tempdir().expect("tempdir");
         let bundled = directory.path().join("bundled");
         let cache = directory.path().join("cache");
-        fs::create_dir_all(&bundled).expect("bundled");
-        fs::write(bundled.join("iran-domains.txt"), "+.old.ir\n").expect("domains");
-        fs::write(bundled.join("iran-networks.txt"), "1.2.3.0/24\n").expect("networks");
-        fs::write(bundled.join("private.txt"), "10.0.0.0/8\n").expect("private");
+        seed_bundled(&bundled);
 
+        let commit = "a".repeat(40);
+        let domain_bytes = domain_payload(1_000);
+        let network_bytes = cidr_payload(100);
+        let private_bytes = cidr_payload(8);
+        let manifest = manifest_for(
+            &commit,
+            &[
+                (
+                    "iran-domains.txt",
+                    ProviderKind::Domain,
+                    1_000,
+                    &sha256_hex(&domain_bytes),
+                ),
+                (
+                    "iran-networks.txt",
+                    ProviderKind::IpCidr,
+                    100,
+                    &sha256_hex(&network_bytes),
+                ),
+                (
+                    "private.txt",
+                    ProviderKind::IpCidr,
+                    8,
+                    &sha256_hex(&private_bytes),
+                ),
+            ],
+        );
         let mut responses = HashMap::new();
-        for (remote, body) in [
-            ("ir.txt", domain_payload(1_000)),
-            ("ircidr.txt", cidr_payload(100)),
-            ("private.txt", cidr_payload(8)),
-        ] {
-            let urls = fail_safe_urls(remote);
-            responses.insert(urls[0].clone(), Err("blocked".into()));
-            responses.insert(urls[1].clone(), Ok(body));
-        }
+        responses.insert(
+            manifest_fetch_url().to_owned(),
+            Ok(serde_json::to_vec(&manifest).expect("manifest json")),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-domains.txt"),
+            Ok(domain_bytes),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-networks.txt"),
+            Ok(network_bytes),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "private.txt"),
+            Ok(private_bytes),
+        );
+
         let store = CloudRuleStore::with_fetcher(
             bundled,
             cache.clone(),
@@ -533,7 +655,8 @@ mod tests {
         let status = store.sync().await.expect("sync");
         assert_eq!(status.domain_count, 1_000);
         assert_eq!(status.ip_count, 108);
-        assert_eq!(status.source, "jsdelivr");
+        assert_eq!(status.source, BIFLOW_REPOSITORY);
+        assert_eq!(status.snapshot_revision, Some(commit.clone()));
         assert!(status.last_synced_at.is_some());
         assert!(cache.join("iran-domains.txt").is_file());
 
@@ -547,6 +670,59 @@ mod tests {
         assert!(failing.sync().await.is_err());
         let kept = failing.status().expect("status");
         assert_eq!(kept.domain_count, 1_000);
-        assert_eq!(kept.source, "jsdelivr");
+        assert_eq!(kept.source, BIFLOW_REPOSITORY);
+        assert_eq!(kept.snapshot_revision, Some(commit));
+    }
+
+    #[tokio::test]
+    async fn sync_rejects_sha256_mismatch_before_publishing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let bundled = directory.path().join("bundled");
+        let cache = directory.path().join("cache");
+        seed_bundled(&bundled);
+
+        let commit = "b".repeat(40);
+        let domain_bytes = domain_payload(1_000);
+        let manifest = manifest_for(
+            &commit,
+            &[
+                (
+                    "iran-domains.txt",
+                    ProviderKind::Domain,
+                    1_000,
+                    "deadbeef",
+                ),
+                (
+                    "iran-networks.txt",
+                    ProviderKind::IpCidr,
+                    100,
+                    &sha256_hex(&cidr_payload(100)),
+                ),
+                (
+                    "private.txt",
+                    ProviderKind::IpCidr,
+                    8,
+                    &sha256_hex(&cidr_payload(8)),
+                ),
+            ],
+        );
+        let mut responses = HashMap::new();
+        responses.insert(
+            manifest_fetch_url().to_owned(),
+            Ok(serde_json::to_vec(&manifest).expect("manifest json")),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-domains.txt"),
+            Ok(domain_bytes),
+        );
+
+        let store = CloudRuleStore::with_fetcher(
+            bundled,
+            cache.clone(),
+            Arc::new(MapFetcher { responses }),
+        );
+        assert!(store.sync().await.is_err());
+        assert!(!cache.join("iran-domains.txt").is_file());
+        assert!(!cache.join(META_FILE).is_file());
     }
 }

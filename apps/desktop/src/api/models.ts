@@ -7,6 +7,7 @@ export type StackPhase =
   | "starting_core"
   | "checking_readiness"
   | "running"
+  | "paused"
   | "degraded"
   | "stopping"
   | "recovering"
@@ -198,6 +199,24 @@ export interface UpdateStatus {
   notes: string | null;
 }
 
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "current"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "restarting"
+  | "failed"
+  | "manual";
+
+export interface UpdateProgress {
+  phase: UpdatePhase;
+  percent: number | null;
+  version: string | null;
+  error: string | null;
+}
+
 export interface CloudRuleSetStatus {
   id: string;
   kind: "domain" | "ip_cidr";
@@ -211,6 +230,7 @@ export interface CloudRulesStatus {
   ip_count: number;
   last_synced_at: string | null;
   source: string;
+  snapshot_revision: string | null;
   sets: CloudRuleSetStatus[];
 }
 

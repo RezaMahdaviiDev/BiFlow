@@ -17,6 +17,7 @@ import type {
   OperationAccepted,
   RouteTestResult,
   StackSnapshot,
+  UpdateProgress,
   UpdateStatus,
   ValidationIssue,
 } from "./models";
@@ -39,6 +40,12 @@ export const desktop = {
   },
   stop(): Promise<OperationAccepted> {
     return native ? invoke("stop_stack") : mockApi.stop();
+  },
+  pause(): Promise<OperationAccepted> {
+    return native ? invoke("pause_stack") : mockApi.pause();
+  },
+  resume(): Promise<OperationAccepted> {
+    return native ? invoke("resume_stack") : mockApi.resume();
   },
   cancel(operationId: string): Promise<boolean> {
     return native
@@ -130,6 +137,18 @@ export const desktop = {
   checkUpdate(): Promise<UpdateStatus> {
     return native ? invoke("check_for_update") : mockApi.checkUpdate();
   },
+  installUpdate(): Promise<OperationAccepted> {
+    return native ? invoke("install_update") : mockApi.installUpdate();
+  },
+  async subscribeUpdateProgress(
+    listener: (progress: UpdateProgress) => void,
+  ): Promise<() => void> {
+    if (!native) return mockApi.subscribeUpdateProgress(listener);
+    const unlisten = await listen<UpdateProgress>("update-progress", (event) =>
+      listener(event.payload),
+    );
+    return unlisten;
+  },
   async subscribe(
     listener: (snapshot: StackSnapshot) => void,
   ): Promise<() => void> {
@@ -137,6 +156,26 @@ export const desktop = {
     const unlisten = await listen<StackSnapshot>("stack-snapshot", (event) =>
       listener(event.payload),
     );
+    return unlisten;
+  },
+  async subscribeNavigation(
+    listener: (
+      page: "dashboard" | "rules" | "diagnostics" | "settings" | "about",
+    ) => void,
+  ): Promise<() => void> {
+    if (!native) return () => undefined;
+    const unlisten = await listen<string>("app-navigate", (event) => {
+      const page = event.payload;
+      if (
+        page === "dashboard" ||
+        page === "rules" ||
+        page === "diagnostics" ||
+        page === "settings" ||
+        page === "about"
+      ) {
+        listener(page);
+      }
+    });
     return unlisten;
   },
 };

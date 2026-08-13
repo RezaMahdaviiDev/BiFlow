@@ -10,9 +10,18 @@ import type {
   InstallGuide,
   NetworkStatus,
   StackSnapshot,
+  UpdateProgress,
+  UpdateStatus,
 } from "../api/models";
 
-type Page = "dashboard" | "rules" | "diagnostics" | "settings";
+type Page = "dashboard" | "rules" | "diagnostics" | "settings" | "about";
+
+const initialUpdateProgress = (): UpdateProgress => ({
+  phase: "idle",
+  percent: null,
+  version: null,
+  error: null,
+});
 
 interface AppStore {
   loading: boolean;
@@ -29,9 +38,12 @@ interface AppStore {
   diagnostics: DiagnosticsReport | null;
   error: string | null;
   installGuide: InstallGuide | null;
+  update: UpdateProgress;
   setPage: (page: Page) => void;
   initialize: () => Promise<() => void>;
   toggleConnection: () => Promise<void>;
+  pauseConnection: () => Promise<void>;
+  resumeConnection: () => Promise<void>;
   cancel: () => Promise<void>;
   saveSettings: (draft: AppConfig) => Promise<void>;
   addRule: (input: string) => Promise<void>;
@@ -41,6 +53,11 @@ interface AppStore {
   refreshNetworkStatus: () => Promise<void>;
   installDependency: (id: string) => Promise<void>;
   runDiagnostics: () => Promise<void>;
+  applyUpdateProgress: (progress: UpdateProgress) => void;
+  checkForUpdate: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+  retryUpdate: () => Promise<void>;
+  openRepository: () => Promise<void>;
   clearError: () => void;
   clearInstallGuide: () => void;
 }
@@ -66,6 +83,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   diagnostics: null,
   error: null,
   installGuide: null,
+  update: initialUpdateProgress(),
   setPage: (page) => set({ page }),
   initialize: async () => {
     try {
@@ -79,11 +97,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
         cloudRules: boot.cloud_rules,
         dependencies: boot.dependencies,
         networkStatus: boot.network_status,
+        update: initialUpdateProgress(),
       });
       void get().refreshNetworkStatus();
-      return desktop.subscribe((snapshot) =>
+      const unsubscribeSnapshot = await desktop.subscribe((snapshot) =>
         set({ snapshot, actionPending: false }),
       );
+      const unsubscribeUpdate = await desktop.subscribeUpdateProgress(
+        (progress) => {
+          get().applyUpdateProgress(progress);
+        },
+      );
+      return () => {
+        unsubscribeSnapshot();
+        unsubscribeUpdate();
+      };
     } catch (error) {
       set({ loading: false, error: message(error) });
       return () => undefined;
@@ -94,11 +122,31 @@ export const useAppStore = create<AppStore>((set, get) => ({
     if (!snapshot) return;
     set({ actionPending: true, error: null });
     try {
-      if (snapshot.phase === "running" || snapshot.phase === "degraded") {
+      if (
+        snapshot.phase === "running" ||
+        snapshot.phase === "degraded" ||
+        snapshot.phase === "paused"
+      ) {
         await desktop.stop();
       } else {
         await desktop.start();
       }
+    } catch (error) {
+      set({ actionPending: false, error: message(error) });
+    }
+  },
+  pauseConnection: async () => {
+    set({ actionPending: true, error: null });
+    try {
+      await desktop.pause();
+    } catch (error) {
+      set({ actionPending: false, error: message(error) });
+    }
+  },
+  resumeConnection: async () => {
+    set({ actionPending: true, error: null });
+    try {
+      await desktop.resume();
     } catch (error) {
       set({ actionPending: false, error: message(error) });
     }
@@ -199,6 +247,96 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ actionPending: false, error: message(error) });
     }
   },
+  applyUpdateProgress: (progress) => {
+    set({ update: progress });
+  },
+  checkForUpdate: async () => {
+    set({
+      update: {
+        phase: "checking",
+        percent: null,
+        version: null,
+        error: null,
+      },
+    });
+    try {
+      const status = await desktop.checkUpdate();
+      set({
+        update: updateStatusToProgress(status),
+      });
+    } catch (error) {
+      set({
+        update: {
+          phase: "failed",
+          percent: null,
+          version: null,
+          error: message(error),
+        },
+      });
+    }
+  },
+  installUpdate: async () => {
+    const current = get().update;
+    set({
+      update: {
+        phase: "downloading",
+        percent: 0,
+        version: current.version,
+        error: null,
+      },
+    });
+    try {
+      await desktop.installUpdate();
+    } catch (error) {
+      set({
+        update: {
+          phase: "failed",
+          percent: null,
+          version: current.version,
+          error: message(error),
+        },
+      });
+    }
+  },
+  retryUpdate: async () => {
+    const { update, checkForUpdate, installUpdate } = get();
+    if (update.version) {
+      set({
+        update: {
+          phase: "available",
+          percent: null,
+          version: update.version,
+          error: null,
+        },
+      });
+      await installUpdate();
+      return;
+    }
+    await checkForUpdate();
+    if (get().update.phase === "available") {
+      await installUpdate();
+    }
+  },
+  openRepository: async () => {
+    await desktop.openUrl("https://github.com/devlifeX/BiFlow");
+  },
   clearError: () => set({ error: null }),
   clearInstallGuide: () => set({ installGuide: null, error: null }),
 }));
+
+function updateStatusToProgress(status: UpdateStatus): UpdateProgress {
+  if (!status.available) {
+    return {
+      phase: "current",
+      percent: null,
+      version: null,
+      error: null,
+    };
+  }
+  return {
+    phase: "available",
+    percent: null,
+    version: status.version,
+    error: null,
+  };
+}

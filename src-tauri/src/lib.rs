@@ -187,6 +187,97 @@ struct UpdateStatus {
     notes: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct UpdateProgress {
+    phase: String,
+    percent: Option<u8>,
+    version: Option<String>,
+    error: Option<String>,
+}
+
+fn update_download_percent(downloaded: usize, total: Option<u64>) -> Option<u8> {
+    let total = total?;
+    if total == 0 {
+        return Some(0);
+    }
+    let downloaded = u128::from(u64::try_from(downloaded).unwrap_or(u64::MAX));
+    let total = u128::from(total);
+    Some(u8::try_from((downloaded.saturating_mul(100) / total).min(100)).unwrap_or(100))
+}
+
+fn emit_update_progress<R: Runtime>(app: &AppHandle<R>, progress: UpdateProgress) {
+    if let Err(cause) = app.emit("update-progress", progress) {
+        warn!(
+            event = "update.progress_emit_failed",
+            section = "updates",
+            initiator = "install_update",
+            cause = %cause,
+            trace_route = "install_update->frontend_event",
+            "update progress event could not be emitted"
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_updater_self_replace_supported() -> bool {
+    linux_updater_self_replace_supported_from(std::env::var_os("APPIMAGE").as_ref())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_updater_self_replace_supported_from(appimage: Option<&std::ffi::OsString>) -> bool {
+    appimage.is_some()
+}
+
+#[cfg(target_os = "linux")]
+fn open_linux_deb_release(
+    app: &AppHandle,
+    operation_id: Uuid,
+) -> Result<OperationAccepted, String> {
+    info!(
+        event = "update.manual_package",
+        section = "updates",
+        initiator = "install_update",
+        cause = "linux_deb_package",
+        trace_route = "tauri_command->open_external_url",
+        trace_id = %operation_id,
+        "linux package cannot self-replace; opening the GitHub Release"
+    );
+    deps::open_allowlisted_url("https://github.com/devlifeX/BiFlow/releases/latest")
+        .map_err(|error| error.to_string())?;
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "manual".into(),
+            percent: None,
+            version: None,
+            error: None,
+        },
+    );
+    Ok(OperationAccepted {
+        operation_id,
+        already_complete: true,
+    })
+}
+
+async fn pause_stack_for_update(services: &AppServices) -> Result<(), String> {
+    if matches!(
+        services.engine.snapshot().phase,
+        StackPhase::Running | StackPhase::Degraded
+    ) {
+        services
+            .engine
+            .pause_stack()
+            .await
+            .map_err(|error| error.to_string())?;
+        services
+            .engine
+            .wait_for_phase(StackPhase::Paused, Duration::from_secs(25))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn services<R: Runtime>(app: &AppHandle<R>) -> Result<&AppServices, String> {
     app.try_state::<AppServices>()
         .map(|state| state.inner())
@@ -261,6 +352,30 @@ async fn stop_stack(app: AppHandle) -> Result<OperationAccepted, String> {
         services(&app)?
             .engine
             .stop_stack()
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn pause_stack(app: AppHandle) -> Result<OperationAccepted, String> {
+    diagnostics::trace_action("stack", "tauri_command", "pause_stack", async move {
+        services(&app)?
+            .engine
+            .pause_stack()
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn resume_stack(app: AppHandle) -> Result<OperationAccepted, String> {
+    diagnostics::trace_action("stack", "tauri_command", "resume_stack", async move {
+        services(&app)?
+            .engine
+            .resume_stack()
             .await
             .map_err(|error| error.to_string())
     })
@@ -811,41 +926,143 @@ async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     .await
 }
 
+async fn download_and_install_signed_update(
+    app: &AppHandle,
+    update: tauri_plugin_updater::Update,
+    operation_id: Uuid,
+    target_version: &str,
+) -> Result<(), String> {
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "downloading".into(),
+            percent: Some(0),
+            version: Some(target_version.to_owned()),
+            error: None,
+        },
+    );
+    let mut downloaded = 0usize;
+    let app_for_progress = app.clone();
+    let version_for_progress = target_version.to_owned();
+    update
+        .download_and_install(
+            move |chunk_length, content_length| {
+                downloaded = downloaded.saturating_add(chunk_length);
+                emit_update_progress(
+                    &app_for_progress,
+                    UpdateProgress {
+                        phase: "downloading".into(),
+                        percent: update_download_percent(downloaded, content_length),
+                        version: Some(version_for_progress.clone()),
+                        error: None,
+                    },
+                );
+            },
+            || {
+                emit_update_progress(
+                    app,
+                    UpdateProgress {
+                        phase: "installing".into(),
+                        percent: Some(100),
+                        version: Some(target_version.to_owned()),
+                        error: None,
+                    },
+                );
+            },
+        )
+        .await
+        .map_err(|error| {
+            let message = error.to_string();
+            emit_update_progress(
+                app,
+                UpdateProgress {
+                    phase: "failed".into(),
+                    percent: None,
+                    version: Some(target_version.to_owned()),
+                    error: Some(message.clone()),
+                },
+            );
+            error!(
+                event = "update.install_failed",
+                section = "updates",
+                initiator = "install_update",
+                cause = "download_or_install_error",
+                trace_route = "tauri_command->updater_plugin",
+                trace_id = %operation_id,
+                update_version = target_version,
+                "application update could not be installed"
+            );
+            message
+        })
+}
+
+fn schedule_update_restart(app: &AppHandle, operation_id: Uuid) -> OperationAccepted {
+    diagnostics::flush();
+    let restart_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        restart_app.restart();
+    });
+    OperationAccepted {
+        operation_id,
+        already_complete: false,
+    }
+}
+
+async fn perform_signed_update_install(
+    app: &AppHandle,
+    operation_id: Uuid,
+) -> Result<OperationAccepted, String> {
+    pause_stack_for_update(services(app)?).await?;
+    #[cfg(target_os = "linux")]
+    if !linux_updater_self_replace_supported() {
+        return open_linux_deb_release(app, operation_id);
+    }
+    let update = app
+        .updater()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("no update is available")?;
+    let target_version = update.version.clone();
+    info!(
+        event = "update.download_started",
+        section = "updates",
+        initiator = "install_update",
+        cause = "update_available",
+        trace_route = "tauri_command->updater_plugin->download",
+        trace_id = %operation_id,
+        update_version = %target_version,
+        "application update download started"
+    );
+    download_and_install_signed_update(app, update, operation_id, &target_version).await?;
+    info!(
+        event = "update.install_succeeded",
+        section = "updates",
+        initiator = "install_update",
+        cause = "download_and_install_complete",
+        trace_route = "tauri_command->updater_plugin->restart",
+        trace_id = %operation_id,
+        update_version = %target_version,
+        "application update installed; relaunching"
+    );
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "restarting".into(),
+            percent: Some(100),
+            version: Some(target_version),
+            error: None,
+        },
+    );
+    Ok(schedule_update_restart(app, operation_id))
+}
+
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("updates", "tauri_command", "install_update", async move {
-        let services = services(&app)?;
-        let operation_id = Uuid::new_v4();
-        if matches!(
-            services.engine.snapshot().phase,
-            StackPhase::Running | StackPhase::Degraded
-        ) {
-            services
-                .engine
-                .stop_stack()
-                .await
-                .map_err(|error| error.to_string())?;
-            services
-                .engine
-                .wait_for_phase(StackPhase::Stopped, Duration::from_secs(25))
-                .await
-                .map_err(|error| error.to_string())?;
-        }
-        let update = app
-            .updater()
-            .map_err(|error| error.to_string())?
-            .check()
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or("no update is available")?;
-        update
-            .download_and_install(|_, _| {}, || {})
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(OperationAccepted {
-            operation_id,
-            already_complete: false,
-        })
+        perform_signed_update_install(&app, Uuid::new_v4()).await
     })
     .await
 }
@@ -991,6 +1208,54 @@ fn connect_from_tray<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
+fn pause_from_tray<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = diagnostics::trace_action("stack", "tray_menu", "pause_stack", async move {
+            services(&app)?
+                .engine
+                .pause_stack()
+                .await
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        if let Err(cause) = result {
+            error!(
+                event = "tray.action_failed",
+                section = "stack",
+                initiator = "tray_menu",
+                cause,
+                trace_route = "tray_menu->pause_stack",
+                "tray pause action failed"
+            );
+        }
+    });
+}
+
+fn resume_from_tray<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let result = diagnostics::trace_action("stack", "tray_menu", "resume_stack", async move {
+            services(&app)?
+                .engine
+                .resume_stack()
+                .await
+                .map_err(|error| error.to_string())
+        })
+        .await;
+        if let Err(cause) = result {
+            error!(
+                event = "tray.action_failed",
+                section = "stack",
+                initiator = "tray_menu",
+                cause,
+                trace_route = "tray_menu->resume_stack",
+                "tray resume action failed"
+            );
+        }
+    });
+}
+
 fn disconnect_from_tray<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1063,6 +1328,8 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
             show_main(app);
         }
         "connect" => connect_from_tray(app),
+        "pause" => pause_from_tray(app),
+        "resume" => resume_from_tray(app),
         "disconnect" => disconnect_from_tray(app),
         "quit" => {
             info!(
@@ -1076,6 +1343,27 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
             app.exit(0);
         }
         "disconnect_quit" => disconnect_and_quit_from_tray(app),
+        "about" => {
+            info!(
+                event = "window.about_requested",
+                section = "window",
+                initiator = "tray_menu",
+                cause = "about_selected",
+                trace_route = "tray_menu->show_main->app-navigate",
+                "about page requested from tray"
+            );
+            show_main(app);
+            if let Err(cause) = app.emit("app-navigate", "about") {
+                warn!(
+                    event = "navigation.emit_failed",
+                    section = "window",
+                    initiator = "tray_menu",
+                    cause = %cause,
+                    trace_route = "tray_menu->emit(app-navigate)",
+                    "about navigation event could not be emitted"
+                );
+            }
+        }
         unknown => warn!(
             event = "tray.unknown_action",
             section = "tray",
@@ -1090,8 +1378,11 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
 
 fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     let connect = MenuItem::with_id(app, "connect", "Connect", true, None::<&str>)?;
+    let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>)?;
+    let resume = MenuItem::with_id(app, "resume", "Resume", true, None::<&str>)?;
     let disconnect = MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "About", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit UI", true, None::<&str>)?;
     let disconnect_quit = MenuItem::with_id(
         app,
@@ -1102,9 +1393,22 @@ fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
     )?;
     let menu = Menu::with_items(
         app,
-        &[&connect, &disconnect, &open, &quit, &disconnect_quit],
+        &[
+            &connect,
+            &pause,
+            &resume,
+            &disconnect,
+            &open,
+            &about,
+            &quit,
+            &disconnect_quit,
+        ],
     )?;
+    let icon = app.default_window_icon().cloned().ok_or_else(|| {
+        tauri::Error::from(std::io::Error::other("default window icon is missing"))
+    })?;
     TrayIconBuilder::new()
+        .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| handle_tray_icon(tray, &event))
@@ -1218,6 +1522,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
                 health_engine.snapshot().phase,
                 StackPhase::Stopped
                     | StackPhase::Running
+                    | StackPhase::Paused
                     | StackPhase::Degraded
                     | StackPhase::Error
             ) {
@@ -1292,6 +1597,7 @@ pub fn run() {
             show_main(app);
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(setup_application)
         .on_window_event(handle_window_event)
@@ -1301,6 +1607,8 @@ pub fn run() {
             get_network_status,
             start_stack,
             stop_stack,
+            pause_stack,
+            resume_stack,
             restart_stack,
             cancel_operation,
             get_settings,
@@ -1339,8 +1647,41 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use super::{update_download_percent, UpdateProgress};
+
+    #[test]
+    fn update_download_percent_is_bounded() {
+        assert_eq!(update_download_percent(0, Some(100)), Some(0));
+        assert_eq!(update_download_percent(50, Some(100)), Some(50));
+        assert_eq!(update_download_percent(100, Some(100)), Some(100));
+        assert_eq!(update_download_percent(150, Some(100)), Some(100));
+        assert_eq!(update_download_percent(10, None), None);
+    }
+
+    #[test]
+    fn update_progress_serializes_expected_phases() {
+        let progress = UpdateProgress {
+            phase: "downloading".into(),
+            percent: Some(42),
+            version: Some("1.2.0".into()),
+            error: None,
+        };
+        let json = serde_json::to_value(progress).expect("serialize update progress");
+        assert_eq!(json["phase"], "downloading");
+        assert_eq!(json["percent"], 42);
+    }
+
     #[cfg(target_os = "linux")]
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_deb_packages_do_not_self_replace() {
+        assert!(!linux_updater_self_replace_supported_from(None));
+        assert!(linux_updater_self_replace_supported_from(Some(
+            &std::ffi::OsString::from("/tmp/BiFlow.AppImage"),
+        )));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

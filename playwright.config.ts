@@ -14,6 +14,7 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:1420",
     trace: "on-first-retry",
+    viewport: { width: 1120, height: 760 },
   },
   webServer: {
     command: "pnpm --dir apps/desktop dev --host 127.0.0.1",
@@ -24,7 +25,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 1120, height: 760 },
+      },
     },
   ],
 });

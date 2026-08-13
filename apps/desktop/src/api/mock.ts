@@ -18,6 +18,7 @@ import type {
   RouteTestResult,
   StackPhase,
   StackSnapshot,
+  UpdateProgress,
   UpdateStatus,
   ValidationIssue,
 } from "./models";
@@ -103,6 +104,7 @@ function initialCloudRules(): CloudRulesStatus {
     ip_count: 2_906,
     last_synced_at: null,
     source: "bundled",
+    snapshot_revision: null,
     sets: [
       {
         id: "iran-domains",
@@ -290,6 +292,52 @@ function mockDebugLogStatus(): DebugLogStatus {
 }
 
 const listeners = new Set<(next: StackSnapshot) => void>();
+const updateListeners = new Set<(progress: UpdateProgress) => void>();
+
+function mockUpdateAvailable(): boolean {
+  return (
+    typeof sessionStorage !== "undefined" &&
+    sessionStorage.getItem("biflow-mock-update-available") === "1"
+  );
+}
+
+function mockUpdateShouldFail(): boolean {
+  return (
+    typeof sessionStorage !== "undefined" &&
+    sessionStorage.getItem("biflow-mock-update-fail") === "1"
+  );
+}
+
+function emitUpdateProgress(progress: UpdateProgress) {
+  for (const listener of updateListeners) {
+    listener(structuredClone(progress));
+  }
+}
+
+async function simulateInstallProgress(version: string) {
+  for (const percent of [0, 35, 70, 100]) {
+    emitUpdateProgress({
+      phase: "downloading",
+      percent,
+      version,
+      error: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  emitUpdateProgress({
+    phase: "installing",
+    percent: 100,
+    version,
+    error: null,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  emitUpdateProgress({
+    phase: "restarting",
+    percent: 100,
+    version,
+    error: null,
+  });
+}
 
 function emit(phase: StackPhase, operationId: string | null) {
   snapshot = {
@@ -389,6 +437,40 @@ export const mockApi = {
     }, 350);
     return accepted;
   },
+  async pause(): Promise<OperationAccepted> {
+    if (snapshot.phase === "paused") {
+      return { operation_id: crypto.randomUUID(), already_complete: true };
+    }
+    if (snapshot.phase !== "running" && snapshot.phase !== "degraded") {
+      return { operation_id: crypto.randomUUID(), already_complete: true };
+    }
+    const accepted = operation();
+    emit("stopping", accepted.operation_id);
+    window.setTimeout(() => {
+      snapshot = {
+        ...snapshot,
+        hiddify: component("running", "Hiddify proxy is listening"),
+        mihomo: component("stopped", "Mihomo controller is not listening"),
+        tun: component("stopped", "TUN interface is absent"),
+        dns: component("stopped", "DNS listener is inactive"),
+        providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
+        exit_ip: null,
+      };
+      emit("paused", null);
+    }, 350);
+    return accepted;
+  },
+  async resume(): Promise<OperationAccepted> {
+    if (snapshot.phase === "running") {
+      return { operation_id: crypto.randomUUID(), already_complete: true };
+    }
+    if (snapshot.phase !== "paused") {
+      return { operation_id: crypto.randomUUID(), already_complete: true };
+    }
+    const accepted = operation();
+    void runStart(accepted);
+    return accepted;
+  },
   async cancel(operationId: string) {
     if (snapshot.operation_id === operationId) {
       emit("stopped", null);
@@ -477,7 +559,8 @@ export const mockApi = {
     cloudRules = {
       ...cloudRules,
       last_synced_at: now(),
-      source: "jsdelivr",
+      source: "devlifeX/BiFlow",
+      snapshot_revision: "767ef8bf5673",
       domain_count: 63_104,
       ip_count: 2_912,
     };
@@ -567,7 +650,38 @@ export const mockApi = {
     };
   },
   async checkUpdate(): Promise<UpdateStatus> {
+    if (mockUpdateShouldFail()) {
+      throw new Error("Malformed update manifest");
+    }
+    if (mockUpdateAvailable()) {
+      return {
+        available: true,
+        version: "9.9.9",
+        notes: "Mock signed release",
+      };
+    }
     return { available: false, version: null, notes: null };
+  },
+  async installUpdate(): Promise<OperationAccepted> {
+    if (mockUpdateShouldFail()) {
+      emitUpdateProgress({
+        phase: "failed",
+        percent: null,
+        version: "9.9.9",
+        error: "Signature verification failed",
+      });
+      throw new Error("Signature verification failed");
+    }
+    if (!mockUpdateAvailable()) {
+      throw new Error("no update is available");
+    }
+    const accepted = operation();
+    await simulateInstallProgress("9.9.9");
+    return accepted;
+  },
+  subscribeUpdateProgress(listener: (progress: UpdateProgress) => void) {
+    updateListeners.add(listener);
+    return () => updateListeners.delete(listener);
   },
   subscribe(listener: (next: StackSnapshot) => void) {
     listeners.add(listener);
@@ -596,6 +710,7 @@ export function resetMockState() {
     fields: { mode: "development" },
   });
   listeners.clear();
+  updateListeners.clear();
 }
 
 if (typeof window !== "undefined") {

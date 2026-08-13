@@ -7,7 +7,7 @@ CRATE_BIN="iran-split-desktop"
 BUILD_VERSION=""
 WINDOWS_TARGET=""
 WINDOWS_TAURI_ARGS=()
-NODE_VERSION="22.15.2"
+NODE_VERSION="24.11.1"
 PNPM_VERSION="9.0.1"
 # cargo-xwin 0.20+ requires rustc 1.89; pin the last release that builds on 1.88.
 CARGO_XWIN_VERSION="0.19.2"
@@ -55,18 +55,23 @@ usage() {
   command cat <<'EOF'
 BiFlow release builder
 
-Usage: ./build.sh [linux|windows|all]
+Usage: ./build.sh [mode]
 
-  linux     Native Linux .deb and AppImage
-            →  artifacts/linux/BiFlow_<version>_amd64.deb
-            →  artifacts/linux/BiFlow_<version>_amd64.AppImage
-  windows   Windows app .exe and NSIS installer
-            →  artifacts/windows/BiFlow.exe
-            →  artifacts/windows/BiFlow_<version>_x64-setup.exe
-  all       Linux and Windows (default)
+Focused local verification (default developer gate):
+  check-frontend   pnpm check and pnpm build only
+  check-rust       cargo test + clippy for named workspace crates
 
-One-shot: missing tools are installed, then packages are built.
-Installs Node.js 22, pnpm, Rust (from rust-toolchain.toml), Linux desktop
+GitHub-hosted packaging entry points:
+  ci-linux       Native Linux .deb and AppImage
+  ci-windows     Native Windows .exe and NSIS installer
+
+Full packaging (machines with spare disk; not the local default):
+  linux          Native Linux .deb and AppImage
+  windows        Windows app .exe and NSIS installer
+  all            Linux and Windows (default when no mode is given)
+
+One-shot packaging installs missing tools, then builds.
+Installs Node.js 24, pnpm, Rust (from rust-toolchain.toml), Linux desktop
 libraries, NSIS, and cargo-xwin as needed.
 
 Version is read from the root version file. Do not edit package.json,
@@ -160,7 +165,7 @@ ensure_node() {
   local major
   if have node; then
     major="$(node_major)"
-    if [[ "${major}" -ge 22 ]]; then
+    if [[ "${major}" -ge 24 ]]; then
       log "Node.js $(node -v) is ready"
       return 0
     fi
@@ -259,6 +264,7 @@ ensure_linux_desktop_dependencies() {
         "${indicator}" \
         librsvg2-dev \
         patchelf \
+        xdg-utils \
         "${fuse2}"
       ;;
     *)
@@ -395,10 +401,12 @@ ensure_requirements() {
   ensure_node_modules
   ensure_rust
   case "${target}" in
-    linux)
+    check-frontend|check-rust)
+      ;;
+    linux|ci-linux)
       ensure_linux_desktop_dependencies
       ;;
-    windows)
+    windows|ci-windows)
       if [[ "$(host_os)" == "linux" ]]; then
         ensure_windows_cross_from_linux
       fi
@@ -413,10 +421,51 @@ ensure_requirements() {
   log "All build requirements are ready"
 }
 
+check_frontend() {
+  log "Running frontend done gate..."
+  (cd -- "${PROJECT_DIR}" && pnpm version:sync)
+  (cd -- "${PROJECT_DIR}" && pnpm check)
+  (cd -- "${PROJECT_DIR}" && pnpm build)
+  log "Frontend check passed"
+}
+
+check_rust() {
+  shift
+  [[ "$#" -gt 0 ]] || die "check-rust requires at least one workspace crate name"
+  refresh_path
+  ensure_rust
+  local crate
+  for crate in "$@"; do
+    log "Testing crate ${crate}..."
+    (cd -- "${PROJECT_DIR}" && cargo test -p "${crate}")
+    log "Clippy for crate ${crate}..."
+    (cd -- "${PROJECT_DIR}" && cargo clippy -p "${crate}" --all-targets -- -D warnings)
+  done
+  log "Rust check passed for: $*"
+}
+
 main() {
   local target="${1:-all}"
   case "${target}" in
     -h|--help|help) usage; return 0 ;;
+    check-frontend)
+      ensure_requirements "${target}"
+      check_frontend
+      return 0
+      ;;
+    check-rust)
+      ensure_requirements "${target}"
+      check_rust "$@"
+      return 0
+      ;;
+    ci-linux)
+      [[ "$(host_os)" == "linux" ]] || die "ci-linux requires a native Linux runner"
+      target="linux"
+      ;;
+    ci-windows)
+      [[ "$(host_os)" == "windows" ]] || die "ci-windows requires a native Windows runner"
+      target="windows"
+      ;;
     linux|windows|all) ;;
     *) usage >&2; die "unknown target: ${target}" ;;
   esac

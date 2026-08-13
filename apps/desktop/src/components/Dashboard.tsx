@@ -27,6 +27,8 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   const {
     actionPending,
     toggleConnection,
+    pauseConnection,
+    resumeConnection,
     cancel,
     boot,
     dependencies,
@@ -34,6 +36,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
     installDependency,
   } = useAppStore();
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
+  const paused = snapshot.phase === "paused";
   const operating =
     progressPhases.includes(snapshot.phase) || snapshot.phase === "stopping";
   const progressIndex = progressPhases.indexOf(snapshot.phase);
@@ -46,23 +49,28 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   ].some(({ phase }) => phase === "error" || phase === "unavailable");
 
   return (
-    <section aria-labelledby="dashboard-title" className="space-y-6">
+    <section
+      aria-labelledby="dashboard-title"
+      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
+    >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="mb-1 text-sm font-medium text-brand">{t("status")}</p>
           <h1
             id="dashboard-title"
-            className="text-3xl font-semibold tracking-tight"
+            className="text-2xl font-semibold tracking-tight"
           >
             {active
               ? t("activeTitle")
-              : needsAttention
-                ? t("setupNeedsAttention")
-                : t("readyTitle")}
+              : paused
+                ? t("pausedTitle")
+                : needsAttention
+                  ? t("setupNeedsAttention")
+                  : t("readyTitle")}
           </h1>
           <p className="mt-2 max-w-2xl text-muted">{t("routingSummary")}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {operating && snapshot.operation_id ? (
             <button
               type="button"
@@ -72,14 +80,45 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
               {t("cancel")}
             </button>
           ) : null}
-          <button
-            type="button"
-            disabled={actionPending || operating}
-            onClick={() => void toggleConnection()}
-            className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
-          >
-            {active ? t("disconnect") : t("connect")}
-          </button>
+          {active ? (
+            <button
+              type="button"
+              disabled={actionPending || operating}
+              onClick={() => void pauseConnection()}
+              className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
+            >
+              {t("pause")}
+            </button>
+          ) : null}
+          {paused ? (
+            <button
+              type="button"
+              disabled={actionPending || operating}
+              onClick={() => void resumeConnection()}
+              className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              {t("resume")}
+            </button>
+          ) : null}
+          {!paused ? (
+            <button
+              type="button"
+              disabled={actionPending || operating}
+              onClick={() => void toggleConnection()}
+              className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
+            >
+              {active ? t("disconnect") : t("connect")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={actionPending || operating}
+              onClick={() => void toggleConnection()}
+              className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
+            >
+              {t("disconnect")}
+            </button>
+          )}
         </div>
       </div>
 

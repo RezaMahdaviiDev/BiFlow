@@ -36,6 +36,9 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   const synced = cloudRules?.last_synced_at
     ? new Date(cloudRules.last_synced_at).toLocaleString()
     : t("neverSynced");
+  const snapshotRevision =
+    cloudRules?.snapshot_revision?.slice(0, 12) ??
+    (cloudRules?.source === "bundled" ? t("bundledSnapshotRevision") : "—");
 
   async function test(target: string) {
     setTesting(true);
@@ -47,12 +50,15 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   }
 
   return (
-    <section aria-labelledby="rules-title" className="space-y-5">
-      <header>
-        <h1 id="rules-title" className="text-3xl font-semibold tracking-tight">
+    <section
+      aria-labelledby="rules-title"
+      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
+    >
+      <header className="shrink-0">
+        <h1 id="rules-title" className="text-2xl font-semibold tracking-tight">
           Direct rules
         </h1>
-        <p className="mt-2 text-muted">
+        <p className="mt-1 text-sm text-muted">
           Exact domains and literal IPs added here take precedence and apply
           without restarting the tunnel.
         </p>
@@ -76,7 +82,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
             {actionPending ? t("syncing") : t("updateFromCloud")}
           </button>
         </div>
-        <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+        <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
             label={t("domains")}
             value={(cloudRules?.domain_count ?? 0).toLocaleString()}
@@ -86,7 +92,11 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
             value={(cloudRules?.ip_count ?? 0).toLocaleString()}
           />
           <Stat label={t("lastSynced")} value={synced} />
+          <Stat label={t("snapshotRevision")} value={snapshotRevision} />
         </dl>
+        <p className="mt-3 text-sm text-muted">
+          {t("cloudRulesSource")}: devlifeX/BiFlow
+        </p>
       </div>
 
       <form
@@ -141,13 +151,13 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
         </button>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-ink/10 bg-surface">
+      <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-ink/10 bg-surface">
         {filtered.length === 0 ? (
           <p className="p-8 text-center text-muted">
             No matching direct rules.
           </p>
         ) : (
-          <ul className="divide-y divide-ink/10">
+          <ul className="max-h-full divide-y divide-ink/10 overflow-y-auto">
             {filtered.map((rule) => (
               <li
                 key={`${rule.target.kind}:${rule.target.value}`}

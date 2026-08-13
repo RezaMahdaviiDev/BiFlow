@@ -30,6 +30,7 @@ const formSchema = z.object({
 });
 
 type FormValues = z.infer<typeof formSchema>;
+type SettingsTab = "hiddify" | "mihomo" | "behavior";
 
 function toValues(config: AppConfig): FormValues {
   return {
@@ -82,6 +83,7 @@ function merge(config: AppConfig, values: FormValues): AppConfig {
 
 export function Settings({ settings }: { settings: AppConfig }) {
   const { saveSettings, actionPending } = useAppStore();
+  const [tab, setTab] = useState<SettingsTab>("hiddify");
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const {
     register,
@@ -103,132 +105,195 @@ export function Settings({ settings }: { settings: AppConfig }) {
   });
 
   return (
-    <section aria-labelledby="settings-title" className="space-y-5">
-      <header>
+    <section
+      aria-labelledby="settings-title"
+      className="flex h-full min-h-0 flex-col overflow-hidden"
+    >
+      <header className="shrink-0">
         <h1
           id="settings-title"
-          className="text-3xl font-semibold tracking-tight"
+          className="text-2xl font-semibold tracking-tight"
         >
           Settings
         </h1>
-        <p className="mt-2 text-muted">
+        <p className="mt-1 text-sm text-muted">
           Advanced ports stay on loopback and are checked for conflicts before
           publication.
         </p>
       </header>
 
-      <form onSubmit={(event) => void submit(event)} className="space-y-4">
-        <Fieldset legend="Hiddify upstream">
-          <Field label="Host" error={errors.hiddifyHost?.message}>
-            <input
-              {...register("hiddifyHost")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field label="SOCKS / mixed port" error={errors.hiddifyPort?.message}>
-            <input
-              type="number"
-              {...register("hiddifyPort")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field
-            label="Start timeout (seconds)"
-            error={errors.startTimeout?.message}
-          >
-            <input
-              type="number"
-              {...register("startTimeout")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Check
-            label="Stop Hiddify with stack"
-            registration={register("stopWithStack")}
-          />
-        </Fieldset>
+      <div
+        role="tablist"
+        aria-label="Settings sections"
+        className="mt-4 flex shrink-0 gap-1 rounded-xl border border-ink/10 bg-canvas p-1"
+      >
+        <TabButton
+          id="settings-tab-hiddify"
+          selected={tab === "hiddify"}
+          controls="settings-panel-hiddify"
+          onSelect={() => setTab("hiddify")}
+        >
+          Hiddify
+        </TabButton>
+        <TabButton
+          id="settings-tab-mihomo"
+          selected={tab === "mihomo"}
+          controls="settings-panel-mihomo"
+          onSelect={() => setTab("mihomo")}
+        >
+          Mihomo
+        </TabButton>
+        <TabButton
+          id="settings-tab-behavior"
+          selected={tab === "behavior"}
+          controls="settings-panel-behavior"
+          onSelect={() => setTab("behavior")}
+        >
+          Behavior
+        </TabButton>
+      </div>
 
-        <Fieldset legend="Mihomo and network">
-          <Field label="Controller port" error={errors.controllerPort?.message}>
-            <input
-              type="number"
-              {...register("controllerPort")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field label="Mixed port" error={errors.mixedPort?.message}>
-            <input
-              type="number"
-              {...register("mixedPort")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field label="DNS port" error={errors.dnsPort?.message}>
-            <input
-              type="number"
-              {...register("dnsPort")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field label="TUN name" error={errors.tunName?.message}>
-            <input
-              {...register("tunName")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field label="Log level" error={errors.logLevel?.message}>
-            <select
-              {...register("logLevel")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
+      <form
+        onSubmit={(event) => void submit(event)}
+        className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto pe-1">
+          {tab === "hiddify" ? (
+            <Fieldset
+              id="settings-panel-hiddify"
+              labelledBy="settings-tab-hiddify"
+              legend="Hiddify upstream"
             >
-              <option value="error">Error</option>
-              <option value="warn">Warning</option>
-              <option value="info">Info</option>
-              <option value="debug">Debug</option>
-            </select>
-          </Field>
-        </Fieldset>
+              <Field label="Host" error={errors.hiddifyHost?.message}>
+                <input
+                  {...register("hiddifyHost")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                label="SOCKS / mixed port"
+                error={errors.hiddifyPort?.message}
+              >
+                <input
+                  type="number"
+                  {...register("hiddifyPort")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                label="Start timeout (seconds)"
+                error={errors.startTimeout?.message}
+              >
+                <input
+                  type="number"
+                  {...register("startTimeout")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Check
+                label="Stop Hiddify with stack"
+                registration={register("stopWithStack")}
+              />
+            </Fieldset>
+          ) : null}
 
-        <Fieldset legend="Behavior and refresh">
-          <Field
-            label="Custom rule refresh (minutes)"
-            error={errors.refreshMinutes?.message}
-          >
-            <input
-              type="number"
-              {...register("refreshMinutes")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <Field
-            label="Upstream refresh (hours)"
-            error={errors.upstreamHours?.message}
-          >
-            <input
-              type="number"
-              {...register("upstreamHours")}
-              className="w-full rounded-xl border-ink/15 bg-canvas"
-            />
-          </Field>
-          <div className="space-y-3">
-            <Check
-              label="Launch at login"
-              registration={register("launchAtLogin")}
-            />
-            <Check
-              label="Connect at launch"
-              registration={register("connectAtLaunch")}
-            />
-            <Check
-              label="Close window to tray"
-              registration={register("closeToTray")}
-            />
-          </div>
-        </Fieldset>
+          {tab === "mihomo" ? (
+            <Fieldset
+              id="settings-panel-mihomo"
+              labelledBy="settings-tab-mihomo"
+              legend="Mihomo and network"
+            >
+              <Field
+                label="Controller port"
+                error={errors.controllerPort?.message}
+              >
+                <input
+                  type="number"
+                  {...register("controllerPort")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field label="Mixed port" error={errors.mixedPort?.message}>
+                <input
+                  type="number"
+                  {...register("mixedPort")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field label="DNS port" error={errors.dnsPort?.message}>
+                <input
+                  type="number"
+                  {...register("dnsPort")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field label="TUN name" error={errors.tunName?.message}>
+                <input
+                  {...register("tunName")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field label="Log level" error={errors.logLevel?.message}>
+                <select
+                  {...register("logLevel")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                >
+                  <option value="error">Error</option>
+                  <option value="warn">Warning</option>
+                  <option value="info">Info</option>
+                  <option value="debug">Debug</option>
+                </select>
+              </Field>
+            </Fieldset>
+          ) : null}
+
+          {tab === "behavior" ? (
+            <Fieldset
+              id="settings-panel-behavior"
+              labelledBy="settings-tab-behavior"
+              legend="Behavior and refresh"
+            >
+              <Field
+                label="Custom rule refresh (minutes)"
+                error={errors.refreshMinutes?.message}
+              >
+                <input
+                  type="number"
+                  {...register("refreshMinutes")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                label="Upstream refresh (hours)"
+                error={errors.upstreamHours?.message}
+              >
+                <input
+                  type="number"
+                  {...register("upstreamHours")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <div className="space-y-3 sm:col-span-2">
+                <Check
+                  label="Launch at login"
+                  registration={register("launchAtLogin")}
+                />
+                <Check
+                  label="Connect at launch"
+                  registration={register("connectAtLaunch")}
+                />
+                <Check
+                  label="Close window to tray"
+                  registration={register("closeToTray")}
+                />
+              </div>
+            </Fieldset>
+          ) : null}
+        </div>
 
         {issues.length > 0 ? (
           <ul
-            className="rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm text-danger"
+            className="mt-3 shrink-0 rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm text-danger"
             role="alert"
           >
             {issues.map((issue) => (
@@ -241,7 +306,7 @@ export function Settings({ settings }: { settings: AppConfig }) {
 
         <button
           disabled={actionPending || !isDirty}
-          className="inline-flex items-center gap-2 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
+          className="mt-3 inline-flex shrink-0 items-center gap-2 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
         >
           <Save size={18} aria-hidden /> Save settings
         </button>
@@ -250,15 +315,57 @@ export function Settings({ settings }: { settings: AppConfig }) {
   );
 }
 
+function TabButton({
+  id,
+  selected,
+  controls,
+  onSelect,
+  children,
+}: {
+  id: string;
+  selected: boolean;
+  controls: string;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={id}
+      aria-selected={selected}
+      aria-controls={controls}
+      tabIndex={selected ? 0 : -1}
+      onClick={onSelect}
+      className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${
+        selected
+          ? "bg-surface text-brand shadow-sm"
+          : "text-muted hover:text-ink"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function Fieldset({
+  id,
+  labelledBy,
   legend,
   children,
 }: {
+  id: string;
+  labelledBy: string;
   legend: string;
   children: React.ReactNode;
 }) {
   return (
-    <fieldset className="grid gap-4 rounded-2xl border border-ink/10 bg-surface p-5 sm:grid-cols-2">
+    <fieldset
+      id={id}
+      role="tabpanel"
+      aria-labelledby={labelledBy}
+      className="grid gap-4 rounded-2xl border border-ink/10 bg-surface p-5 sm:grid-cols-2"
+    >
       <legend className="px-2 font-semibold">{legend}</legend>
       {children}
     </fieldset>

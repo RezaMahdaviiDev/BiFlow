@@ -39,9 +39,9 @@ describe("release artifact names", () => {
     assert.match(result.stdout, /\.deb/);
     assert.match(result.stdout, /AppImage/);
     assert.match(result.stdout, /NSIS installer/);
-    assert.match(result.stdout, /BiFlow\.exe/);
+    assert.match(result.stdout, /\.exe/);
     assert.match(result.stdout, /One-shot/);
-    assert.match(result.stdout, /missing tools are installed/i);
+    assert.match(result.stdout, /installs missing tools/i);
   });
 
   it("bootstraps cargo with rustup instead of exiting when cargo is missing", () => {
@@ -289,8 +289,11 @@ describe("release artifact names", () => {
     assert.match(workflow, /--draft/);
     assert.match(workflow, /gh release upload/);
     assert.match(workflow, /gh release edit/);
+    assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
+    assert.match(workflow, /generate-latest-json\.mjs/);
+    assert.match(workflow, /latest\.json/);
+    assert.match(workflow, /\.AppImage\.sig/);
     assert.doesNotMatch(workflow, /includeUpdaterJson|releaseDraft|tagName:/);
-    assert.doesNotMatch(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
     assert.doesNotMatch(workflow, /hiddify/i);
     assert.doesNotMatch(workflow, /mihomo/i);
     assert.match(workflow, /ADR 0004/);
@@ -318,6 +321,52 @@ describe("release artifact names", () => {
     assert.ok(
       autocrlf >= 0 && checkout > autocrlf,
       "Release Windows autocrlf must be set before checkout",
+    );
+  });
+
+  it("pins Node 24 in build.sh and package engines", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    const workspace = JSON.parse(
+      readFileSync(join(root, "package.json"), "utf8"),
+    );
+    assert.match(source, /NODE_VERSION="24\./);
+    assert.match(source, /\[\[ "\$\{major\}" -ge 24 \]\]/);
+    assert.equal(workspace.engines.node, ">=24");
+  });
+
+  it("documents focused check and ci build.sh modes", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    assert.match(source, /check-frontend/);
+    assert.match(source, /check-rust/);
+    assert.match(source, /ci-linux/);
+    assert.match(source, /ci-windows/);
+    assert.match(source, /check_frontend\(\)/);
+    assert.match(source, /check_rust\(\)/);
+    assert.match(source, /pnpm check/);
+    assert.match(source, /cargo test -p/);
+    assert.match(source, /cargo clippy -p/);
+    assert.match(source, /ci-linux requires a native Linux runner/);
+    assert.match(source, /ci-windows requires a native Windows runner/);
+  });
+
+  it("defines a non-publishing package dry-run workflow", () => {
+    const workflow = readFileSync(
+      join(root, ".github/workflows/package-dry-run.yml"),
+      "utf8",
+    );
+    assert.match(workflow, /workflow_dispatch:/);
+    assert.match(workflow, /ubuntu-24\.04/);
+    assert.match(workflow, /windows-2025/);
+    assert.match(workflow, /actions\/upload-artifact@v4/);
+    assert.doesNotMatch(workflow, /gh release/);
+    assert.match(workflow, /node-version: 24/);
+    const autocrlf = workflow.indexOf(
+      "git config --global core.autocrlf false",
+    );
+    const checkout = workflow.indexOf("actions/checkout@v4");
+    assert.ok(
+      autocrlf >= 0 && checkout > autocrlf,
+      "Windows autocrlf must be set before checkout",
     );
   });
 

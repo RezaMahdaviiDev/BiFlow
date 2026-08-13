@@ -9,6 +9,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 # Tag v* publishes Linux .deb + AppImage and Windows portable .exe + NSIS.
 # Third-party VPN apps stay in-app (ADR 0004); this workflow does not vendor them.
@@ -122,6 +124,7 @@ jobs:
           path: |
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.AppImage.sig
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows release artifacts
@@ -132,6 +135,7 @@ jobs:
           path: |
             BiFlow.exe
             target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
           retention-days: 7
 
@@ -141,11 +145,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: release-assets
           merge-multiple: true
+      - name: Generate and validate latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/generate-latest-json.mjs \
+            --assets release-assets \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${{ github.repository }}" \
+            --output release-assets/latest.json \
+            --notes "BiFlow ${GITHUB_REF_NAME#v}"
       - name: Validate and publish the complete release
         shell: bash
         env:
@@ -155,16 +173,19 @@ jobs:
           set -euo pipefail
           mapfile -t debs < <(find release-assets -type f -name '*.deb' -print | sort)
           mapfile -t appimages < <(find release-assets -type f -name '*.AppImage' -print | sort)
+          mapfile -t appimage_sigs < <(find release-assets -type f -name '*.AppImage.sig' -print | sort)
           mapfile -t portable < <(find release-assets -type f -name 'BiFlow.exe' -print | sort)
           mapfile -t installers < <(find release-assets -type f -name '*-setup.exe' -print | sort)
+          mapfile -t installer_sigs < <(find release-assets -type f -name '*-setup.exe.sig' -print | sort)
+          mapfile -t manifests < <(find release-assets -type f -name 'latest.json' -print | sort)
 
-          if (( ${#debs[@]} != 1 || ${#appimages[@]} != 1 || ${#portable[@]} != 1 || ${#installers[@]} != 1 )); then
-            echo "Expected one deb, AppImage, portable exe, and NSIS installer"
+          if (( ${#debs[@]} != 1 || ${#appimages[@]} != 1 || ${#appimage_sigs[@]} != 1 || ${#portable[@]} != 1 || ${#installers[@]} != 1 || ${#installer_sigs[@]} != 1 || ${#manifests[@]} != 1 )); then
+            echo "Expected one deb, AppImage, AppImage signature, portable exe, NSIS installer, NSIS signature, and latest.json"
             find release-assets -type f -print
             exit 1
           fi
 
-          assets=("${debs[@]}" "${appimages[@]}" "${portable[@]}" "${installers[@]}")
+          assets=("${debs[@]}" "${appimages[@]}" "${appimage_sigs[@]}" "${portable[@]}" "${installers[@]}" "${installer_sigs[@]}" "${manifests[@]}")
           if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release create "${GITHUB_REF_NAME}" \
               --draft \

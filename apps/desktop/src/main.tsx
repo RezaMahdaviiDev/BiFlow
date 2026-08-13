@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./i18n/config";
 import "./index.css";
+import { installContextMenuGuard } from "./installContextMenuGuard";
+
+installContextMenuGuard();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

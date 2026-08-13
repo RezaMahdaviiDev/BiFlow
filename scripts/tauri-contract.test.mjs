@@ -51,6 +51,30 @@ describe("Tauri frontend contract", () => {
     assert.match(frontend, /window\.__TAURI_INTERNALS__ !== undefined/);
     assert.match(frontend, /listen<StackSnapshot>\("stack-snapshot"/);
     assert.match(rust, /emit\("stack-snapshot"/);
+    assert.match(rust, /emit\("update-progress"/);
+  });
+
+  it("fixes the main window at 1120x760 without resize", () => {
+    const config = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+    );
+    const window = config.app.windows[0];
+    assert.equal(window.width, 1120);
+    assert.equal(window.height, 760);
+    assert.equal(window.minWidth, 1120);
+    assert.equal(window.minHeight, 760);
+    assert.equal(window.maxWidth, 1120);
+    assert.equal(window.maxHeight, 760);
+    assert.equal(window.resizable, false);
+  });
+
+  it("assigns the default application icon to the tray builder", () => {
+    const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    assert.match(rust, /default_window_icon\(\)/);
+    assert.match(
+      rust,
+      /TrayIconBuilder::new\(\)[\s\S]*?\.icon\(icon\)[\s\S]*?\.menu\(&menu\)/,
+    );
   });
 
   it("uses tail expressions in cfg blocks so host Clippy needless_return stays clean", () => {

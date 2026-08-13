@@ -7,13 +7,19 @@ vi.mock("../api/desktop", () => ({
   desktop: {
     bootstrap: vi.fn(),
     subscribe: vi.fn(async () => () => undefined),
+    subscribeUpdateProgress: vi.fn(async () => () => undefined),
     start: vi.fn(),
     stop: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
     installDependency: vi.fn(),
     listDependencies: vi.fn(),
     getInstallGuide: vi.fn(),
     syncCloudRules: vi.fn(),
     getNetworkStatus: vi.fn(),
+    checkUpdate: vi.fn(),
+    installUpdate: vi.fn(),
+    openUrl: vi.fn(),
   },
 }));
 
@@ -43,6 +49,7 @@ const boot = {
     ip_count: 4,
     last_synced_at: null,
     source: "bundled",
+    snapshot_revision: null,
     sets: [],
   },
   dependencies: [
@@ -82,6 +89,12 @@ describe("app store", () => {
       diagnostics: null,
       error: null,
       installGuide: null,
+      update: {
+        phase: "idle",
+        percent: null,
+        version: null,
+        error: null,
+      },
     });
   });
 
@@ -114,6 +127,29 @@ describe("app store", () => {
     expect(useAppStore.getState().actionPending).toBe(true);
   });
 
+  it("pauses and resumes from a running snapshot", async () => {
+    vi.mocked(desktop.pause).mockResolvedValue({
+      operation_id: "pause",
+      already_complete: false,
+    });
+    vi.mocked(desktop.resume).mockResolvedValue({
+      operation_id: "resume",
+      already_complete: false,
+    });
+    useAppStore.setState({
+      snapshot: { ...boot.snapshot, phase: "running" },
+      actionPending: false,
+    });
+    await useAppStore.getState().pauseConnection();
+    expect(desktop.pause).toHaveBeenCalledOnce();
+    useAppStore.setState({
+      snapshot: { ...boot.snapshot, phase: "paused" },
+      actionPending: false,
+    });
+    await useAppStore.getState().resumeConnection();
+    expect(desktop.resume).toHaveBeenCalledOnce();
+  });
+
   it("keeps a manual install guide when automatic install fails", async () => {
     vi.mocked(desktop.installDependency).mockRejectedValue(
       new Error("download blocked"),
@@ -136,11 +172,46 @@ describe("app store", () => {
       domain_count: 20,
       ip_count: 8,
       last_synced_at: "2026-08-13T00:00:00.000Z",
-      source: "jsdelivr",
+      source: "devlifeX/BiFlow",
+      snapshot_revision: "767ef8bf5673",
       sets: [],
     });
     await useAppStore.getState().syncCloudRules();
-    expect(useAppStore.getState().cloudRules?.source).toBe("jsdelivr");
+    expect(useAppStore.getState().cloudRules?.source).toBe("devlifeX/BiFlow");
     expect(useAppStore.getState().actionPending).toBe(false);
+  });
+
+  it("tracks available and failed update states", async () => {
+    vi.mocked(desktop.checkUpdate).mockResolvedValue({
+      available: true,
+      version: "1.3.0",
+      notes: "Signed release",
+    });
+    await useAppStore.getState().checkForUpdate();
+    expect(useAppStore.getState().update.phase).toBe("available");
+    expect(useAppStore.getState().update.version).toBe("1.3.0");
+
+    vi.mocked(desktop.checkUpdate).mockRejectedValue(new Error("bad manifest"));
+    await useAppStore.getState().checkForUpdate();
+    expect(useAppStore.getState().update.phase).toBe("failed");
+    expect(useAppStore.getState().update.error).toMatch(/bad manifest/);
+  });
+
+  it("retries install after a failed update when a version is known", async () => {
+    vi.mocked(desktop.installUpdate).mockResolvedValue({
+      operation_id: "update-op",
+      already_complete: false,
+    });
+    useAppStore.setState({
+      update: {
+        phase: "failed",
+        percent: null,
+        version: "1.3.0",
+        error: "interrupted download",
+      },
+    });
+    await useAppStore.getState().retryUpdate();
+    expect(desktop.installUpdate).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().update.phase).toBe("downloading");
   });
 });

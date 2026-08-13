@@ -707,10 +707,8 @@ pub fn open_allowlisted_url(url: &str) -> Result<(), DepsError> {
     const PREFIXES: &[&str] = &[
         "https://github.com/hiddify/hiddify-app/releases/",
         "https://github.com/MetaCubeX/mihomo/releases/",
-        "https://github.com/Chocolate4U/Iran-clash-rules",
-        "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/",
-        "https://cdn.jsdelivr.net/gh/chocolate4u/Iran-clash-rules",
-        "https://cdn.jsdelivr.net/gh/Chocolate4U/Iran-clash-rules",
+        "https://github.com/devlifeX/BiFlow",
+        "https://raw.githubusercontent.com/devlifeX/BiFlow/",
     ];
     if !PREFIXES.iter().any(|prefix| url.starts_with(prefix)) {
         return Err(DepsError::Fetch("URL is not allowlisted".into()));
@@ -736,6 +734,24 @@ mod tests {
         assert!(url_allowed(&hiddify_linux_appimage_url()));
         assert!(url_allowed(&mihomo_linux_url()));
         assert!(!url_allowed("https://example.com/hiddify"));
+    }
+
+    #[test]
+    fn opens_biflow_repository_links() {
+        match open_allowlisted_url("https://github.com/devlifeX/BiFlow") {
+            Ok(()) | Err(DepsError::Install(_)) => {}
+            Err(DepsError::Fetch(message)) => {
+                panic!("BiFlow repository URL should be allowlisted: {message}");
+            }
+            Err(other) => panic!("unexpected open error: {other:?}"),
+        }
+        match open_allowlisted_url("https://github.com/devlifeX/BiFlow/releases/latest") {
+            Ok(()) | Err(DepsError::Install(_)) => {}
+            Err(DepsError::Fetch(message)) => {
+                panic!("BiFlow release URL should be allowlisted: {message}");
+            }
+            Err(other) => panic!("unexpected open error: {other:?}"),
+        }
     }
 
     #[test]

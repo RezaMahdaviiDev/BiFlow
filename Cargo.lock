@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-cli"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-config"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "hex",
  "rand 0.9.5",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-core"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-desktop"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -2014,6 +2014,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
+ "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
@@ -2027,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-helper"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "clap",
  "hex",
@@ -2046,7 +2047,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-ipc"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -2059,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-mihomo"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2081,7 +2082,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-platform-linux"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2103,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-platform-win"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "iran-split-core",
@@ -2116,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-rules"
-version = "1.1.10"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4380,6 +4381,16 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "tauri-plugin-process"
+version = "2.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d55511a7bf6cd70c8767b02c97bf8134fa434daf3926cfc1be0a0f94132d165a"
+dependencies = [
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

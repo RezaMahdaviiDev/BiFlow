@@ -14,7 +14,7 @@ Operators need installable artifacts: a Debian package on Linux, and on Windows 
 - Linux output is a `.deb` and an AppImage at `artifacts/linux/BiFlow_<version>_amd64.deb` and `artifacts/linux/BiFlow_<version>_amd64.AppImage`.
 - Windows output is the app binary `artifacts/windows/BiFlow.exe` and an NSIS installer `artifacts/windows/BiFlow_<version>_x64-setup.exe`.
 - Artifact names are derived from the root `version` file via `scripts/build-plan.mjs`.
-- `./build.sh` is one-shot: it checks for Node 22, pnpm, Rust (from `rust-toolchain.toml`), Linux desktop libraries, NSIS, and `cargo-xwin`, and installs anything missing before building.
+- `./build.sh` is one-shot: it checks for Node 24, pnpm, Rust (from `rust-toolchain.toml`), Linux desktop libraries, NSIS, and `cargo-xwin`, and installs anything missing before building. See [0021](./0021-shared-build-contract.md).
 - Requirement checks do not update apt indexes or request root access when every required Debian package is already installed. Package index updates are deferred until a missing package must be installed.
 - Linux builds natively. Windows builds natively on Windows, or from Linux with `cargo-xwin` (MSVC) or MinGW-w64 plus NSIS (`makensis`). The Linux Tauri CLI must not receive `--bundles nsis`; it derives NSIS from the Windows target triple and then invokes the host `makensis`.
 - `cargo-xwin` is pinned to `0.19.2`. Newer releases require rustc 1.89, which is above this repo's 1.88 toolchain.

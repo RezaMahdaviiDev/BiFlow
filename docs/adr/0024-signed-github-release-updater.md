@@ -1,0 +1,44 @@
+# ADR 0024: Signed GitHub Release updater
+
+## Status
+
+Accepted
+
+## Context
+
+BiFlow already registered the Tauri updater plugin and exposed `check_for_update`
+and `install_update`, but the endpoint and public key were placeholders, release
+builds did not emit signed updater artifacts, and the UI discarded download
+progress. Automatic updates must verify signatures and publish Linux AppImage
+and Windows NSIS channels together with a static `latest.json` manifest.
+
+## Decision
+
+- Commit only the minisign **public** key content in `src-tauri/tauri.conf.json`.
+  Set `bundle.createUpdaterArtifacts` to `true` and point the updater endpoint at
+  `https://github.com/devlifeX/BiFlow/releases/latest/download/latest.json`.
+- Store `TAURI_SIGNING_PRIVATE_KEY` and optional
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in GitHub Actions secrets only. Never log,
+  commit, or upload the private key.
+- Build signed AppImage and NSIS updater bundles on native GitHub runners. Upload
+  `.sig` files with the release artifacts.
+- Generate and schema-validate `latest.json` in the publish job with
+  `scripts/generate-latest-json.mjs`, then upload installers, signatures, and the
+  manifest atomically.
+- Before installation, pause the owned stack so TUN, routes, and Mihomo are
+  detached safely while Hiddify keeps running.
+- Emit bounded `update-progress` events from Rust during download and install,
+  then call `AppHandle::restart()` after a successful signed install. Do not log
+  raw update URLs.
+- Windows NSIS and Linux AppImage are first-class automatic update paths. `.deb`
+  installs remain manual download/open until a separately reviewed privileged
+  replacement flow exists.
+
+## Consequences
+
+- Maintainers must rotate signing keys through a documented ops procedure and
+  update both `tauri.conf.json` and GitHub secrets together.
+- Release publication fails unless both signed updater platforms and a valid
+  `latest.json` are present.
+- The About page surfaces update state, progress, install, and retry actions in
+  both English and Persian.

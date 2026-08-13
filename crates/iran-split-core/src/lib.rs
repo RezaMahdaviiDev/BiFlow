@@ -20,6 +20,7 @@ pub enum StackPhase {
     StartingCore,
     CheckingReadiness,
     Running,
+    Paused,
     Degraded,
     Stopping,
     Recovering,
@@ -373,6 +374,15 @@ pub trait PlatformBackend: Send + Sync + 'static {
         cancel: CancellationToken,
     ) -> Result<ReadinessReport, CoreError>;
     async fn cleanup_owned_state(&self) -> Result<CleanupReport, CoreError>;
+    async fn verify_not_intercepting(&self) -> Result<(), CoreError> {
+        let tun = self.tun_status().await?;
+        if tun.active {
+            return Err(CoreError::TunCleanupFailed(
+                "TUN is still active after cleanup".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -380,6 +390,8 @@ enum OperationKind {
     Reconcile,
     Start,
     Stop,
+    Pause,
+    Resume,
 }
 
 #[derive(Debug, Clone)]
@@ -495,21 +507,73 @@ impl<B: PlatformBackend> Engine<B> {
     /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
     /// longer available.
     pub async fn stop_stack(&self) -> Result<OperationAccepted, CoreError> {
-        if self.snapshot().phase == StackPhase::Stopped && self.operations.lock().await.is_empty() {
+        if self.snapshot().phase == StackPhase::Stopped
+            && self.operations.lock().await.is_empty()
+        {
             return Ok(OperationAccepted {
                 operation_id: Uuid::new_v4(),
                 already_complete: true,
             });
         }
-        {
-            let operations = self.operations.lock().await;
-            for operation in operations.values() {
-                if operation.kind == OperationKind::Start {
-                    operation.cancel.cancel();
-                }
+        self.cancel_inflight_starts().await;
+        self.accept(OperationKind::Stop).await
+    }
+
+    /// Detaches owned TUN, routes, and DNS while leaving Hiddify running.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
+    /// longer available.
+    pub async fn pause_stack(&self) -> Result<OperationAccepted, CoreError> {
+        match self.snapshot().phase {
+            StackPhase::Paused if self.operations.lock().await.is_empty() => {
+                return Ok(OperationAccepted {
+                    operation_id: Uuid::new_v4(),
+                    already_complete: true,
+                });
+            }
+            StackPhase::Stopped | StackPhase::Uninitialized => {
+                return Ok(OperationAccepted {
+                    operation_id: Uuid::new_v4(),
+                    already_complete: true,
+                });
+            }
+            _ => {}
+        }
+        self.cancel_inflight_starts().await;
+        self.accept(OperationKind::Pause).await
+    }
+
+    /// Rebuilds owned routing from the paused state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
+    /// longer available.
+    pub async fn resume_stack(&self) -> Result<OperationAccepted, CoreError> {
+        if self.snapshot().phase == StackPhase::Running {
+            return Ok(OperationAccepted {
+                operation_id: Uuid::new_v4(),
+                already_complete: true,
+            });
+        }
+        if self.snapshot().phase != StackPhase::Paused {
+            return Ok(OperationAccepted {
+                operation_id: Uuid::new_v4(),
+                already_complete: true,
+            });
+        }
+        self.accept(OperationKind::Resume).await
+    }
+
+    async fn cancel_inflight_starts(&self) {
+        let operations = self.operations.lock().await;
+        for operation in operations.values() {
+            if operation.kind == OperationKind::Start {
+                operation.cancel.cancel();
             }
         }
-        self.accept(OperationKind::Stop).await
     }
 
     /// Queues a stop followed by a start.
@@ -619,6 +683,8 @@ impl<B: PlatformBackend> Engine<B> {
                 OperationKind::Reconcile => engine.run_reconcile(item.id, &item.cancel).await,
                 OperationKind::Start => engine.run_start(item.id, &item.cancel).await,
                 OperationKind::Stop => engine.run_stop(item.id).await,
+                OperationKind::Pause => engine.run_pause(item.id).await,
+                OperationKind::Resume => engine.run_resume(item.id, &item.cancel).await,
             };
             if let Err(error) = result {
                 if !matches!(error, CoreError::Cancelled) {
@@ -633,10 +699,16 @@ impl<B: PlatformBackend> Engine<B> {
                         kind = ?item.kind,
                         "operation failed"
                     );
+                    let keep_paused = item.kind == OperationKind::Resume
+                        && engine.snapshot().phase == StackPhase::Paused;
                     let health = engine.backend.runtime_health().await;
                     engine.update(|snapshot| {
                         apply_health(snapshot, health);
-                        snapshot.phase = StackPhase::Error;
+                        if keep_paused {
+                            snapshot.phase = StackPhase::Paused;
+                        } else {
+                            snapshot.phase = StackPhase::Error;
+                        }
                         snapshot.last_error = Some(error.to_app_error(item.id));
                     });
                 }
@@ -826,8 +898,24 @@ impl<B: PlatformBackend> Engine<B> {
     }
 
     async fn run_stop(&self, operation_id: Uuid) -> Result<(), CoreError> {
+        let was_active = matches!(
+            self.snapshot().phase,
+            StackPhase::Running | StackPhase::Degraded | StackPhase::Paused
+        );
         self.transition(StackPhase::Stopping, operation_id);
-        self.backend.stop_core().await?;
+        if was_active {
+            if let Err(cause) = self.backend.stop_core().await {
+                warn!(
+                    event = "operation.stop_core_failed",
+                    section = "engine",
+                    initiator = "run_stop",
+                    cause = %cause,
+                    trace_id = %operation_id,
+                    trace_route = "engine_operation->platform_backend->stop_core",
+                    "stop continued after core stop failure"
+                );
+            }
+        }
         self.backend.stop_user_proxy().await?;
         let report = self.backend.cleanup_owned_state().await?;
         let tun = self.backend.tun_status().await?;
@@ -843,10 +931,103 @@ impl<B: PlatformBackend> Engine<B> {
         Ok(())
     }
 
+    async fn run_pause(&self, operation_id: Uuid) -> Result<(), CoreError> {
+        self.transition(StackPhase::Stopping, operation_id);
+        if let Err(cause) = self.backend.stop_core().await {
+            warn!(
+                event = "operation.pause_stop_core_failed",
+                section = "engine",
+                initiator = "run_pause",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->platform_backend->stop_core",
+                "pause continued after core stop failure"
+            );
+        }
+        let report = self.backend.cleanup_owned_state().await?;
+        let tun = self.backend.tun_status().await?;
+        if tun.active || !report.clean() {
+            return Err(CoreError::TunCleanupFailed(format!(
+                "TUN active: {}; warnings: {}",
+                tun.active,
+                report.warnings.join("; ")
+            )));
+        }
+        self.backend.verify_not_intercepting().await?;
+        let health = self.backend.runtime_health().await;
+        self.set_paused(health);
+        Ok(())
+    }
+
+    async fn run_resume(
+        &self,
+        operation_id: Uuid,
+        cancel: &CancellationToken,
+    ) -> Result<(), CoreError> {
+        if self.snapshot().phase == StackPhase::Running {
+            return Ok(());
+        }
+        let mut core_started = false;
+        let result = self
+            .start_steps(operation_id, cancel, &mut core_started)
+            .await;
+        if let Err(error) = result {
+            if core_started || matches!(error, CoreError::Cancelled) {
+                if let Err(rollback_error) = self.rollback_pause(operation_id).await {
+                    return Err(CoreError::TunCleanupFailed(format!(
+                        "resume failed ({error}); rollback failed ({rollback_error})"
+                    )));
+                }
+            }
+            let health = self.backend.runtime_health().await;
+            self.set_paused(health);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn rollback_pause(&self, operation_id: Uuid) -> Result<(), CoreError> {
+        self.transition(StackPhase::Recovering, operation_id);
+        if let Err(cause) = self.backend.stop_core().await {
+            warn!(
+                event = "operation.rollback_stop_failed",
+                section = "engine",
+                initiator = "rollback_pause",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->rollback_pause->platform_backend",
+                "pause rollback continued after core stop failure"
+            );
+        }
+        let report = self.backend.cleanup_owned_state().await?;
+        let tun = self.backend.tun_status().await?;
+        if tun.active || !report.clean() {
+            return Err(CoreError::TunCleanupFailed(format!(
+                "cleanup warnings: {}",
+                report.warnings.join("; ")
+            )));
+        }
+        Ok(())
+    }
+
     fn transition(&self, phase: StackPhase, operation_id: Uuid) {
         self.update(|snapshot| {
             snapshot.phase = phase;
             snapshot.operation_id = Some(operation_id);
+        });
+    }
+
+    fn set_paused(&self, health: RuntimeHealth) {
+        self.update(|snapshot| {
+            apply_health(snapshot, health);
+            snapshot.phase = StackPhase::Paused;
+            snapshot.operation_id = None;
+            snapshot.exit_ip = None;
+            snapshot.mihomo = ComponentStatus::new(ComponentPhase::Stopped, None);
+            snapshot.tun = ComponentStatus::new(ComponentPhase::Stopped, None);
+            snapshot.dns = ComponentStatus::new(ComponentPhase::Stopped, None);
+            snapshot.providers = ProviderSummary::default();
+            snapshot.last_error = None;
         });
     }
 
@@ -936,6 +1117,7 @@ mod tests {
         helper_missing: AtomicBool,
         starts: AtomicUsize,
         cleanups: AtomicUsize,
+        proxy_stops: AtomicUsize,
     }
 
     #[async_trait]
@@ -1040,6 +1222,11 @@ mod tests {
             Ok(())
         }
 
+        async fn stop_user_proxy(&self) -> Result<(), CoreError> {
+            self.proxy_stops.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
         async fn core_process(&self) -> Result<ProcessStatus, CoreError> {
             Ok(ProcessStatus {
                 running: self.process.load(Ordering::SeqCst),
@@ -1084,6 +1271,93 @@ mod tests {
                 warnings: vec![],
             })
         }
+    }
+
+    #[tokio::test]
+    async fn pause_keeps_hiddify_and_removes_owned_state() {
+        let backend = Arc::new(FakeBackend::default());
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.start_stack().await.expect("start accepted");
+        engine
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(2))
+            .await
+            .expect("running");
+
+        engine.pause_stack().await.expect("pause accepted");
+        engine
+            .wait_for_phase(StackPhase::Paused, Duration::from_secs(2))
+            .await
+            .expect("paused");
+
+        assert!(!backend.tun.load(Ordering::SeqCst));
+        assert_eq!(engine.snapshot().hiddify.phase, ComponentPhase::Running);
+        assert_eq!(backend.cleanups.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 0);
+        assert!(
+            engine
+                .pause_stack()
+                .await
+                .expect("idempotent")
+                .already_complete
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_from_paused_restores_running() {
+        let backend = Arc::new(FakeBackend::default());
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.start_stack().await.expect("start accepted");
+        engine
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(2))
+            .await
+            .expect("running");
+        engine.pause_stack().await.expect("pause accepted");
+        engine
+            .wait_for_phase(StackPhase::Paused, Duration::from_secs(2))
+            .await
+            .expect("paused");
+
+        engine.resume_stack().await.expect("resume accepted");
+        engine
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(2))
+            .await
+            .expect("running again");
+        assert!(backend.tun.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn failed_resume_rolls_back_to_paused() {
+        let backend = Arc::new(FakeBackend::default());
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.start_stack().await.expect("start accepted");
+        engine
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(2))
+            .await
+            .expect("running");
+        engine.pause_stack().await.expect("pause accepted");
+        engine
+            .wait_for_phase(StackPhase::Paused, Duration::from_secs(2))
+            .await
+            .expect("paused");
+
+        backend.fail_readiness.store(true, Ordering::SeqCst);
+        engine.resume_stack().await.expect("resume accepted");
+        let mut receiver = engine.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = receiver.borrow().clone();
+                if snapshot.phase == StackPhase::Paused && snapshot.last_error.is_some() {
+                    return;
+                }
+                receiver.changed().await.expect("snapshot update");
+            }
+        })
+        .await
+        .expect("paused with error");
+        assert_eq!(engine.snapshot().phase, StackPhase::Paused);
+        assert_eq!(engine.snapshot().hiddify.phase, ComponentPhase::Running);
+        assert!(!backend.tun.load(Ordering::SeqCst));
+        assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

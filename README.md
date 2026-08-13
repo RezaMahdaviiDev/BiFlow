@@ -47,7 +47,10 @@ allowlisted official download when it is missing.
 3. Open **Direct rules** if you want extra sites or IPs to stay DIRECT, or to
    refresh Iran domain and IP lists from the cloud.
 4. Press **Connect**. BiFlow prepares a routing generation, starts Mihomo, and
-   asks the helper to attach the TUN and routes.
+   asks the helper to attach the TUN and routes. **Pause** stops owned routing
+   and Mihomo while leaving Hiddify running; **Resume** rebuilds the split
+   stack. **Disconnect** tears owned state down and may also stop Hiddify when
+   that setting is on.
 5. Iranian, private, and your custom rules stay DIRECT. Other traffic uses
    Hiddify. The dashboard animates both routes while connected, and
    **Diagnostics** can test a host and show DIRECT vs VPN before you rely on it.
@@ -58,8 +61,11 @@ allowlisted official download when it is missing.
 6. **Disconnect** tears the owned TUN and routes down. A failed start rolls back
    instead of leaving a half-applied network.
 
-Cloud rule updates try GitHub first, then jsDelivr mirrors. A failed refresh
-keeps the last good cache, or the snapshot bundled with the app.
+Cloud rule updates fetch the BiFlow-owned manifest, then the files from that
+same snapshot. A failed refresh keeps the last good cache, or the snapshot
+bundled with the app. Maintainers refresh the bundled snapshot with
+`./scripts/update-rules.sh` (also `pnpm rules:update`); that command does not
+commit or push.
 
 ```mermaid
 flowchart LR
@@ -92,22 +98,30 @@ flowchart TB
   Helper --> Net[TUN and routes]
 ```
 
-| Piece       | Role                                                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| **UI**      | Connect/disconnect, install missing apps, cloud and custom DIRECT rules, flow tests. No shell and no general filesystem access. |
-| **Engine**  | Owns configuration, rule decisions, Mihomo YAML, and rollback. Talks to the UI only through the typed API.                      |
-| **Helper**  | Applies TUN and routes. Accepts generation IDs and hashes, never executable paths, shell strings, or arbitrary URLs.            |
-| **Mihomo**  | Enforces split routing. Controller binds to loopback with a generated secret.                                                   |
-| **Hiddify** | Upstream proxy you already use. BiFlow does not log into it or replace it.                                                      |
-| **Rules**   | Bundled Iran lists, optional cloud refresh, plus your extra DIRECT domains and IPs.                                             |
+| Piece       | Role                                                                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **UI**      | Basic or Advanced shell, Connect/Pause/Resume/Disconnect, install missing apps, cloud and custom DIRECT rules, flow tests, About/updates. No shell and no general filesystem access. |
+| **Engine**  | Owns configuration, rule decisions, Mihomo YAML, and rollback. Talks to the UI only through the typed API.                                                                           |
+| **Helper**  | Applies TUN and routes. Accepts generation IDs and hashes, never executable paths, shell strings, or arbitrary URLs.                                                                 |
+| **Mihomo**  | Enforces split routing. Controller binds to loopback with a generated secret.                                                                                                        |
+| **Hiddify** | Upstream proxy you already use. BiFlow does not log into it or replace it.                                                                                                           |
+| **Rules**   | Bundled Iran lists, optional refresh from `devlifeX/BiFlow`, plus your extra DIRECT domains and IPs.                                                                                 |
 
 Internal Rust crates still use the `iran-split-*` names. The product name, window
 title, and install identifiers are **BiFlow**.
 
 ## Develop
 
-Prerequisites: Node.js 22+, pnpm 9.0.1, Rust 1.88. Linux desktop builds also
+Prerequisites: Node.js 24+, pnpm 9.0.1, Rust 1.88. Linux desktop builds also
 need WebKitGTK 4.1 and GTK 3 development packages.
+
+Optional workflow lint (do not install `act` on this machine):
+
+```bash
+# actionlint v1.7.7
+go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+actionlint
+```
 
 ```bash
 ./dev.sh          # native Tauri app (UI talks to Rust)
@@ -127,12 +141,20 @@ touches TUN, routes, DNS, or system services.
 Release packages:
 
 ```bash
-./build.sh            # Linux .deb and Windows .exe + NSIS installer
-./build.sh linux      # artifacts/linux/BiFlow_<version>_amd64.deb
-./build.sh windows    # artifacts/windows/BiFlow.exe and NSIS setup
+./build.sh check-frontend   # pnpm check and pnpm build
+./build.sh check-rust iran-split-core   # per-crate tests + Clippy
+./build.sh ci-linux         # GitHub-hosted native Linux packaging
+./build.sh ci-windows       # GitHub-hosted native Windows packaging
+./build.sh linux            # artifacts/linux/BiFlow_<version>_amd64.deb
+./build.sh windows          # artifacts/windows/BiFlow.exe and NSIS setup
 ```
 
-`./build.sh` installs missing Node.js, pnpm, Rust, Linux desktop libraries,
+Do not run `./build.sh all` or `ci-windows` on a disk-constrained Linux
+developer machine. Native packaging evidence comes from GitHub: tag `v*`
+publishes, and **Package dry-run** (`workflow_dispatch`) uploads artifacts
+without `gh release`.
+
+`./build.sh` installs missing Node.js 24, pnpm, Rust, Linux desktop libraries,
 NSIS, and cargo-xwin, then writes files under `artifacts/`. Version comes from
 the root `version` file. Change that file only, then run `pnpm version:sync`.
 
@@ -165,7 +187,11 @@ added. Use **Diagnostics → Test flow** to confirm a host.
 
 **What if cloud rule update fails?**
 Routing keeps working. BiFlow keeps the last successful cache, or the lists
-shipped with the app.
+shipped with the app. Live refreshes come only from `devlifeX/BiFlow`.
+
+**How do updates install?**
+Signed AppImage and Windows NSIS builds can install in-app from GitHub
+Releases. Debian `.deb` installs stay a download/open from the Release page.
 
 **Is the app window a root process?**
 No. The UI runs as your user. Only the helper performs privileged network
@@ -173,9 +199,9 @@ changes, over a versioned, size-limited, allowlisted local protocol.
 
 **Which platforms are supported?**
 Linux (Debian package and AppImage) and Windows (portable `.exe` and NSIS
-installer). Windows packages can be built on Windows, or cross-compiled from
-Linux. Pushing a `v*` tag publishes those four artifacts as GitHub Release
-assets.
+installer). GitHub-hosted native jobs build those artifacts. Pushing a `v*`
+tag publishes them together with signed updater metadata (`latest.json`).
+AppImage and NSIS can self-update; `.deb` remains download/open.
 
 **Can I add my own DIRECT sites?**
 Yes. **Direct rules** stores extra domains and IPs. They take precedence over

@@ -10,6 +10,26 @@ async function openFresh(page: Page) {
   await expect(page.getByText("BiFlow")).toBeVisible();
 }
 
+async function expectNoDocumentOverflow(page: Page) {
+  const overflow = await page.evaluate(() => ({
+    horizontal:
+      document.documentElement.scrollWidth >
+      document.documentElement.clientWidth,
+    vertical:
+      document.documentElement.scrollHeight >
+      document.documentElement.clientHeight,
+  }));
+  expect(overflow.horizontal).toBe(false);
+  expect(overflow.vertical).toBe(false);
+}
+
+async function walkAdvancedPages(page: Page, labels: string[]) {
+  for (const name of labels) {
+    await page.getByRole("button", { name }).click();
+    await expectNoDocumentOverflow(page);
+  }
+}
+
 test.describe("primary BiFlow flows", () => {
   test("installs missing apps, connects, and splits traffic", async ({
     page,
@@ -49,6 +69,16 @@ test.describe("primary BiFlow flows", () => {
       }),
     ).toBeVisible();
     await expect(page.locator(".traffic-flow-route")).toHaveCount(2);
+
+    await page.getByRole("button", { name: "Pause" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Split routing is paused" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
+    await page.getByRole("button", { name: "Resume" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Disconnect" }).click();
     await expect(
@@ -109,5 +139,97 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByTestId("debug-log-size")).toHaveText("512 B");
     await page.getByRole("button", { name: "Export" }).click();
     await expect(page.getByText(/Included:.*debug\.log/)).toBeVisible();
+  });
+
+  test("keeps the fixed viewport free of document overflow in English and Persian", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await walkAdvancedPages(page, [
+      "Dashboard",
+      "Direct rules",
+      "Diagnostics",
+      "Settings",
+      "About",
+    ]);
+
+    await page.evaluate(() => {
+      localStorage.setItem("biflow-language", "fa");
+    });
+    await page.reload();
+    await expect(page.getByText("BiFlow")).toBeVisible();
+    await walkAdvancedPages(page, [
+      "داشبورد",
+      "قوانین مستقیم",
+      "عیب‌یابی",
+      "تنظیمات",
+      "درباره",
+    ]);
+  });
+
+  test("hides advanced chrome in Basic mode and can return to Advanced", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("radio", { name: "Basic" }).click();
+    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Direct rules" }),
+    ).toHaveCount(0);
+    await expectNoDocumentOverflow(page);
+
+    await page.getByRole("button", { name: "Connect" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Pause" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Split routing is paused" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Resume" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+
+    await page.getByRole("radio", { name: "Advanced" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Direct rules" }),
+    ).toBeVisible();
+  });
+
+  test("blocks the document context menu", async ({ page }) => {
+    await openFresh(page);
+    const prevented = await page.evaluate(() => {
+      const event = new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+      });
+      document.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(prevented).toBe(true);
+  });
+
+  test("shows About author, version, and update check", async ({ page }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "About" }).click();
+    await expect(page.getByText("Dariush Vesal")).toBeVisible();
+    await expect(page.getByText(/Version \d+\.\d+\.\d+/)).toBeVisible();
+    await page.getByRole("button", { name: "Check for updates" }).click();
+    await expect(page.getByText(/latest published version/i)).toBeVisible();
+    await expectNoDocumentOverflow(page);
+
+    await page.evaluate(() =>
+      sessionStorage.setItem("biflow-mock-update-available", "1"),
+    );
+    await page.getByRole("button", { name: "Check for updates" }).click();
+    await expect(page.getByText(/Version 9\.9\.9 is available/i)).toBeVisible();
+    await page.getByRole("button", { name: /Install update 9\.9\.9/i }).click();
+    await expect(page.getByRole("progressbar")).toBeVisible();
   });
 });

@@ -39,7 +39,8 @@ describe("DirectRules", () => {
         domain_count: 62829,
         ip_count: 2899,
         last_synced_at: "2026-08-12T12:00:00.000Z",
-        source: "jsdelivr",
+        source: "devlifeX/BiFlow",
+        snapshot_revision: "767ef8bf5673",
         sets: [],
       },
     });
@@ -61,6 +62,7 @@ describe("DirectRules", () => {
         ip_count: 1,
         last_synced_at: null,
         source: "bundled",
+        snapshot_revision: null,
         sets: [],
       },
       addRule,

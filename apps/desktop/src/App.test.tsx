@@ -3,11 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import { resetMockState } from "./api/mock";
+import { UI_MODE_STORAGE_KEY } from "./lib/uiMode";
 import { useAppStore } from "./store/app";
 import { APP_VERSION } from "./version";
 
 beforeEach(() => {
   resetMockState();
+  localStorage.removeItem(UI_MODE_STORAGE_KEY);
   useAppStore.setState({
     loading: true,
     actionPending: false,
@@ -54,6 +56,35 @@ describe("App", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(screen.getByRole("heading", { name: "Settings" })).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "About" }));
+    expect(screen.getByRole("heading", { name: "About" })).toBeVisible();
+    expect(screen.getByText(APP_VERSION)).toBeVisible();
+    expect(screen.getByText("Dariush Vesal")).toBeVisible();
+  });
+
+  it("hides advanced chrome in Basic mode", async () => {
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+
+    await userEvent.click(screen.getByRole("radio", { name: "Basic" }));
+    expect(
+      screen.queryByRole("button", { name: "Direct rules" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Internet connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
+  });
+
+  it("blocks the document context menu", () => {
+    render(<App />);
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("exposes the version file through bootstrap", async () => {
@@ -61,7 +92,6 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", { name: "Ready when you are" }),
     ).toBeVisible();
-    expect(screen.getByText("BiFlow")).toBeVisible();
     expect(APP_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 });

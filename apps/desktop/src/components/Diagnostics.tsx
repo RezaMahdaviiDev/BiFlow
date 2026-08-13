@@ -69,16 +69,19 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
     level === "all" ? logs : logs.filter((entry) => entry.level === level);
 
   return (
-    <section aria-labelledby="diagnostics-title" className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <section
+      aria-labelledby="diagnostics-title"
+      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
+    >
+      <div className="flex shrink-0 flex-wrap items-start justify-between gap-4">
         <header>
           <h1
             id="diagnostics-title"
-            className="text-3xl font-semibold tracking-tight"
+            className="text-2xl font-semibold tracking-tight"
           >
             Diagnostics
           </h1>
-          <p className="mt-2 text-muted">
+          <p className="mt-1 text-sm text-muted">
             Check the helper, upstream, providers, tunnel cleanup, and routing
             in one bounded run.
           </p>
@@ -299,7 +302,7 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
             <option value="error">Error</option>
           </select>
         </div>
-        <div className="max-h-72 overflow-auto rounded-xl bg-canvas p-3 font-mono text-xs">
+        <div className="diagnostics-selectable max-h-48 overflow-auto rounded-xl bg-canvas p-3 font-mono text-xs">
           {visibleLogs.length === 0 ? (
             <p className="text-muted">No logs in this filter.</p>
           ) : (

@@ -51,6 +51,9 @@ If a required command fails or emits a warning from project code, fix it in the 
 
 ## Lessons
 
+- Backticks inside a double-quoted shell search pattern are command
+  substitutions. Quote `rg` patterns with single quotes when they contain
+  Markdown code spans so validation does not accidentally execute the text.
 - Large `apply_patch` edits against actively changing or freshly formatted files can miss shifted context. Split lifecycle, command, and e2e instrumentation into narrow patches against freshly inspected line ranges; a failed patch applies no partial changes.
 - A Rust raw byte string containing `\n` stores a backslash and `n`, not a newline. Diagnostic JSONL tests must use a real newline byte so they exercise redaction instead of the malformed-event fallback.
 - Playwright `getByText` can match both a heading and descriptive text containing the same phrase. Select diagnostics cards with an exact heading role.
@@ -118,3 +121,4 @@ If a required command fails or emits a warning from project code, fix it in the 
 - Directory `sync_all` via `OpenOptions::read` on a folder path is Unix-only. On Windows it returns `PermissionDenied`; gate `sync_directory` with `#[cfg(unix)]` and no-op off Unix.
 - `#[cfg(debug_assertions)] { return expr; }` fails `clippy::needless_return` under CI `-D warnings` because Clippy compiles only the active cfg branch. Use a tail expression without `return` or a trailing semicolon. The same applies to `#[cfg(windows)]` / `#[cfg(target_os = "linux")]` last-statement returns.
 - GitHub `windows-2025` (and current `windows-latest`) does not include NSIS. Install `makensis` on that runner before a Tauri NSIS bundle. Set `core.autocrlf false` globally **before** checkout. Cache Cargo at the workspace root (`./target`), not `src-tauri/target`. Keep the rust OS matrix `fail-fast: false` so a Linux Clippy failure cannot cancel Windows.
+- A shell-script contract test looking for the literal `mihomo -t` fails when the maintainer wrapper invokes `"${MIHOMO}" -t -d`. Match the quoted binary expansion.
