@@ -51,6 +51,10 @@ allowlisted official download when it is missing.
 5. Iranian, private, and your custom rules stay DIRECT. Other traffic uses
    Hiddify. The dashboard animates both routes while connected, and
    **Diagnostics** can test a host and show DIRECT vs VPN before you rely on it.
+   Its support export includes the permanent, locally redacted `debug.log`,
+   which records Rust actions, warnings, errors, causes, initiators, and trace
+   IDs for troubleshooting. Diagnostics shows its size and lets you reveal or
+   delete it when you choose.
 6. **Disconnect** tears the owned TUN and routes down. A failed start rolls back
    instead of leaving a half-applied network.
 
@@ -112,8 +116,12 @@ need WebKitGTK 4.1 and GTK 3 development packages.
 ./dev.sh e2e      # Playwright primary flows against the mock UI
 ```
 
-`./dev.sh` and `./dev.sh desktop` compile the real app. `./dev.sh web` never
-touches TUN, routes, DNS, or system services.
+`./dev.sh` and `./dev.sh desktop` compile the real app and, on Linux, ask for
+`sudo` to run a hardened transient helper for your developer UID. The helper,
+its verified Mihomo copy, configuration, socket, and runtime stay under
+`/run/biflow-dev-<uid>` and are stopped/removed when `dev.sh` exits. Run the
+script as your normal account, not as root. `./dev.sh web` never touches TUN,
+routes, DNS, or system services.
 
 Release packages:
 

@@ -24,7 +24,9 @@ three active provider files from one resolved upstream commit and records their
 entry counts, sources, and SHA-256 values in `resources/rules/manifest.json`.
 `pnpm rules:check` is offline-only and blocks dev/build when the snapshot is
 missing, incomplete, truncated, or modified. Tauri maps the directory to
-`$RESOURCE/rules`, which is the exact path the Rust store reads.
+`$RESOURCE/rules`, which is the exact path the Rust store reads. Root
+`.gitattributes` marks bundled rule files as `-text` so Windows checkout does not
+rewrite line endings and invalidate manifest SHA-256 checks.
 
 ## Consequences
 

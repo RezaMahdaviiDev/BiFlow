@@ -45,6 +45,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Disable CRLF conversion on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config core.autocrlf false
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy

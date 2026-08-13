@@ -6,7 +6,7 @@ use iran_split_ipc::{
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc, time::Duration};
 use tokio::{net::UnixListener, net::UnixStream, time::timeout};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -36,14 +36,29 @@ pub async fn run_linux(config_path: &Path) -> Result<(), HelperServiceError> {
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))?;
     let supervisor = Arc::new(Supervisor::new(settings));
-    info!(path = %socket_path.display(), "helper listening");
+    info!(
+        event = "helper.listening",
+        section = "helper_ipc",
+        initiator = "helper_process",
+        cause = "startup_complete",
+        trace_route = "helper_process->unix_socket->ipc_listener",
+        path = %socket_path.display(),
+        "helper listening"
+    );
 
     loop {
         let (stream, _) = listener.accept().await?;
         let supervisor = Arc::clone(&supervisor);
         tokio::spawn(async move {
             if let Err(error) = handle_connection(stream, supervisor).await {
-                warn!(%error, "helper connection closed with an error");
+                warn!(
+                    event = "helper.connection_failed",
+                    section = "helper_ipc",
+                    initiator = "ipc_client",
+                    cause = %error,
+                    trace_route = "ipc_client->helper_connection->command_handler",
+                    "helper connection closed with an error"
+                );
             }
         });
     }
@@ -57,7 +72,15 @@ async fn handle_connection(
         .map_err(|error| HelperServiceError::Io(std::io::Error::from_raw_os_error(error as i32)))?;
     let peer_uid = credentials.uid();
     if peer_uid != supervisor.settings().authorized_uid && peer_uid != 0 {
-        warn!(peer_uid, "rejected unauthorized helper peer");
+        warn!(
+            event = "helper.peer_rejected",
+            section = "helper_security",
+            initiator = "ipc_peer",
+            cause = "unauthorized_uid",
+            trace_route = "ipc_peer->credential_check->reject",
+            peer_uid,
+            "rejected unauthorized helper peer"
+        );
         return Ok(());
     }
 
@@ -118,24 +141,61 @@ async fn handle_connection(
             Err(error) => return Err(error),
         };
         request.payload.validate()?;
-        info!(
-            peer_uid,
-            request_id = %request.request_id,
-            command = request.payload.audit_name(),
-            "authorized helper command"
-        );
-        let request_id = request.request_id;
-        let protocol_version = request.protocol_version;
-        let reply = execute(&supervisor, request.payload).await;
         send_reply(
             &mut stream,
-            Envelope {
-                protocol_version,
-                request_id,
-                payload: reply,
-            },
+            execute_audited(&supervisor, request, peer_uid).await,
         )
         .await?;
+    }
+}
+
+async fn execute_audited(
+    supervisor: &Supervisor,
+    request: Envelope<HelperCommand>,
+    peer_uid: u32,
+) -> Envelope<HelperReply> {
+    info!(
+        event = "helper.command_received",
+        section = "helper_command",
+        initiator = "authorized_ipc_peer",
+        cause = "ipc_request",
+        trace_id = %request.request_id,
+        trace_route = "desktop->helper_ipc->command_handler",
+        peer_uid,
+        request_id = %request.request_id,
+        command = request.payload.audit_name(),
+        "authorized helper command"
+    );
+    let request_id = request.request_id;
+    let protocol_version = request.protocol_version;
+    let reply = execute(supervisor, request.payload).await;
+    if let HelperReply::Error(reply_error) = &reply {
+        error!(
+            event = "helper.command_failed",
+            section = "helper_command",
+            initiator = "command_handler",
+            cause = %reply_error.message,
+            trace_id = %request_id,
+            trace_route = "desktop->helper_ipc->command_handler->error_reply",
+            error_code = reply_error.code,
+            retryable = reply_error.retryable,
+            "helper command failed"
+        );
+    } else {
+        info!(
+            event = "helper.command_completed",
+            section = "helper_command",
+            initiator = "command_handler",
+            cause = "none",
+            trace_id = %request_id,
+            trace_route = "desktop->helper_ipc->command_handler->reply",
+            "helper command completed"
+        );
+    }
+    Envelope {
+        protocol_version,
+        request_id,
+        payload: reply,
     }
 }
 

@@ -187,6 +187,11 @@ export interface ExportResult {
   files: string[];
 }
 
+export interface DebugLogStatus {
+  path: string;
+  size_bytes: number;
+}
+
 export interface UpdateStatus {
   available: boolean;
   version: string | null;

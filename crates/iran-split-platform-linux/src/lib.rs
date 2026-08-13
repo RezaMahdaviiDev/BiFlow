@@ -33,6 +33,7 @@ use tokio::{
     sync::{Mutex, RwLock},
 };
 use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 const IPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -71,7 +72,61 @@ impl HelperClient {
     /// Returns an error when validation, connection, protocol negotiation, or
     /// the helper operation fails.
     pub async fn request(&self, command: HelperCommand) -> Result<HelperReply, LinuxBackendError> {
-        command.validate()?;
+        let command_name = command.audit_name();
+        let request_id = Uuid::new_v4();
+        info!(
+            event = "helper.request_started",
+            section = "helper_ipc",
+            initiator = "linux_platform_backend",
+            cause = "backend_operation",
+            trace_id = %request_id,
+            trace_route = "desktop_engine->linux_platform_backend->helper_ipc",
+            command = command_name,
+            "helper request started"
+        );
+        if let Err(cause) = command.validate() {
+            error!(
+                event = "helper.request_failed",
+                section = "helper_ipc",
+                initiator = "linux_platform_backend",
+                cause = %cause,
+                trace_id = %request_id,
+                trace_route = "desktop_engine->linux_platform_backend->helper_ipc->validation",
+                command = command_name,
+                "helper request validation failed"
+            );
+            return Err(cause.into());
+        }
+        let result = self.request_validated(command).await;
+        match &result {
+            Ok(_) => info!(
+                event = "helper.request_completed",
+                section = "helper_ipc",
+                initiator = "linux_platform_backend",
+                cause = "none",
+                trace_id = %request_id,
+                trace_route = "desktop_engine->linux_platform_backend->helper_ipc->reply",
+                command = command_name,
+                "helper request completed"
+            ),
+            Err(cause) => error!(
+                event = "helper.request_failed",
+                section = "helper_ipc",
+                initiator = "linux_platform_backend",
+                cause = %cause,
+                trace_id = %request_id,
+                trace_route = "desktop_engine->linux_platform_backend->helper_ipc->error",
+                command = command_name,
+                "helper request failed"
+            ),
+        }
+        result
+    }
+
+    async fn request_validated(
+        &self,
+        command: HelperCommand,
+    ) -> Result<HelperReply, LinuxBackendError> {
         let mut stream = tokio::time::timeout(IPC_TIMEOUT, UnixStream::connect(&self.socket_path))
             .await
             .map_err(|_| LinuxBackendError::Timeout)??;
@@ -582,8 +637,49 @@ impl PlatformBackend for LinuxBackend {
         let config = self.config.read().await.clone();
         if config.hiddify.stop_with_stack {
             if let Some(mut child) = self.launched_hiddify.lock().await.take() {
-                let _ = child.start_kill();
-                let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+                let trace_id = Uuid::new_v4();
+                if let Err(cause) = child.start_kill() {
+                    warn!(
+                        event = "hiddify.stop_signal_failed",
+                        section = "hiddify_process",
+                        initiator = "linux_platform_backend",
+                        cause = %cause,
+                        trace_id = %trace_id,
+                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                        "could not send the stop signal to the Hiddify child process"
+                    );
+                }
+                match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+                    Ok(Ok(status)) => info!(
+                        event = "hiddify.process_stopped",
+                        section = "hiddify_process",
+                        initiator = "linux_platform_backend",
+                        cause = "stop_with_stack",
+                        trace_id = %trace_id,
+                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                        exit_status = %status,
+                        "Hiddify child process stopped"
+                    ),
+                    Ok(Err(cause)) => warn!(
+                        event = "hiddify.wait_failed",
+                        section = "hiddify_process",
+                        initiator = "linux_platform_backend",
+                        cause = %cause,
+                        trace_id = %trace_id,
+                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                        "could not collect the stopped Hiddify child process"
+                    ),
+                    Err(cause) => warn!(
+                        event = "hiddify.stop_timed_out",
+                        section = "hiddify_process",
+                        initiator = "linux_platform_backend",
+                        cause = %cause,
+                        trace_id = %trace_id,
+                        trace_route = "desktop_engine->linux_platform_backend->hiddify_process",
+                        timeout_seconds = 5_u64,
+                        "Hiddify child process did not stop before the timeout"
+                    ),
+                }
             }
         }
         Ok(())

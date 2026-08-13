@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use tracing::{info, warn};
 
 const USER_AGENT: &str = concat!("BiFlow/", env!("CARGO_PKG_VERSION"));
 const MAX_DOWNLOAD_BYTES: usize = 180 * 1024 * 1024;
@@ -288,18 +289,38 @@ pub async fn install_dependency(
     data: &Path,
     bundled_dependencies: &Path,
 ) -> Result<InstallResult, DepsError> {
+    info!(
+        event = "dependency.install_started",
+        section = "dependencies",
+        initiator = "dependency_installer",
+        cause = "user_request",
+        trace_route = "tauri_command->dependency_installer->bundled_or_network_source",
+        dependency_id = id.as_str(),
+        "dependency installation started"
+    );
     fs::create_dir_all(data.join("bin"))?;
     fs::create_dir_all(data.join("apps"))?;
     let path = match id {
         DependencyId::Hiddify => install_hiddify(data).await?,
         DependencyId::Mihomo => install_mihomo(data, bundled_dependencies).await?,
     };
-    Ok(InstallResult {
+    let result = InstallResult {
         id: id.as_str(),
         installed: path.is_file(),
         path: Some(path.to_string_lossy().into_owned()),
         guide: install_guide(id),
-    })
+    };
+    info!(
+        event = "dependency.install_completed",
+        section = "dependencies",
+        initiator = "dependency_installer",
+        cause = "none",
+        trace_route = "tauri_command->dependency_installer->installed_binary",
+        dependency_id = id.as_str(),
+        installed = result.installed,
+        "dependency installation completed"
+    );
+    Ok(result)
 }
 
 async fn install_hiddify(data: &Path) -> Result<PathBuf, DepsError> {
@@ -324,7 +345,11 @@ async fn install_hiddify_linux(data: &Path) -> Result<PathBuf, DepsError> {
     let appimage = data.join("apps/Hiddify.AppImage");
     write_executable(&appimage, &bytes)?;
     let link = data.join("bin/hiddify");
-    let _ = fs::remove_file(&link);
+    if let Err(cause) = fs::remove_file(&link) {
+        if cause.kind() != std::io::ErrorKind::NotFound {
+            return Err(cause.into());
+        }
+    }
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(&appimage, &link)?;
@@ -358,7 +383,20 @@ async fn install_hiddify_windows(data: &Path) -> Result<PathBuf, DepsError> {
         .status()
         .map_err(|error| DepsError::Install(error.to_string()))?;
     if !status.success() {
-        let _ = std::process::Command::new(&installer).spawn();
+        std::process::Command::new(&installer).spawn().map_err(|cause| {
+            DepsError::Install(format!(
+                "silent Hiddify setup failed with {status}, and its interactive fallback could not start: {cause}"
+            ))
+        })?;
+        warn!(
+            event = "dependency.interactive_installer_started",
+            section = "dependencies",
+            initiator = "dependency_installer",
+            cause = %status,
+            trace_route = "tauri_command->dependency_installer->hiddify_setup_fallback",
+            dependency_id = "hiddify",
+            "silent setup failed, so the interactive installer was started"
+        );
         return Err(DepsError::Install(
             "silent Hiddify setup did not finish; the installer window was opened instead".into(),
         ));
@@ -386,7 +424,17 @@ async fn install_mihomo(data: &Path, bundled_dependencies: &Path) -> Result<Path
         fs::create_dir_all(dest.parent().unwrap_or(data))?;
         let executable = fs::read(found)?;
         install_windows_mihomo_bytes(&dest, &executable, MIHOMO_WINDOWS_SHA256)?;
-        let _ = fs::remove_dir_all(staging);
+        if let Err(cause) = fs::remove_dir_all(staging) {
+            warn!(
+                event = "dependency.staging_cleanup_failed",
+                section = "dependencies",
+                initiator = "dependency_installer",
+                cause = %cause,
+                trace_route = "tauri_command->dependency_installer->mihomo_staging_cleanup",
+                dependency_id = "mihomo",
+                "Mihomo was installed but its staging directory could not be removed"
+            );
+        }
     } else {
         let bundled = bundled_dependencies.join("mihomo");
         if bundled.is_file() {
@@ -504,13 +552,23 @@ async fn download(url: &str) -> Result<Vec<u8>, DepsError> {
     }
     match download_with_client(url, false).await {
         Ok(bytes) => Ok(bytes),
-        Err(proxy_error) => download_with_client(url, true)
-            .await
-            .map_err(|direct_error| {
-                DepsError::Fetch(format!(
-                "proxy-aware request failed ({proxy_error}); direct retry failed ({direct_error})"
-            ))
-            }),
+        Err(proxy_error) => {
+            warn!(
+                event = "dependency.proxy_download_failed",
+                section = "dependencies",
+                initiator = "dependency_downloader",
+                cause = %proxy_error,
+                trace_route = "dependency_downloader->proxy_aware_client->direct_retry",
+                "proxy-aware dependency download failed; retrying directly"
+            );
+            download_with_client(url, true)
+                .await
+                .map_err(|direct_error| {
+                    DepsError::Fetch(format!(
+                        "proxy-aware request failed ({proxy_error}); direct retry failed ({direct_error})"
+                    ))
+                })
+        }
     }
 }
 
@@ -731,7 +789,7 @@ mod tests {
         fs::write(apps.join("Hiddify.AppImage"), b"elf").expect("hiddify");
         fs::write(bin.join("mihomo"), b"elf").expect("mihomo");
         let status = dependency_status(&dir);
-        let _ = fs::remove_dir_all(&dir);
+        fs::remove_dir_all(&dir).expect("cleanup dependency fixture");
         assert!(status
             .iter()
             .any(|item| item.id == "hiddify" && item.installed));
@@ -747,7 +805,7 @@ mod tests {
         fs::write(dir.join("hiddify"), b"ok").expect("hiddify");
         fs::write(dir.join("mihomo"), b"ok").expect("mihomo");
         let found = files_named_in(std::iter::once(dir.clone()), &["hiddify", "mihomo"]);
-        let _ = fs::remove_dir_all(&dir);
+        fs::remove_dir_all(&dir).expect("cleanup path fixture");
         assert_eq!(found.len(), 2);
     }
 

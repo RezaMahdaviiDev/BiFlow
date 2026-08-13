@@ -24,3 +24,7 @@ Mihomo text-provider `+.` suffix form.
 Run `pnpm rules:update` to create a fresh single-commit snapshot. The generated
 `manifest.json` is authoritative; `pnpm rules:check` validates its hashes and
 minimum entry counts without accessing the network.
+
+Bundled rule files use LF bytes only. Root `.gitattributes` marks
+`resources/rules/*` as `-text` so Windows Git checkout does not rewrite CRLF and
+break SHA-256 verification during `bundle:check`.

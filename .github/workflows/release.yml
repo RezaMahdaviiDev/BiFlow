@@ -63,6 +63,10 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+      - name: Disable CRLF conversion on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: git config core.autocrlf false
       - uses: pnpm/action-setup@v4
         with:
           version: 9.0.1

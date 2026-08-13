@@ -5,6 +5,7 @@ import type {
   AppConfig,
   BootstrapResult,
   CloudRulesStatus,
+  DebugLogStatus,
   DependencyStatus,
   DiagnosticsReport,
   DirectRulesDocument,
@@ -113,6 +114,15 @@ export const desktop = {
     return native
       ? invoke("query_logs", { maximum: 500 })
       : mockApi.queryLogs();
+  },
+  debugLogStatus(): Promise<DebugLogStatus> {
+    return native ? invoke("get_debug_log_status") : mockApi.debugLogStatus();
+  },
+  revealDebugLog(): Promise<DebugLogStatus> {
+    return native ? invoke("reveal_debug_log") : mockApi.revealDebugLog();
+  },
+  deleteDebugLog(): Promise<DebugLogStatus> {
+    return native ? invoke("delete_debug_log") : mockApi.deleteDebugLog();
   },
   exportBundle(): Promise<ExportResult> {
     return native ? invoke("export_support_bundle") : mockApi.exportBundle();

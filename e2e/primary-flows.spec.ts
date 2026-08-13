@@ -92,5 +92,22 @@ test.describe("primary BiFlow flows", () => {
     await page.getByLabel("Test IP or domain").fill("example.ir");
     await page.getByRole("button", { name: "Test flow" }).click();
     await expect(page.getByText("example.ir → DIRECT")).toBeVisible();
+
+    await expect(
+      page.getByRole("heading", { name: "Permanent debug.log", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByTestId("debug-log-size")).toBeVisible();
+    await page.getByRole("button", { name: "Show file" }).click();
+    await expect(
+      page.getByText("Opened the folder containing debug.log."),
+    ).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete log" }).click();
+    await expect(
+      page.getByText(/previous log content was deleted/i),
+    ).toBeVisible();
+    await expect(page.getByTestId("debug-log-size")).toHaveText("512 B");
+    await page.getByRole("button", { name: "Export" }).click();
+    await expect(page.getByText(/Included:.*debug\.log/)).toBeVisible();
   });
 });

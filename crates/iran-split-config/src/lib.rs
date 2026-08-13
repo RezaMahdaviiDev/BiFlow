@@ -404,9 +404,15 @@ fn set_private_permissions(path: &Path) -> Result<(), std::io::Error> {
 #[cfg(not(unix))]
 fn set_private_permissions(_path: &Path) {}
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), std::io::Error> {
     let directory = OpenOptions::new().read(true).open(path)?;
     directory.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
+    Ok(())
 }
 
 #[cfg(test)]

@@ -173,6 +173,19 @@ describe("release artifact names", () => {
     );
   });
 
+  it("pins bundled rule bytes so Windows checkout does not rewrite line endings", () => {
+    const attributes = readFileSync(join(root, ".gitattributes"), "utf8");
+    assert.match(attributes, /resources\/rules\/\*\.txt -text/);
+    assert.match(attributes, /resources\/rules\/manifest\.json -text/);
+    const release = readFileSync(
+      join(root, ".github/workflows/release.yml"),
+      "utf8",
+    );
+    const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+    assert.match(release, /core\.autocrlf false/);
+    assert.match(ci, /core\.autocrlf false/);
+  });
+
   it("starts the native Rust-backed application by default", () => {
     const source = readFileSync(join(root, "dev.sh"), "utf8");
     const nativeDev = source.match(/run_dev\(\) \{([\s\S]*?)\n\}/);
@@ -183,7 +196,22 @@ describe("release artifact names", () => {
     assert.match(source, /ensure_rust\(\) \{[\s\S]*?activate_rust_path/);
     assert.match(nativeDev[1], /ensure_rust/);
     assert.match(nativeDev[1], /ensure_linux_desktop_dependencies/);
-    assert.match(nativeDev[1], /exec pnpm tauri dev/);
+    assert.match(nativeDev[1], /trap cleanup_dev_helper/);
+    assert.match(nativeDev[1], /prepare_dev_helper/);
+    assert.match(nativeDev[1], /command pnpm tauri dev/);
+    assert.match(source, /cargo build -p iran-split-helper/);
+    assert.match(source, /systemd-run/);
+    assert.match(source, /BIFLOW_DEV_HELPER_SOCKET/);
+    assert.match(source, /BIFLOW_DEV_SYSTEM_RUNTIME/);
+    assert.match(source, /BIFLOW_DEV_MIHOMO_BINARY/);
+    assert.match(source, /authorized_uid/);
+    assert.match(source, /KillMode=control-group/);
+    assert.match(source, /NoNewPrivileges=yes/);
+    assert.match(source, /ProtectSystem=strict/);
+    assert.match(source, /another native BiFlow development session/);
+    assert.match(source, /sha256_of "\$\{DEV_HELPER_MIHOMO\}"/);
+    assert.match(source, /systemctl stop "\$\{DEV_HELPER_UNIT\}"/);
+    assert.match(source, /\^\/run\/biflow-dev-\[0-9\]\+\$/);
     assert.ok(mockWeb);
     assert.match(mockWeb[1], /exec pnpm dev --host 127\.0\.0\.1/);
     assert.match(source, /case "\$\{1:-dev\}" in/);

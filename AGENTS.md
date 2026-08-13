@@ -24,6 +24,14 @@ If a required command fails or emits a warning from project code, fix it in the 
 - `pnpm test` runs UI unit tests. `cargo test --workspace` runs core unit tests. `pnpm test:e2e` runs Playwright against the mock UI.
 - Do not merge a behavior change that has no covering unit test, and do not add a primary flow without an e2e assertion.
 
+## Rust diagnostics
+
+- Read the current per-user `biflow/debug.log` first when diagnosing a runtime report. It is permanent newline-delimited JSON across application sessions and is also included by **Diagnostics → Export**. Do not assume it exists before the app has launched, and do not commit a generated `debug.log`.
+- Every new or changed desktop user action, background task, platform/helper boundary, warning, ignored failure, and error path in Rust must emit structured `tracing` events that reach `debug.log`. Reuse the command trace helpers in `src-tauri/src/diagnostics.rs` at Tauri boundaries. The separately privileged helper must emit the same safe fields to its service journal; the desktop records each helper request and result in `debug.log` without making the root service write into a user's data directory.
+- Action events must identify `event`, `section`, `initiator`, `cause`, and `trace_route`; use a stable operation/request UUID as `trace_id` when available. Never log passwords, controller secrets, tokens, credentials, subscription links, raw URLs, full settings, direct-rule values, diagnostic targets, or unredacted user content.
+- Do not ignore fallible Rust operations with `let _ =` unless failure is provably irrelevant. Log the warning/error and cause when execution continues, and preserve a regression test for diagnostic lifecycle, redaction, and file-size behavior.
+- `debug.log` stays in append mode across process launches and is flushed after every event. Do not truncate, rotate, cap, or delete it automatically on startup or shutdown. Only the explicit Diagnostics delete action clears its contents; it must keep the active file handle usable and resume logging immediately.
+
 ## Errors and lessons
 
 - When you hit an error and fix it, record the cause and the fix under [Lessons](#lessons) so the next agent does not repeat it.
@@ -42,6 +50,17 @@ If a required command fails or emits a warning from project code, fix it in the 
 - Runtime UI and Tauri bootstrap read `version` directly (`__APP_VERSION__` / `include_str!`).
 
 ## Lessons
+
+- Large `apply_patch` edits against actively changing or freshly formatted files can miss shifted context. Split lifecycle, command, and e2e instrumentation into narrow patches against freshly inspected line ranges; a failed patch applies no partial changes.
+- A Rust raw byte string containing `\n` stores a backslash and `n`, not a newline. Diagnostic JSONL tests must use a real newline byte so they exercise redaction instead of the malformed-event fallback.
+- Playwright `getByText` can match both a heading and descriptive text containing the same phrase. Select diagnostics cards with an exact heading role.
+- An isolated `CARGO_TARGET_DIR` can consume enough disk to make a later workspace link fail with `No space left on device`. Remove only the known disposable isolated target; never use `cargo clean` on the shared incremental cache.
+- In the managed sandbox, `pnpm version:sync` can fail with `spawn EPERM` when pnpm launches the configured Node binary. Re-run the same synchronization command with approved execution; do not bypass the root `version` source by hand-editing generated manifest versions.
+- Structured audit calls can push an existing Rust handler over Clippy's `too_many_lines` limit. Extract request execution plus its start/result audit events into a focused helper instead of suppressing the warning.
+- Diagnostics contains several independent live regions, so Playwright `getByRole("status")` is ambiguous after multiple actions. Assert the unique result text or scope the locator to the relevant card.
+- Cross-target Clippy sees only the active `cfg` branch; a helper that can fail only on Linux may look unnecessarily wrapped on Windows. Prefer a total cross-platform helper when a safe fallback exists, and validate both host and `cargo xwin clippy` targets.
+- A native Tauri dev launch is not operational when its privileged helper is absent. `dev.sh` must prepare and verify the helper boundary before starting the UI, and must keep the root helper's executable/config/runtime outside the mutable workspace.
+- Shell EXIT and signal traps must not invoke privileged cleanup twice. Convert INT, TERM, and HUP to exit statuses and keep one EXIT cleanup handler; put per-user dev locks below the private user runtime directory, not shared `/tmp`.
 
 - Older Pillow has no `Image.Resampling`; generate icons with `Image.LANCZOS` / `Image.BICUBIC`.
 - Inner `#![allow(...)]` attributes must be the first item in a Rust module, before `use`.
@@ -68,6 +87,7 @@ If a required command fails or emits a warning from project code, fix it in the 
 - Latest `cargo-xwin` (0.20+) needs rustc 1.89. Pin `0.19.2` in `build.sh` so Windows cross-compile install works on the repo toolchain 1.88.
 - Run the Tauri CLI from the workspace root, which owns `src-tauri`. Do not delegate the root `tauri` script through `pnpm --filter @iran-split/desktop`; pnpm changes into `apps/desktop`, and Tauri then cannot discover `src-tauri/tauri.conf.json`. Tauri shell hooks also run from the workspace root, so `beforeDevCommand` / `beforeBuildCommand` use `apps/desktop`; `frontendDist` remains config-relative as `../apps/desktop/dist`.
 - `./dev.sh` and `./dev.sh dev` must compile and launch the native Tauri application so the UI uses Rust commands and events. Keep browser/mock development behind the explicit `./dev.sh web` command; `desktop` remains a native alias.
+- Native Linux `./dev.sh` must provision a per-UID transient privileged helper before Tauri starts, verify its root-owned helper/Mihomo copies and private socket, pass only debug-build path overrides, and stop/remove the transient unit on every exit path. Never run the UI as root or execute a mutable workspace binary from the root helper.
 - Build requirement checks must not run `apt-get update` or request `sudo` when all packages are already installed. Let `apt_install_missing` update package indexes only after it finds a missing package.
 - Do not `cargo clean` or re-run `cargo test --workspace` plus `cargo build --workspace` after every task. That recompiles hundreds of dependency crates. Use `cargo test -p <changed crate>` so Cargo rebuilds only dirty units.
 - A Linux Tauri CLI only accepts Linux values for `--bundles`. For a Windows cross-build, pass `--runner cargo-xwin --target x86_64-pc-windows-msvc` without `--bundles nsis`; Tauri selects NSIS from the target and uses host `makensis`.
@@ -90,3 +110,5 @@ If a required command fails or emits a warning from project code, fix it in the 
 - Tokio Windows named-pipe `ClientOptions::open` returns a synchronous `io::Result`, not a future. Open it inside a timeout-wrapped async retry loop; retry only `ERROR_PIPE_BUSY` and map other errors or timeout to helper unavailable.
 - Windows-only modules are invisible to host Clippy. Use explicit imports there; `use super::*` fails the Windows `clippy::wildcard_imports` gate.
 - Windows Clippy rejects case-sensitive extension checks and `Default::default()` for unit structs. Compare `Path::extension()` with `eq_ignore_ascii_case`, and construct `WindowsBackend` directly.
+- Bundled rule snapshots are SHA-256 verified byte-for-byte. Mark `resources/rules/*` as `-text` in `.gitattributes` and disable `core.autocrlf` on Windows CI checkout or `pnpm rules:check` fails on Windows.
+- Directory `sync_all` via `OpenOptions::read` on a folder path is Unix-only. On Windows it returns `PermissionDenied`; gate `sync_directory` with `#[cfg(unix)]` and no-op off Unix.

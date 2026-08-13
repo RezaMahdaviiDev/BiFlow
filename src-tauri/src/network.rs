@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{net::IpAddr, time::Duration};
+use tracing::{info, warn};
 
 const COUNTRY_ENDPOINT: &str = "https://api.country.is/?fields=city";
 const IP_ENDPOINT: &str = "https://api.ipify.org?format=json";
@@ -69,19 +70,50 @@ impl NetworkMonitor {
 
     pub async fn check(&self) -> NetworkStatus {
         match Self::check_with(&self.proxy_client).await {
-            Ok(status) => status,
+            Ok(status) => {
+                info!(
+                    event = "network.check_completed",
+                    section = "network",
+                    initiator = "network_monitor",
+                    cause = "none",
+                    trace_route = "network_monitor->proxy_aware_client->public_ip_services",
+                    state = ?status.state,
+                    "proxy-aware network check completed"
+                );
+                status
+            }
             Err(proxy_error) => match Self::check_with(&self.direct_client).await {
-                Ok(status) => status,
-                Err(direct_error) => NetworkStatus {
-                    state: InternetState::Offline,
-                    public_ip: None,
-                    country_code: None,
-                    city: None,
-                    checked_at: Utc::now(),
-                    detail: Some(format!(
-                        "Proxy-aware connectivity checks failed ({proxy_error}); direct checks failed ({direct_error})"
-                    )),
-                },
+                Ok(status) => {
+                    warn!(
+                        event = "network.proxy_check_failed",
+                        section = "network",
+                        initiator = "network_monitor",
+                        cause = %proxy_error,
+                        trace_route = "network_monitor->proxy_aware_client->direct_retry",
+                        "proxy-aware check failed; direct retry succeeded"
+                    );
+                    status
+                }
+                Err(direct_error) => {
+                    warn!(
+                        event = "network.check_failed",
+                        section = "network",
+                        initiator = "network_monitor",
+                        cause = %format!("proxy: {proxy_error}; direct: {direct_error}"),
+                        trace_route = "network_monitor->proxy_aware_client->direct_client->offline",
+                        "all bounded network checks failed"
+                    );
+                    NetworkStatus {
+                        state: InternetState::Offline,
+                        public_ip: None,
+                        country_code: None,
+                        city: None,
+                        checked_at: Utc::now(),
+                        detail: Some(format!(
+                            "Proxy-aware connectivity checks failed ({proxy_error}); direct checks failed ({direct_error})"
+                        )),
+                    }
+                }
             },
         }
     }

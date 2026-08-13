@@ -13,6 +13,7 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
+use tracing::{info, warn};
 
 const GITHUB_RAW: &str = "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/release";
 const JSDELIVR: &str = "https://cdn.jsdelivr.net/gh/chocolate4u/Iran-clash-rules@release";
@@ -252,6 +253,15 @@ impl CloudRuleStore {
     /// or atomic persistence failures. Existing cached rules remain available
     /// when a replacement cannot be published.
     pub async fn sync(&self) -> Result<CloudRulesStatus, CloudSyncError> {
+        info!(
+            event = "cloud_rules.sync_started",
+            section = "cloud_rules",
+            initiator = "cloud_rule_store",
+            cause = "user_request",
+            trace_route = "tauri_command->cloud_rule_store->fail_safe_sources",
+            provider_count = CATALOG.len(),
+            "cloud rule synchronization started"
+        );
         fs::create_dir_all(&self.cache_dir)?;
         let mut sets = Vec::with_capacity(CATALOG.len());
         let mut used_source = String::from("bundled");
@@ -282,13 +292,25 @@ impl CloudRuleStore {
             &self.cache_dir.join(META_FILE),
             &serde_json::to_vec_pretty(&meta)?,
         )?;
-        Ok(status_from_meta(&meta).unwrap_or(CloudRulesStatus {
+        let status = status_from_meta(&meta).unwrap_or(CloudRulesStatus {
             domain_count: 0,
             ip_count: 0,
             last_synced_at: meta.last_synced_at,
             source: meta.source,
             sets: meta.sets,
-        }))
+        });
+        info!(
+            event = "cloud_rules.sync_completed",
+            section = "cloud_rules",
+            initiator = "cloud_rule_store",
+            cause = "none",
+            trace_route = "tauri_command->cloud_rule_store->atomic_cache",
+            domain_count = status.domain_count,
+            ip_count = status.ip_count,
+            source = status.source,
+            "cloud rule synchronization completed"
+        );
+        Ok(status)
     }
 
     fn bundled_status(&self) -> Result<CloudRulesStatus, CloudSyncError> {
@@ -334,8 +356,30 @@ impl CloudRuleStore {
                         return Ok((bytes, source_label(&url)));
                     }
                     last_error = CloudSyncError::InvalidSet(entry.local_name.into());
+                    warn!(
+                        event = "cloud_rules.source_rejected",
+                        section = "cloud_rules",
+                        initiator = "fail_safe_fetcher",
+                        cause = "provider_below_minimum_entries",
+                        trace_route = "cloud_rule_store->fail_safe_source->validation",
+                        provider = entry.local_name,
+                        source = source_label(&url),
+                        "cloud rule source returned an incomplete provider"
+                    );
                 }
-                Err(error) => last_error = error,
+                Err(error) => {
+                    warn!(
+                        event = "cloud_rules.source_failed",
+                        section = "cloud_rules",
+                        initiator = "fail_safe_fetcher",
+                        cause = %error,
+                        trace_route = "cloud_rule_store->fail_safe_source->next_source",
+                        provider = entry.local_name,
+                        source = source_label(&url),
+                        "cloud rule source failed; trying the next source"
+                    );
+                    last_error = error;
+                }
             }
         }
         Err(last_error)

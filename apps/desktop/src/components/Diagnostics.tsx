@@ -3,15 +3,19 @@ import {
   CircleAlert,
   Download,
   FileText,
+  FolderOpen,
   LoaderCircle,
   Play,
+  RefreshCw,
   Route,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { desktop } from "../api/desktop";
 import type {
   DiagnosticsReport,
+  DebugLogStatus,
   ExportResult,
   LogEntry,
   RouteTestResult,
@@ -28,6 +32,27 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
   const [target, setTarget] = useState("");
   const [route, setRoute] = useState<RouteTestResult | null>(null);
   const [testing, setTesting] = useState(false);
+  const [debugLog, setDebugLog] = useState<DebugLogStatus | null>(null);
+  const [logAction, setLogAction] = useState<
+    "refresh" | "reveal" | "delete" | null
+  >(null);
+  const [logMessage, setLogMessage] = useState<string | null>(null);
+
+  const refreshDebugLog = () => {
+    setLogAction("refresh");
+    setLogMessage(null);
+    void desktop
+      .debugLogStatus()
+      .then(setDebugLog)
+      .catch((error: unknown) =>
+        setLogMessage(
+          error instanceof Error
+            ? error.message
+            : "Could not inspect debug.log",
+        ),
+      )
+      .finally(() => setLogAction(null));
+  };
 
   useEffect(() => {
     void desktop
@@ -35,6 +60,10 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
       .then(setLogs)
       .catch(() => setLogs([]));
   }, [report]);
+
+  useEffect(() => {
+    refreshDebugLog();
+  }, []);
 
   const visibleLogs =
     level === "all" ? logs : logs.filter((entry) => entry.level === level);
@@ -152,6 +181,110 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
       </div>
 
       <div className="rounded-2xl border border-ink/10 bg-surface p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="font-semibold">Permanent debug.log</h2>
+            <p className="mt-1 text-sm text-muted">
+              Preserved across app restarts until you delete it. Send this file
+              to the support team when reporting a problem.
+            </p>
+            {debugLog ? (
+              <dl className="mt-3 space-y-1 text-sm">
+                <div className="flex gap-2">
+                  <dt className="font-medium">Size:</dt>
+                  <dd data-testid="debug-log-size">
+                    {formatBytes(debugLog.size_bytes)}
+                  </dd>
+                </div>
+                <div className="flex min-w-0 gap-2">
+                  <dt className="shrink-0 font-medium">Location:</dt>
+                  <dd className="min-w-0 break-all font-mono text-xs text-muted">
+                    {debugLog.path}
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="mt-3 text-sm text-muted">Reading file status…</p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={logAction !== null}
+              onClick={refreshDebugLog}
+              className="inline-flex items-center gap-2 rounded-xl border border-ink/15 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+            >
+              <RefreshCw size={16} aria-hidden /> Refresh size
+            </button>
+            <button
+              type="button"
+              disabled={logAction !== null || debugLog === null}
+              onClick={() => {
+                setLogAction("reveal");
+                setLogMessage(null);
+                void desktop
+                  .revealDebugLog()
+                  .then((status) => {
+                    setDebugLog(status);
+                    setLogMessage("Opened the folder containing debug.log.");
+                  })
+                  .catch((error: unknown) =>
+                    setLogMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Could not locate debug.log",
+                    ),
+                  )
+                  .finally(() => setLogAction(null));
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-ink/15 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+            >
+              <FolderOpen size={16} aria-hidden /> Show file
+            </button>
+            <button
+              type="button"
+              disabled={logAction !== null || debugLog === null}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Delete all existing debug.log content? New app events will continue logging immediately.",
+                  )
+                ) {
+                  return;
+                }
+                setLogAction("delete");
+                setLogMessage(null);
+                void desktop
+                  .deleteDebugLog()
+                  .then((status) => {
+                    setDebugLog(status);
+                    setLogMessage(
+                      "Previous log content was deleted. New events are being recorded.",
+                    );
+                  })
+                  .catch((error: unknown) =>
+                    setLogMessage(
+                      error instanceof Error
+                        ? error.message
+                        : "Could not delete debug.log",
+                    ),
+                  )
+                  .finally(() => setLogAction(null));
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-danger/30 px-3 py-2 text-sm font-semibold text-danger disabled:opacity-50"
+            >
+              <Trash2 size={16} aria-hidden /> Delete log
+            </button>
+          </div>
+        </div>
+        {logMessage ? (
+          <p className="mt-3 rounded-xl bg-canvas p-3 text-sm" role="status">
+            {logMessage}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="rounded-2xl border border-ink/10 bg-surface p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold">Recent redacted logs</h2>
           <select
@@ -189,8 +322,7 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
           <div>
             <h2 className="font-semibold">Support bundle</h2>
             <p className="mt-1 text-sm text-muted">
-              Versions, redacted config, state, bounded logs, and diagnostic
-              results only.
+              Versions, redacted config, state, and the permanent debug.log.
             </p>
           </div>
           <button
@@ -214,4 +346,16 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
       </div>
     </section>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
 }

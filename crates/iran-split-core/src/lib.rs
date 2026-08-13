@@ -439,8 +439,24 @@ impl<B: PlatformBackend> Engine<B> {
     }
 
     pub async fn refresh_health(&self) {
+        info!(
+            event = "health.refresh_started",
+            section = "runtime_health",
+            initiator = "engine",
+            cause = "scheduled_or_requested",
+            trace_route = "engine->platform_backend->runtime_health",
+            "runtime health refresh started"
+        );
         let health = self.backend.runtime_health().await;
         self.update(|snapshot| apply_health(snapshot, health));
+        info!(
+            event = "health.refresh_completed",
+            section = "runtime_health",
+            initiator = "engine",
+            cause = "none",
+            trace_route = "engine->platform_backend->runtime_health",
+            "runtime health refresh completed"
+        );
     }
 
     /// Queues startup reconciliation of helper and network state.
@@ -518,6 +534,16 @@ impl<B: PlatformBackend> Engine<B> {
     async fn accept(&self, kind: OperationKind) -> Result<OperationAccepted, CoreError> {
         let mut pending = self.pending.lock().await;
         if let Some(operation_id) = pending.get(&kind) {
+            info!(
+                event = "operation.deduplicated",
+                section = "engine",
+                initiator = "operation_queue",
+                cause = "matching_operation_pending",
+                trace_route = "caller->engine->operation_queue",
+                operation_id = %operation_id,
+                kind = ?kind,
+                "existing operation returned"
+            );
             return Ok(OperationAccepted {
                 operation_id: *operation_id,
                 already_complete: false,
@@ -545,8 +571,28 @@ impl<B: PlatformBackend> Engine<B> {
         {
             pending.remove(&kind);
             self.operations.lock().await.remove(&operation_id);
+            error!(
+                event = "operation.queue_failed",
+                section = "engine",
+                initiator = "operation_queue",
+                cause = "worker_channel_closed",
+                trace_route = "caller->engine->operation_queue",
+                operation_id = %operation_id,
+                kind = ?kind,
+                "operation could not be queued"
+            );
             return Err(CoreError::QueueUnavailable);
         }
+        info!(
+            event = "operation.queued",
+            section = "engine",
+            initiator = "operation_queue",
+            cause = "accepted",
+            trace_route = "caller->engine->operation_queue->worker",
+            operation_id = %operation_id,
+            kind = ?kind,
+            "operation queued"
+        );
         Ok(OperationAccepted {
             operation_id,
             already_complete: false,
@@ -555,7 +601,17 @@ impl<B: PlatformBackend> Engine<B> {
 
     async fn worker(engine: Arc<Self>, mut receiver: mpsc::Receiver<WorkItem>) {
         while let Some(item) = receiver.recv().await {
-            info!(operation_id = %item.id, kind = ?item.kind, "operation started");
+            info!(
+                event = "operation.started",
+                section = "engine",
+                initiator = "operation_worker",
+                cause = "dequeued",
+                trace_id = %item.id,
+                trace_route = "operation_queue->worker->platform_backend",
+                operation_id = %item.id,
+                kind = ?item.kind,
+                "operation started"
+            );
             let result = match item.kind {
                 OperationKind::Reconcile => engine.run_reconcile(item.id, &item.cancel).await,
                 OperationKind::Start => engine.run_start(item.id, &item.cancel).await,
@@ -563,7 +619,17 @@ impl<B: PlatformBackend> Engine<B> {
             };
             if let Err(error) = result {
                 if !matches!(error, CoreError::Cancelled) {
-                    error!(operation_id = %item.id, %error, "operation failed");
+                    error!(
+                        event = "operation.failed",
+                        section = "engine",
+                        initiator = "operation_worker",
+                        cause = %error,
+                        trace_id = %item.id,
+                        trace_route = "operation_queue->worker->platform_backend",
+                        operation_id = %item.id,
+                        kind = ?item.kind,
+                        "operation failed"
+                    );
                     let health = engine.backend.runtime_health().await;
                     engine.update(|snapshot| {
                         apply_health(snapshot, health);
@@ -575,7 +641,17 @@ impl<B: PlatformBackend> Engine<B> {
             engine.update(|snapshot| snapshot.operation_id = None);
             engine.operations.lock().await.remove(&item.id);
             engine.pending.lock().await.remove(&item.kind);
-            info!(operation_id = %item.id, kind = ?item.kind, "operation finished");
+            info!(
+                event = "operation.finished",
+                section = "engine",
+                initiator = "operation_worker",
+                cause = "worker_complete",
+                trace_id = %item.id,
+                trace_route = "operation_queue->worker->snapshot",
+                operation_id = %item.id,
+                kind = ?item.kind,
+                "operation finished"
+            );
         }
     }
 
@@ -593,7 +669,15 @@ impl<B: PlatformBackend> Engine<B> {
             let process = self.backend.core_process().await.unwrap_or_default();
             let tun = self.backend.tun_status().await.unwrap_or_default();
             if process.running || tun.active {
-                warn!("found owned runtime state during startup reconciliation");
+                warn!(
+                    event = "startup.owned_state_found",
+                    section = "startup_reconciliation",
+                    initiator = "engine",
+                    cause = "previous_session_state_remains",
+                    trace_id = %operation_id,
+                    trace_route = "startup->engine->platform_backend->cleanup",
+                    "found owned runtime state during startup reconciliation"
+                );
                 let report = self.backend.cleanup_owned_state().await?;
                 if !report.clean() {
                     return Err(CoreError::TunCleanupFailed(report.warnings.join("; ")));
@@ -716,7 +800,17 @@ impl<B: PlatformBackend> Engine<B> {
 
     async fn rollback(&self, operation_id: Uuid) -> Result<(), CoreError> {
         self.transition(StackPhase::Recovering, operation_id);
-        let _ = self.backend.stop_core().await;
+        if let Err(cause) = self.backend.stop_core().await {
+            warn!(
+                event = "operation.rollback_stop_failed",
+                section = "engine",
+                initiator = "rollback",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->rollback->platform_backend",
+                "rollback continued after the core stop step failed"
+            );
+        }
         let report = self.backend.cleanup_owned_state().await?;
         let tun = self.backend.tun_status().await?;
         if tun.active || !report.clean() {

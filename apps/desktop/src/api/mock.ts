@@ -6,6 +6,7 @@ import type {
   DependencyStatus,
   DiagnosticStep,
   DiagnosticsReport,
+  DebugLogStatus,
   DirectRule,
   DirectRulesDocument,
   ExportResult,
@@ -279,6 +280,14 @@ const logs: LogEntry[] = [
     fields: { mode: "development" },
   },
 ];
+let debugLogSize = 48_512;
+
+function mockDebugLogStatus(): DebugLogStatus {
+  return {
+    path: "/home/user/.local/share/biflow/debug.log",
+    size_bytes: debugLogSize,
+  };
+}
 
 const listeners = new Set<(next: StackSnapshot) => void>();
 
@@ -536,14 +545,24 @@ export const mockApi = {
   async queryLogs() {
     return structuredClone(logs);
   },
+  async debugLogStatus(): Promise<DebugLogStatus> {
+    return mockDebugLogStatus();
+  },
+  async revealDebugLog(): Promise<DebugLogStatus> {
+    return mockDebugLogStatus();
+  },
+  async deleteDebugLog(): Promise<DebugLogStatus> {
+    debugLogSize = 512;
+    return mockDebugLogStatus();
+  },
   async exportBundle(): Promise<ExportResult> {
     return {
       path: "/tmp/biflow-support-mock.json",
       files: [
         "versions.json",
-        "config-redacted.toml",
+        "config-redacted.json",
         "snapshot.json",
-        "logs.json",
+        "debug.log",
       ],
     };
   },
@@ -569,6 +588,7 @@ export function resetMockState() {
   cloudRules = initialCloudRules();
   dependencies = missingDependencies();
   logs.length = 0;
+  debugLogSize = 48_512;
   logs.push({
     timestamp: now(),
     level: "info",
