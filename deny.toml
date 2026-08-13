@@ -1,13 +1,29 @@
 [advisories]
 ignore = []
+# GTK3, unic-*, and proc-macro-error are unmaintained with no safe upgrade.
+# They arrive only through Tauri/wry; fail if a workspace crate depends on them directly.
+unmaintained = "workspace"
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
 confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# Path deps look like `*` wildcards. cargo-deny only ignores those in unpublished crates.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"

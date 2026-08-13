@@ -163,8 +163,10 @@ No. The UI runs as your user. Only the helper performs privileged network
 changes, over a versioned, size-limited, allowlisted local protocol.
 
 **Which platforms are supported?**
-Linux (Debian package) and Windows (portable `.exe` and NSIS installer).
-Windows packages can be built on Windows, or cross-compiled from Linux.
+Linux (Debian package and AppImage) and Windows (portable `.exe` and NSIS
+installer). Windows packages can be built on Windows, or cross-compiled from
+Linux. Pushing a `v*` tag publishes those four artifacts as GitHub Release
+assets.
 
 **Can I add my own DIRECT sites?**
 Yes. **Direct rules** stores extra domains and IPs. They take precedence over

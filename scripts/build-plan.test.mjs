@@ -10,12 +10,13 @@ import { artifactLayout } from "./build-plan.mjs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("release artifact names", () => {
-  it("names linux deb and windows exe/installer from the version file", () => {
+  it("names all Linux and Windows artifacts from the version file", () => {
     const directory = mkdtempSync(join(tmpdir(), "biflow-version-"));
     writeFileSync(join(directory, "version"), "1.2.3\n");
     const plan = artifactLayout(directory);
     assert.equal(plan.version, "1.2.3");
     assert.equal(plan.linux.deb, "BiFlow_1.2.3_amd64.deb");
+    assert.equal(plan.linux.appimage, "BiFlow_1.2.3_amd64.AppImage");
     assert.equal(plan.windows.exe, "BiFlow.exe");
     assert.equal(plan.windows.installer, "BiFlow_1.2.3_x64-setup.exe");
   });
@@ -36,6 +37,7 @@ describe("release artifact names", () => {
     });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /\.deb/);
+    assert.match(result.stdout, /AppImage/);
     assert.match(result.stdout, /NSIS installer/);
     assert.match(result.stdout, /BiFlow\.exe/);
     assert.match(result.stdout, /One-shot/);
@@ -70,6 +72,18 @@ describe("release artifact names", () => {
     assert.match(linuxDependencies[1], /apt_install_missing/);
   });
 
+  it("selects the renamed FUSE 2 package without breaking older Debian releases", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    const linuxDependencies = source.match(
+      /ensure_linux_desktop_dependencies\(\) \{([\s\S]*?)\n\}/,
+    );
+
+    assert.ok(linuxDependencies);
+    assert.match(linuxDependencies[1], /local fuse2="libfuse2"/);
+    assert.match(linuxDependencies[1], /apt-cache show libfuse2t64/);
+    assert.match(linuxDependencies[1], /fuse2="libfuse2t64"/);
+  });
+
   it("lets the Windows target select NSIS during Linux cross-builds", () => {
     const source = readFileSync(join(root, "build.sh"), "utf8");
     const crossSetup = source.match(
@@ -83,6 +97,15 @@ describe("release artifact names", () => {
       crossSetup[1],
       /WINDOWS_TAURI_ARGS=\([^)]*--bundles nsis/,
     );
+  });
+
+  it("keeps the Linux backend out of Windows workspace builds", () => {
+    const source = readFileSync(
+      join(root, "crates/iran-split-platform-linux/src/lib.rs"),
+      "utf8",
+    );
+
+    assert.match(source, /^#!\[cfg\(target_os = "linux"\)\]/);
   });
 
   it("pins one build version and validates exact package metadata", () => {
@@ -191,5 +214,63 @@ describe("release artifact names", () => {
     assert.match(agents, /zero warnings from project code/);
     assert.match(agents, /Do \*\*not\*\* `cargo clean`/);
     assert.match(agents, /not done/i);
+  });
+
+  it("publishes deb, appimage, portable exe, and nsis from v* tags only", () => {
+    const workflow = readFileSync(
+      join(root, ".github/workflows/release.yml"),
+      "utf8",
+    );
+    const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+
+    assert.match(workflow, /tags:\s*\[["']v\*["']\]/);
+    assert.doesNotMatch(workflow, /branches:\s*\[main\]/);
+    assert.doesNotMatch(workflow, /ref_protected/);
+    assert.match(workflow, /--bundles deb,appimage/);
+    assert.match(workflow, /--bundles nsis/);
+    assert.match(workflow, /ubuntu-24\.04/);
+    assert.match(workflow, /windows-2025/);
+    assert.match(workflow, /libfuse2t64/);
+    assert.match(workflow, /BiFlow\.exe/);
+    assert.match(workflow, /iran-split-desktop\.exe/);
+    assert.match(workflow, /x64-setup\.exe|nsis/);
+    assert.match(workflow, /needs:\s*verify/);
+    assert.match(workflow, /pnpm check/);
+    assert.match(workflow, /pnpm test:e2e/);
+    assert.match(
+      workflow,
+      /cargo clippy --workspace --all-targets -- -D warnings/,
+    );
+    assert.match(workflow, /cargo test --workspace/);
+    assert.match(workflow, /cargo deny check/);
+    assert.match(workflow, /tauri-apps\/tauri-action@v1/);
+    assert.match(workflow, /actions\/upload-artifact@v4/);
+    assert.match(workflow, /actions\/download-artifact@v4/);
+    assert.match(workflow, /gh release create/);
+    assert.match(workflow, /--draft/);
+    assert.match(workflow, /gh release upload/);
+    assert.match(workflow, /gh release edit/);
+    assert.doesNotMatch(workflow, /includeUpdaterJson|releaseDraft|tagName:/);
+    assert.doesNotMatch(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
+    assert.doesNotMatch(workflow, /hiddify/i);
+    assert.doesNotMatch(workflow, /mihomo/i);
+    assert.match(workflow, /ADR 0004/);
+    assert.match(ci, /cargo deny check/);
+  });
+
+  it("allows MPL-2.0 and other lockfile licenses without a blanket allow", () => {
+    const deny = readFileSync(join(root, "deny.toml"), "utf8");
+    const allow = deny.match(/\[licenses\][\s\S]*?allow\s*=\s*\[([\s\S]*?)\]/);
+
+    assert.ok(allow);
+    assert.match(allow[1], /MPL-2\.0/);
+    assert.match(allow[1], /Apache-2\.0 WITH LLVM-exception/);
+    assert.match(allow[1], /CDLA-Permissive-2\.0/);
+    assert.doesNotMatch(allow[1], /["']\*["']/);
+    assert.match(deny, /allow-wildcard-paths\s*=\s*true/);
+    assert.match(deny, /wildcards\s*=\s*"deny"/);
+    assert.match(deny, /unmaintained\s*=\s*"workspace"/);
+    const cargo = readFileSync(join(root, "Cargo.toml"), "utf8");
+    assert.match(cargo, /\[workspace\.package\][\s\S]*?publish = false/);
   });
 });

@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use async_trait::async_trait;
 use iran_split_config::{AppConfig, ExecutableSetting};
 use iran_split_core::{

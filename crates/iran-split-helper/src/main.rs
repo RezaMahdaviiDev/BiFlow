@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::path::PathBuf;
+#[cfg(unix)]
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]

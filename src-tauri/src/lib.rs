@@ -641,7 +641,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     #[cfg(target_os = "windows")]
     let _ = config;
     #[cfg(target_os = "windows")]
-    let backend = Arc::new(NativeBackend::default());
+    let backend = Arc::new(NativeBackend);
     let runtime = tauri::async_runtime::handle();
     let engine = Engine::new(Arc::clone(&backend), runtime.inner());
     let rules = RuleManager::load(

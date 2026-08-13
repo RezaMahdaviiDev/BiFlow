@@ -12,24 +12,25 @@
     "Segoe UI",
     sans-serif;
   color-scheme: light;
-  --canvas: 245 247 250;
+  /* BiFlow logo palette: navy surfaces, route blue, and flow teal. */
+  --canvas: 247 251 255;
   --surface: 255 255 255;
-  --ink: 24 32 45;
-  --muted: 103 116 137;
-  --brand: 24 112 95;
-  --success: 24 148 108;
-  --danger: 210 62 73;
+  --ink: 6 25 46;
+  --muted: 83 109 131;
+  --brand: 0 104 230;
+  --success: 0 124 131;
+  --danger: 201 54 70;
 }
 
 .dark {
   color-scheme: dark;
-  --canvas: 11 18 28;
-  --surface: 20 30 43;
-  --ink: 235 241 248;
-  --muted: 148 163 184;
-  --brand: 62 207 171;
-  --success: 52 211 153;
-  --danger: 251 113 133;
+  --canvas: 2 11 22;
+  --surface: 7 21 37;
+  --ink: 234 246 255;
+  --muted: 143 170 193;
+  --brand: 0 104 230;
+  --success: 0 210 209;
+  --danger: 239 91 103;
 }
 
 * {

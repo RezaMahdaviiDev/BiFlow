@@ -159,6 +159,13 @@ fn lookup_on_path(names: &[&str]) -> Vec<PathBuf> {
     )
 }
 
+#[cfg(any(windows, test))]
+fn has_extension(name: &str, extension: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+}
+
 fn files_named_in(dirs: impl IntoIterator<Item = PathBuf>, names: &[&str]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for dir in dirs {
@@ -169,7 +176,7 @@ fn files_named_in(dirs: impl IntoIterator<Item = PathBuf>, names: &[&str]) -> Ve
             }
             #[cfg(windows)]
             {
-                if !name.ends_with(".exe") {
+                if !has_extension(name, "exe") {
                     let exe = dir.join(format!("{name}.exe"));
                     if exe.is_file() {
                         found.push(exe);
@@ -671,6 +678,13 @@ mod tests {
         assert!(url_allowed(&hiddify_linux_appimage_url()));
         assert!(url_allowed(&mihomo_linux_url()));
         assert!(!url_allowed("https://example.com/hiddify"));
+    }
+
+    #[test]
+    fn executable_extensions_are_case_insensitive() {
+        assert!(has_extension("Hiddify.exe", "exe"));
+        assert!(has_extension("Hiddify.EXE", "exe"));
+        assert!(!has_extension("Hiddify.exe.zip", "exe"));
     }
 
     #[test]

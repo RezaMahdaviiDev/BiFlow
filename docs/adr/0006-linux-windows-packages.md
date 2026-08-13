@@ -11,7 +11,7 @@ Operators need installable artifacts: a Debian package on Linux, and on Windows 
 ## Decision
 
 - `./build.sh` is the release entry point. Default `all` builds Linux and Windows.
-- Linux output is a `.deb` at `artifacts/linux/BiFlow_<version>_amd64.deb`.
+- Linux output is a `.deb` and an AppImage at `artifacts/linux/BiFlow_<version>_amd64.deb` and `artifacts/linux/BiFlow_<version>_amd64.AppImage`.
 - Windows output is the app binary `artifacts/windows/BiFlow.exe` and an NSIS installer `artifacts/windows/BiFlow_<version>_x64-setup.exe`.
 - Artifact names are derived from the root `version` file via `scripts/build-plan.mjs`.
 - `./build.sh` is one-shot: it checks for Node 22, pnpm, Rust (from `rust-toolchain.toml`), Linux desktop libraries, NSIS, and `cargo-xwin`, and installs anything missing before building.
@@ -26,4 +26,4 @@ Operators need installable artifacts: a Debian package on Linux, and on Windows 
 
 - `./dev.sh package` delegates to `./build.sh linux`.
 - Cross-compiling Windows from Linux installs NSIS and `cargo-xwin` (or MinGW) instead of printing a manual install recipe.
-- Signed production releases still use the OS matrix in `.github/workflows/release.yml`.
+- Signed production releases use the OS matrix in `.github/workflows/release.yml`, triggered only when a `v*` tag is pushed. Verification runs first, Linux builds `.deb` and AppImage, and Windows builds the portable `.exe` and NSIS installer on a native runner. A final job publishes all four workflow artifacts together. The Linux Tauri CLI must not receive `--bundles nsis`.

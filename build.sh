@@ -43,6 +43,10 @@ linux_deb_name() {
   command printf 'BiFlow_%s_amd64.deb\n' "${BUILD_VERSION}"
 }
 
+linux_appimage_name() {
+  command printf 'BiFlow_%s_amd64.AppImage\n' "${BUILD_VERSION}"
+}
+
 windows_installer_name() {
   command printf 'BiFlow_%s_x64-setup.exe\n' "${BUILD_VERSION}"
 }
@@ -53,7 +57,9 @@ BiFlow release builder
 
 Usage: ./build.sh [linux|windows|all]
 
-  linux     Native Linux .deb  →  artifacts/linux/BiFlow_<version>_amd64.deb
+  linux     Native Linux .deb and AppImage
+            →  artifacts/linux/BiFlow_<version>_amd64.deb
+            →  artifacts/linux/BiFlow_<version>_amd64.AppImage
   windows   Windows app .exe and NSIS installer
             →  artifacts/windows/BiFlow.exe
             →  artifacts/windows/BiFlow_<version>_x64-setup.exe
@@ -236,8 +242,12 @@ ensure_linux_desktop_dependencies() {
   case "${ID:-}" in
     ubuntu|debian|linuxmint|pop)
       local indicator="libappindicator3-dev"
+      local fuse2="libfuse2"
       if apt-cache show libayatana-appindicator3-dev >/dev/null 2>&1; then
         indicator="libayatana-appindicator3-dev"
+      fi
+      if apt-cache show libfuse2t64 >/dev/null 2>&1; then
+        fuse2="libfuse2t64"
       fi
       apt_install_missing \
         build-essential \
@@ -248,7 +258,8 @@ ensure_linux_desktop_dependencies() {
         libgtk-3-dev \
         "${indicator}" \
         librsvg2-dev \
-        patchelf
+        patchelf \
+        "${fuse2}"
       ;;
     *)
       die "automatic desktop-library install supports Debian/Ubuntu; install WebKitGTK 4.1 and GTK 3 development packages"
@@ -315,6 +326,9 @@ collect_linux() {
     die "Linux package version mismatch: expected ${BUILD_VERSION}, got ${package_version}"
   dest="${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)"
   copy_one "${source}" "${dest}"
+  source="${TARGET_DIR}/release/bundle/appimage/$(linux_appimage_name)"
+  dest="${PROJECT_DIR}/$(plan linux.dir)/$(linux_appimage_name)"
+  copy_one "${source}" "${dest}"
 }
 
 collect_windows() {
@@ -336,8 +350,8 @@ collect_windows() {
 build_linux() {
   [[ "$(host_os)" == "linux" ]] || die "Linux .deb packages must be built on Linux"
   assert_build_version
-  log "Building Linux .deb for BiFlow ${BUILD_VERSION}"
-  (cd -- "${PROJECT_DIR}" && pnpm tauri build --bundles deb)
+  log "Building Linux .deb and AppImage for BiFlow ${BUILD_VERSION}"
+  (cd -- "${PROJECT_DIR}" && pnpm tauri build --bundles deb,appimage)
   collect_linux
 }
 
@@ -364,6 +378,8 @@ print_summary() {
   log "BiFlow ${BUILD_VERSION} artifacts:"
   [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)" ]] && \
     log "  Linux deb:          $(plan linux.dir)/$(linux_deb_name)"
+  [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_appimage_name)" ]] && \
+    log "  Linux AppImage:     $(plan linux.dir)/$(linux_appimage_name)"
   [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.exe)" ]] && \
     log "  Windows app:        $(plan windows.dir)/$(plan windows.exe)"
   [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)" ]] && \

@@ -5,11 +5,53 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+# Tag v* publishes Linux .deb + AppImage and Windows portable .exe + NSIS.
+# Third-party VPN apps stay in-app (ADR 0004); this workflow does not vendor them.
+# Build jobs only upload workflow artifacts. The final job publishes all four together.
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Verify tag matches the version file
+        shell: bash
+        run: |
+          expected="v$(tr -d '[:space:]' < version)"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match version file ${expected}"
+            exit 1
+          fi
+      - name: Install Linux desktop dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
+
   build:
-    if: github.ref_protected == true
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -31,18 +73,79 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2t64
       - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: cargo test --workspace
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: tauri-apps/tauri-action@v1
         with:
-          tagName: v__VERSION__
-          releaseName: BiFlow v__VERSION__
-          releaseDraft: true
-          prerelease: false
           args: ${{ matrix.args }}
+      - name: Stage portable Windows app
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="target/release/iran-split-desktop.exe"
+          test -f "${exe}"
+          cp "${exe}" BiFlow.exe
+      - name: Upload Linux release artifacts
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload Windows release artifacts
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            BiFlow.exe
+            target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Validate and publish the complete release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mapfile -t debs < <(find release-assets -type f -name '*.deb' -print | sort)
+          mapfile -t appimages < <(find release-assets -type f -name '*.AppImage' -print | sort)
+          mapfile -t portable < <(find release-assets -type f -name 'BiFlow.exe' -print | sort)
+          mapfile -t installers < <(find release-assets -type f -name '*-setup.exe' -print | sort)
+
+          if (( ${#debs[@]} != 1 || ${#appimages[@]} != 1 || ${#portable[@]} != 1 || ${#installers[@]} != 1 )); then
+            echo "Expected one deb, AppImage, portable exe, and NSIS installer"
+            find release-assets -type f -print
+            exit 1
+          fi
+
+          assets=("${debs[@]}" "${appimages[@]}" "${portable[@]}" "${installers[@]}")
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --generate-notes \
+              --title "BiFlow ${GITHUB_REF_NAME}" \
+              --verify-tag
+          fi
+          gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          gh release edit "${GITHUB_REF_NAME}" \
+            --draft=false \
+            --prerelease=false \
+            --title "BiFlow ${GITHUB_REF_NAME}"

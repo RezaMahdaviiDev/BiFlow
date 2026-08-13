@@ -370,7 +370,10 @@ impl ConfigStore {
         let mut temporary = NamedTempFile::new_in(parent)?;
         temporary.write_all(content.as_bytes())?;
         temporary.as_file().sync_all()?;
+        #[cfg(unix)]
         set_private_permissions(temporary.path())?;
+        #[cfg(not(unix))]
+        set_private_permissions(temporary.path());
         temporary.persist(&self.path)?;
         sync_directory(parent)?;
         Ok(())
@@ -399,9 +402,7 @@ fn set_private_permissions(path: &Path) -> Result<(), std::io::Error> {
 }
 
 #[cfg(not(unix))]
-fn set_private_permissions(_path: &Path) -> Result<(), std::io::Error> {
-    Ok(())
-}
+fn set_private_permissions(_path: &Path) {}
 
 fn sync_directory(path: &Path) -> Result<(), std::io::Error> {
     let directory = OpenOptions::new().read(true).open(path)?;
@@ -458,5 +459,27 @@ mod tests {
             redacted.hiddify.executable,
             ExecutableSetting::Path(PathBuf::from("Hiddify.AppImage"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_permissions_restrict_to_owner_read_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("secret.toml");
+        fs::write(&path, "x").expect("write");
+        set_private_permissions(&path).expect("chmod");
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn private_permissions_are_a_noop_off_unix() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("secret.toml");
+        fs::write(&path, "x").expect("write");
+        set_private_permissions(&path);
+        assert!(path.is_file());
     }
 }

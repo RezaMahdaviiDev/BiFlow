@@ -13,6 +13,7 @@ export function artifactLayout(fromRoot = root) {
     linux: {
       dir: "artifacts/linux",
       deb: `BiFlow_${version}_amd64.deb`,
+      appimage: `BiFlow_${version}_amd64.AppImage`,
     },
     windows: {
       dir: "artifacts/windows",

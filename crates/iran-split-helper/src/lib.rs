@@ -207,7 +207,10 @@ impl Supervisor {
             fs::remove_dir_all(&temporary_root)?;
         }
         fs::create_dir(&temporary_root)?;
+        #[cfg(unix)]
         set_directory_permissions(&temporary_root)?;
+        #[cfg(not(unix))]
+        set_directory_permissions(&temporary_root);
         for name in GENERATION_FILES {
             let source = checked_generation_file(&source_root_canonical, name)?;
             let destination = temporary_root.join(name);
@@ -345,7 +348,10 @@ impl Supervisor {
         let process_stopped = !self.stop().await?.running;
         let interface_path = Path::new("/sys/class/net").join(&self.settings.tun_name);
         if interface_path.exists() {
+            #[cfg(unix)]
             delete_owned_interface(&self.settings.tun_name).await?;
+            #[cfg(not(unix))]
+            delete_owned_interface(&self.settings.tun_name);
         }
         let tun_removed = !interface_path.exists();
         let warnings = if tun_removed {
@@ -477,7 +483,10 @@ fn copy_new_file(source: &Path, destination: &Path) -> Result<(), HelperServiceE
     let mut input = fs::File::open(source)?;
     io::copy(&mut input, &mut output)?;
     output.sync_all()?;
+    #[cfg(unix)]
     set_file_permissions(destination)?;
+    #[cfg(not(unix))]
+    set_file_permissions(destination);
     Ok(())
 }
 
@@ -489,9 +498,7 @@ fn set_file_permissions(path: &Path) -> Result<(), HelperServiceError> {
 }
 
 #[cfg(not(unix))]
-fn set_file_permissions(_path: &Path) -> Result<(), HelperServiceError> {
-    Ok(())
-}
+fn set_file_permissions(_path: &Path) {}
 
 #[cfg(unix)]
 fn set_directory_permissions(path: &Path) -> Result<(), HelperServiceError> {
@@ -501,9 +508,7 @@ fn set_directory_permissions(path: &Path) -> Result<(), HelperServiceError> {
 }
 
 #[cfg(not(unix))]
-fn set_directory_permissions(_path: &Path) -> Result<(), HelperServiceError> {
-    Ok(())
-}
+fn set_directory_permissions(_path: &Path) {}
 
 fn now_string() -> String {
     // UTC RFC3339 without pulling wall-clock parsing into the IPC contract.
@@ -580,9 +585,7 @@ async fn delete_owned_interface(name: &str) -> Result<(), HelperServiceError> {
 }
 
 #[cfg(not(unix))]
-async fn delete_owned_interface(_name: &str) -> Result<(), HelperServiceError> {
-    Ok(())
-}
+fn delete_owned_interface(_name: &str) {}
 
 #[cfg(unix)]
 mod linux;
@@ -594,6 +597,12 @@ pub use linux::run_linux;
 pub mod windows {
     use super::HelperServiceError;
 
+    /// Starts the privileged helper as a Windows service.
+    ///
+    /// # Errors
+    ///
+    /// Always returns [`HelperServiceError::UnsafeConfig`]. The packaged Windows
+    /// service must be started from the native service entry point, not this stub.
     pub fn run_service() -> Result<(), HelperServiceError> {
         Err(HelperServiceError::UnsafeConfig(
             "Windows service packaging must invoke the native service entry point".into(),
@@ -629,5 +638,20 @@ mod tests {
             tun_name: "../../tun".into(),
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn permission_helpers_are_noops_off_unix() {
+        let path = Path::new("unused");
+        set_file_permissions(path);
+        set_directory_permissions(path);
+        delete_owned_interface("unused");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_service_stub_rejects_direct_invocation() {
+        assert!(windows::run_service().is_err());
     }
 }

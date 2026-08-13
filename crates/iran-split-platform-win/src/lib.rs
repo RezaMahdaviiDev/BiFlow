@@ -107,22 +107,44 @@ impl PlatformBackend for WindowsBackend {
 
 #[cfg(windows)]
 mod windows_impl {
-    use super::*;
+    use super::{CoreError, HelperStatus, HELPER_PIPE};
     use iran_split_ipc::{
         read_frame, validate_envelope, write_frame, Envelope, HelperCommand, HelperReply,
         PROTOCOL_VERSION,
     };
+    use std::io;
     use std::time::Duration;
-    use tokio::net::windows::named_pipe::ClientOptions;
+    use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient};
+    use windows::Win32::Foundation::ERROR_PIPE_BUSY;
 
-    pub async fn helper_status() -> Result<HelperStatus, CoreError> {
-        let mut pipe = tokio::time::timeout(
-            Duration::from_secs(5),
-            ClientOptions::new().open(HELPER_PIPE),
-        )
+    const PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+    const PIPE_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    fn is_pipe_busy(error: &io::Error) -> bool {
+        error
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok())
+            == Some(ERROR_PIPE_BUSY.0)
+    }
+
+    async fn connect_helper() -> Result<NamedPipeClient, CoreError> {
+        tokio::time::timeout(PIPE_CONNECT_TIMEOUT, async {
+            loop {
+                match ClientOptions::new().open(HELPER_PIPE) {
+                    Ok(pipe) => return Ok(pipe),
+                    Err(error) if is_pipe_busy(&error) => {
+                        tokio::time::sleep(PIPE_RETRY_DELAY).await;
+                    }
+                    Err(_) => return Err(CoreError::HelperUnavailable),
+                }
+            }
+        })
         .await
         .map_err(|_| CoreError::HelperUnavailable)?
-        .map_err(|_| CoreError::HelperUnavailable)?;
+    }
+
+    pub async fn helper_status() -> Result<HelperStatus, CoreError> {
+        let mut pipe = connect_helper().await?;
         let hello = Envelope::new(HelperCommand::Hello {
             client_version: env!("CARGO_PKG_VERSION").into(),
             supported_protocols: vec![PROTOCOL_VERSION],
@@ -150,11 +172,23 @@ mod windows_impl {
             )),
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{io, is_pipe_busy};
+
+        #[test]
+        fn detects_busy_pipe_errors_for_bounded_retries() {
+            let error = io::Error::from_raw_os_error(231);
+            assert!(is_pipe_busy(&error));
+            assert!(!is_pipe_busy(&io::Error::from_raw_os_error(2)));
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::HELPER_PIPE;
 
     #[test]
     fn pipe_name_is_versioned_and_fixed() {
