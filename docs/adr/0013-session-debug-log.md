@@ -25,8 +25,10 @@ subscription links, or other credentials.
   session.
 - Do not automatically truncate, rotate, cap, or delete the file. Diagnostics
   displays its live byte size and full path. The user can reveal its containing
-  folder or explicitly clear its contents after confirmation; the open handle
-  remains valid and immediately records a new `log.cleared` event.
+  folder or explicitly clear its contents after confirmation. Clearing closes
+  the append handle, truncates the file, and reopens it in append mode because
+  Windows rejects `SetEndOfFile` on a `FILE_APPEND_DATA` handle. Logging then
+  continues immediately with a `log.cleared` event.
 - Record UTC time, severity, section, event, initiator, cause, trace ID, trace
   route, source location, thread, and active spans. Tauri commands establish a
   new trace; engine operations and helper IPC add their operation/request IDs.

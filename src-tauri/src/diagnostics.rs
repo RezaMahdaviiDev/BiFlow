@@ -37,7 +37,7 @@ struct DebugLog {
 
 #[derive(Debug)]
 struct LogState {
-    file: File,
+    file: Option<File>,
     path: PathBuf,
     bytes_written: u64,
 }
@@ -47,15 +47,11 @@ impl DebugLog {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .read(true)
-            .open(path)?;
+        let file = open_append_log(path)?;
         let bytes_written = file.metadata()?.len();
         Ok(Self {
             inner: Arc::new(Mutex::new(LogState {
-                file,
+                file: Some(file),
                 path: path.to_owned(),
                 bytes_written,
             })),
@@ -68,18 +64,21 @@ impl DebugLog {
             .lock()
             .map_err(|_| io::Error::other("debug log lock is poisoned"))?;
         let incoming = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        state.file.write_all(bytes)?;
-        state.file.flush()?;
+        {
+            let file = log_file(&mut state)?;
+            file.write_all(bytes)?;
+            file.flush()?;
+        }
         state.bytes_written = state.bytes_written.saturating_add(incoming);
         Ok(())
     }
 
     fn flush(&self) -> io::Result<()> {
-        self.inner
+        let mut state = self
+            .inner
             .lock()
-            .map_err(|_| io::Error::other("debug log lock is poisoned"))?
-            .file
-            .flush()
+            .map_err(|_| io::Error::other("debug log lock is poisoned"))?;
+        log_file(&mut state)?.flush()
     }
 
     fn copy_to(&self, destination: &Path) -> io::Result<u64> {
@@ -87,7 +86,7 @@ impl DebugLog {
             .inner
             .lock()
             .map_err(|_| io::Error::other("debug log lock is poisoned"))?;
-        state.file.flush()?;
+        log_file(&mut state)?.flush()?;
         fs::copy(&state.path, destination)
     }
 
@@ -96,8 +95,8 @@ impl DebugLog {
             .inner
             .lock()
             .map_err(|_| io::Error::other("debug log lock is poisoned"))?;
-        state.file.flush()?;
-        state.bytes_written = state.file.metadata()?.len();
+        log_file(&mut state)?.flush()?;
+        state.bytes_written = log_file(&mut state)?.metadata()?.len();
         Ok(DebugLogStatus {
             path: state.path.to_string_lossy().into_owned(),
             size_bytes: state.bytes_written,
@@ -109,8 +108,15 @@ impl DebugLog {
             .inner
             .lock()
             .map_err(|_| io::Error::other("debug log lock is poisoned"))?;
-        state.file.flush()?;
-        state.file.set_len(0)?;
+        if let Some(mut file) = state.file.take() {
+            file.flush()?;
+        }
+        let path = state.path.clone();
+        // Windows cannot SetEndOfFile on a handle opened with FILE_APPEND_DATA.
+        // Close the append handle, truncate, then reopen in append mode so the
+        // Diagnostics delete action keeps logging immediately.
+        drop(OpenOptions::new().write(true).truncate(true).open(&path)?);
+        state.file = Some(open_append_log(&path)?);
         state.bytes_written = 0;
         Ok(())
     }
@@ -601,6 +607,21 @@ pub fn reveal() -> Result<DebugLogStatus, String> {
     Ok(status)
 }
 
+fn open_append_log(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .read(true)
+        .open(path)
+}
+
+fn log_file(state: &mut LogState) -> io::Result<&mut File> {
+    state
+        .file
+        .as_mut()
+        .ok_or_else(|| io::Error::other("debug log is closed"))
+}
+
 fn reveal_command(path: &Path) -> (&'static str, Vec<String>) {
     #[cfg(target_os = "linux")]
     {
@@ -712,7 +733,10 @@ mod tests {
         #[cfg(target_os = "windows")]
         {
             assert_eq!(program, "explorer.exe");
-            assert_eq!(arguments, vec!["/select,/tmp/biflow/debug.log"]);
+            assert_eq!(
+                arguments,
+                vec![format!("/select,{}", path.to_string_lossy())]
+            );
         }
     }
 }

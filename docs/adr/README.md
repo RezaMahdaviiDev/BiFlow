@@ -30,3 +30,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0024](./0024-signed-github-release-updater.md) | Signed GitHub Release updater       | Accepted   |
 | [0025](./0025-paused-lifecycle.md)              | Paused lifecycle and Hiddify keep   | Accepted   |
 | [0026](./0026-linux-webkit-blank-view.md)       | Linux WebKit blank-view workaround  | Accepted   |
+| [0027](./0027-windows-debug-log-clear.md)       | Windows debug.log clear and tests   | Accepted   |

@@ -803,7 +803,7 @@ mod tests {
         fs::create_dir_all(&apps).expect("apps");
         fs::create_dir_all(&bin).expect("bin");
         fs::write(apps.join("Hiddify.AppImage"), b"elf").expect("hiddify");
-        fs::write(bin.join("mihomo"), b"elf").expect("mihomo");
+        fs::write(dir.join(mihomo_file_name()), b"elf").expect("mihomo");
         let status = dependency_status(&dir);
         fs::remove_dir_all(&dir).expect("cleanup dependency fixture");
         assert!(status
