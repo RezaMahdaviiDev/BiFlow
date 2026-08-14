@@ -105,6 +105,143 @@ fn linux_mihomo_binary_with_override(
     override_path.map_or(default, PathBuf::from)
 }
 
+const BUNDLE_IDENTIFIER: &str = "app.biflow.desktop";
+
+#[cfg(target_os = "linux")]
+const WEBKIT_DISABLE_DMABUF_RENDERER: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+#[cfg(target_os = "linux")]
+const WEBKIT_DISABLE_COMPOSITING_MODE: &str = "WEBKIT_DISABLE_COMPOSITING_MODE";
+#[cfg(target_os = "linux")]
+const LIBGL_ALWAYS_SOFTWARE: &str = "LIBGL_ALWAYS_SOFTWARE";
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinuxWebviewWorkarounds {
+    disable_dmabuf: bool,
+    disable_compositing: bool,
+    software_gl: bool,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinuxWebviewEnv {
+    dmabuf_already_set: bool,
+    compositing_already_set: bool,
+    software_gl_already_set: bool,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LinuxGpuKind {
+    virtual_or_nvidia: bool,
+    virtual_machine: bool,
+}
+
+fn single_instance_dbus_id(identifier: &str, version: &str) -> String {
+    format!("{identifier}.v{}", version.replace('.', "_"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_dmi_is_virtual(vendor: Option<&str>) -> bool {
+    vendor.is_some_and(|value| {
+        let vendor = value.trim().to_ascii_lowercase();
+        vendor.contains("vmware")
+            || vendor.contains("qemu")
+            || vendor.contains("virtualbox")
+            || vendor.contains("microsoft corporation")
+            || vendor.contains("xen")
+            || vendor.contains("bochs")
+            || vendor.contains("parallels")
+            || vendor.contains("amazon")
+            || vendor.contains("google")
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_virtual_machine() -> bool {
+    linux_dmi_is_virtual(
+        fs::read_to_string("/sys/class/dmi/id/sys_vendor")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn linux_nvidia_gpu() -> bool {
+    Path::new("/dev/nvidia0").exists() || Path::new("/proc/driver/nvidia/version").exists()
+}
+
+#[cfg(target_os = "linux")]
+fn linux_webview_workarounds(env: LinuxWebviewEnv, gpu: LinuxGpuKind) -> LinuxWebviewWorkarounds {
+    LinuxWebviewWorkarounds {
+        disable_dmabuf: !env.dmabuf_already_set,
+        disable_compositing: gpu.virtual_or_nvidia && !env.compositing_already_set,
+        software_gl: gpu.virtual_machine && !env.software_gl_already_set,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_webview_reexec_needed(already_relaunched: bool, planned: LinuxWebviewWorkarounds) -> bool {
+    !already_relaunched
+        && (planned.disable_dmabuf || planned.disable_compositing || planned.software_gl)
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_webview_workarounds() {
+    let virtual_machine = linux_virtual_machine();
+    let planned = linux_webview_workarounds(
+        LinuxWebviewEnv {
+            dmabuf_already_set: std::env::var_os(WEBKIT_DISABLE_DMABUF_RENDERER).is_some(),
+            compositing_already_set: std::env::var_os(WEBKIT_DISABLE_COMPOSITING_MODE).is_some(),
+            software_gl_already_set: std::env::var_os(LIBGL_ALWAYS_SOFTWARE).is_some(),
+        },
+        LinuxGpuKind {
+            virtual_or_nvidia: virtual_machine || linux_nvidia_gpu(),
+            virtual_machine,
+        },
+    );
+    if !linux_webview_reexec_needed(
+        std::env::var_os("BIFLOW_WEBKIT_WORKAROUNDS").is_some(),
+        planned,
+    ) {
+        return;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/proc/self/exe"));
+    let mut command = std::process::Command::new(exe);
+    command.args(std::env::args_os().skip(1));
+    command.env("BIFLOW_WEBKIT_WORKAROUNDS", "1");
+    if planned.disable_dmabuf {
+        command.env(WEBKIT_DISABLE_DMABUF_RENDERER, "1");
+    }
+    if planned.disable_compositing {
+        command.env(WEBKIT_DISABLE_COMPOSITING_MODE, "1");
+    }
+    if planned.software_gl {
+        command.env(LIBGL_ALWAYS_SOFTWARE, "1");
+    }
+    match command.status() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(cause) => {
+            eprintln!("BiFlow could not relaunch with WebKit view workarounds: {cause}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn log_linux_webview_workarounds() {
+    info!(
+        event = "webview.linux_workarounds",
+        section = "window",
+        initiator = "application_process",
+        cause = "webkitgtk_dmabuf_blank_view",
+        trace_route = "application_process->run->webkit_env",
+        dmabuf_disabled = std::env::var_os(WEBKIT_DISABLE_DMABUF_RENDERER).is_some(),
+        compositing_disabled = std::env::var_os(WEBKIT_DISABLE_COMPOSITING_MODE).is_some(),
+        software_gl = std::env::var_os(LIBGL_ALWAYS_SOFTWARE).is_some(),
+        "Linux WebKit view workarounds applied"
+    );
+}
+
 impl AppPaths {
     fn discover(app: &AppHandle) -> Result<Self, String> {
         let config = dirs::config_dir()
@@ -1583,19 +1720,31 @@ fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
 ///
 /// Panics when the diagnostic log or Tauri event loop cannot initialize.
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    apply_linux_webview_workarounds();
     initialize_diagnostics();
+    #[cfg(target_os = "linux")]
+    log_linux_webview_workarounds();
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            info!(
-                event = "window.open_requested",
-                section = "window",
-                initiator = "second_process",
-                cause = "single_instance_activation",
-                trace_route = "second_process->single_instance_plugin->show_main",
-                "existing application instance activated"
-            );
-            show_main(app);
-        }))
+        .plugin(
+            tauri_plugin_single_instance::Builder::new()
+                .dbus_id(single_instance_dbus_id(
+                    BUNDLE_IDENTIFIER,
+                    version::app_version(),
+                ))
+                .callback(|app, _, _| {
+                    info!(
+                        event = "window.open_requested",
+                        section = "window",
+                        initiator = "second_process",
+                        cause = "single_instance_activation",
+                        trace_route = "second_process->single_instance_plugin->show_main",
+                        "existing application instance activated"
+                    );
+                    show_main(app);
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
@@ -1647,7 +1796,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{update_download_percent, UpdateProgress};
+    use super::{
+        single_instance_dbus_id, update_download_percent, UpdateProgress, BUNDLE_IDENTIFIER,
+    };
 
     #[test]
     fn update_download_percent_is_bounded() {
@@ -1673,6 +1824,88 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_dmi_detects_vmware_and_ignores_bare_metal() {
+        assert!(linux_dmi_is_virtual(Some("VMware, Inc.\n")));
+        assert!(linux_dmi_is_virtual(Some("QEMU")));
+        assert!(!linux_dmi_is_virtual(Some("Dell Inc.")));
+        assert!(!linux_dmi_is_virtual(None));
+    }
+
+    #[test]
+    fn single_instance_id_includes_the_full_package_version() {
+        assert_eq!(
+            single_instance_dbus_id(BUNDLE_IDENTIFIER, "1.2.5"),
+            "app.biflow.desktop.v1_2_5"
+        );
+        assert_ne!(
+            single_instance_dbus_id(BUNDLE_IDENTIFIER, "1.2.5"),
+            single_instance_dbus_id(BUNDLE_IDENTIFIER, "1.2.6")
+        );
+        let config = include_str!("../tauri.conf.json");
+        assert!(
+            config.contains(&format!("\"identifier\": \"{BUNDLE_IDENTIFIER}\"")),
+            "BUNDLE_IDENTIFIER must match tauri.conf.json"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_webview_workarounds_disable_dmabuf_and_vmware_compositing() {
+        let unset = LinuxWebviewEnv {
+            dmabuf_already_set: false,
+            compositing_already_set: false,
+            software_gl_already_set: false,
+        };
+        let virtual_gpu = linux_webview_workarounds(
+            unset,
+            LinuxGpuKind {
+                virtual_or_nvidia: true,
+                virtual_machine: true,
+            },
+        );
+        assert!(virtual_gpu.disable_dmabuf);
+        assert!(virtual_gpu.disable_compositing);
+        assert!(virtual_gpu.software_gl);
+        let nvidia = linux_webview_workarounds(
+            unset,
+            LinuxGpuKind {
+                virtual_or_nvidia: true,
+                virtual_machine: false,
+            },
+        );
+        assert!(nvidia.disable_compositing);
+        assert!(!nvidia.software_gl);
+        let respected = linux_webview_workarounds(
+            LinuxWebviewEnv {
+                dmabuf_already_set: true,
+                compositing_already_set: true,
+                software_gl_already_set: true,
+            },
+            LinuxGpuKind {
+                virtual_or_nvidia: true,
+                virtual_machine: true,
+            },
+        );
+        assert!(!respected.disable_dmabuf);
+        assert!(!respected.disable_compositing);
+        assert!(!respected.software_gl);
+        let typical = linux_webview_workarounds(
+            unset,
+            LinuxGpuKind {
+                virtual_or_nvidia: false,
+                virtual_machine: false,
+            },
+        );
+        assert!(typical.disable_dmabuf);
+        assert!(!typical.disable_compositing);
+        assert!(!typical.software_gl);
+        assert!(linux_webview_reexec_needed(false, virtual_gpu));
+        assert!(!linux_webview_reexec_needed(true, virtual_gpu));
+        assert!(!linux_webview_reexec_needed(false, respected));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

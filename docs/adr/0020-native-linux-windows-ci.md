@@ -35,7 +35,10 @@ Official sources:
 - Cache with `swatinem/rust-cache@v2` and `workspaces: ". -> target"`.
 - Set `git config --global core.autocrlf false` **before** `actions/checkout`
   on Windows. `.gitattributes` `-text` still pins bundled rule bytes.
-- Install NSIS with Chocolatey on `windows-2025` before `tauri-action`.
+- Install NSIS with Chocolatey on `windows-2025` before `tauri-action`. After
+  install, add the NSIS directory to `$GITHUB_PATH` **and** the current
+  `$env:Path`; `GITHUB_PATH` only applies to later steps, so
+  `Get-Command makensis` in the same step otherwise fails.
 - Keep cfg-gated Rust as tail expressions so host Clippy on either OS does not
   hit `clippy::needless_return`.
 - Local Linux packaging may still use `cargo-xwin`; GitHub release packaging
@@ -45,4 +48,5 @@ Official sources:
 
 Windows-only code is compiled on every CI push. A Linux Clippy failure no
 longer hides a Windows failure. Tag releases can produce NSIS installers on
-images that no longer preinstall `makensis`.
+images that no longer preinstall `makensis`. The NSIS install step must be
+able to resolve `makensis` immediately, not only in later jobs.

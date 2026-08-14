@@ -19,7 +19,10 @@ and Windows NSIS channels together with a static `latest.json` manifest.
   `https://github.com/devlifeX/BiFlow/releases/latest/download/latest.json`.
 - Store `TAURI_SIGNING_PRIVATE_KEY` and optional
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in GitHub Actions secrets only. Never log,
-  commit, or upload the private key.
+  commit, or upload the private key. Local `./build.sh` packaging without that
+  secret passes `--config '{"bundle":{"createUpdaterArtifacts":false}}'` so
+  unsigned `.deb` / AppImage / NSIS still complete. GitHub release jobs keep the
+  secret and produce `.sig` files.
 - Build signed AppImage and NSIS updater bundles on native GitHub runners. Upload
   `.sig` files with the release artifacts.
 - Generate and schema-validate `latest.json` in the publish job with

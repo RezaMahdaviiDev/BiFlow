@@ -42,6 +42,43 @@ describe("release artifact names", () => {
     assert.match(result.stdout, /\.exe/);
     assert.match(result.stdout, /One-shot/);
     assert.match(result.stdout, /installs missing tools/i);
+    assert.match(result.stdout, /--from STAGE/);
+    assert.match(result.stdout, /--force/);
+    assert.match(result.stdout, /compile, deb, appimage, collect/);
+  });
+
+  it("rejects a --from stage that does not exist on that packaging target", () => {
+    const result = spawnSync(
+      join(root, "build.sh"),
+      ["linux", "--from", "nsis"],
+      {
+        encoding: "utf8",
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /linux --from must be compile, deb, appimage, or collect/,
+    );
+  });
+
+  it("resumes packaging from the failed stage instead of rebuilding finished work", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    assert.match(source, /FROM_STAGE=/);
+    assert.match(source, /should_run_linux_stage/);
+    assert.match(source, /should_run_windows_stage/);
+    assert.match(source, /linux_stage_done/);
+    assert.match(source, /windows_stage_done/);
+    assert.match(source, /write_stamp/);
+    assert.match(source, /pnpm tauri build "\$@" "\$\{configs\[@\]\}"/);
+    assert.match(source, /--no-bundle/);
+    assert.match(source, /beforeBuildCommand":""/);
+    assert.match(source, /main "\$@"/);
+    assert.doesNotMatch(source, /main "\$\{1:-all\}"/);
+    assert.match(
+      source,
+      /if \[\[ -f "\$\{PROJECT_DIR\}\/\$\(plan windows\.dir\)\/\$\(windows_installer_name\)" \]\]/,
+    );
   });
 
   it("bootstraps cargo with rustup instead of exiting when cargo is missing", () => {
@@ -59,6 +96,8 @@ describe("release artifact names", () => {
       /cargo install cargo-xwin --locked --version "\$\{CARGO_XWIN_VERSION\}"/,
     );
     assert.doesNotMatch(source, /cargo install cargo-xwin --locked\n/);
+    assert.match(source, /prefetch-msvc-crt\.sh/);
+    assert.match(source, /export XWIN_ARCH=/);
   });
 
   it("does not require apt access when Linux build packages are installed", () => {
@@ -304,6 +343,8 @@ describe("release artifact names", () => {
     assert.match(workflow, /swatinem\/rust-cache@v2/);
     assert.match(workflow, /workspaces:\s*["']\. -> target["']/);
     assert.match(workflow, /choco install nsis/);
+    assert.match(workflow, /\$env:Path = "\$nsis;\$env:Path"/);
+    assert.match(workflow, /prefetch-appimage-tools\.sh/);
     assert.doesNotMatch(ci, /workspaces:\s*["']\.\/src-tauri -> target["']/);
     const rustJob = ci.split(/^\s*rust:/m)[1]?.split(/^\s*security:/m)[0];
     assert.ok(rustJob);
@@ -349,6 +390,62 @@ describe("release artifact names", () => {
     assert.match(source, /ci-windows requires a native Windows runner/);
   });
 
+  it("prefetches AppImage tools with curl so Tauri rustls does not download them", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    const script = readFileSync(
+      join(root, "scripts/prefetch-appimage-tools.sh"),
+      "utf8",
+    );
+    assert.match(source, /ensure_tauri_appimage_tools/);
+    assert.match(source, /prefetch-appimage-tools\.sh/);
+    assert.match(script, /curl -fL/);
+    assert.match(script, /--retry 5/);
+    assert.match(script, /AppRun-x86_64/);
+    assert.match(script, /linuxdeploy-x86_64\.AppImage/);
+    assert.match(script, /linuxdeploy-plugin-gtk\.sh/);
+    assert.match(
+      script,
+      /CACHE="\$\{XDG_CACHE_HOME:-\$\{HOME\}\/\.cache\}\/tauri"/,
+    );
+    assert.match(
+      script,
+      /tauri-apps\/binary-releases\/releases\/download\/apprun-old/,
+    );
+  });
+
+  it("prefetches the MSVC CRT with curl so cargo-xwin ureq does not fetch vsman", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    const script = readFileSync(
+      join(root, "scripts/prefetch-msvc-crt.sh"),
+      "utf8",
+    );
+    assert.match(source, /prefetch-msvc-crt\.sh/);
+    assert.match(source, /export XWIN_ARCH=/);
+    assert.match(source, /XWIN_VERSION:-16/);
+    assert.match(source, /RAYON_NUM_THREADS/);
+    assert.match(source, /run_windows_cross_tauri_build/);
+    assert.match(script, /curl -fL/);
+    assert.match(script, /--retry 8/);
+    assert.match(script, /--max-time 900/);
+    assert.match(script, /list-xwin-payloads\.py/);
+    assert.match(script, /sha256sum/);
+    assert.match(script, /VisualStudio\.vsman/);
+    assert.match(script, /pkg_manifest_/);
+    assert.doesNotMatch(script, /cargo install xwin/);
+    assert.match(
+      script,
+      /CACHE="\$\{XDG_CACHE_HOME:-\$\{HOME\}\/\.cache\}\/cargo-xwin\/xwin"/,
+    );
+  });
+
+  it("skips updater signatures when TAURI_SIGNING_PRIVATE_KEY is unset", () => {
+    const source = readFileSync(join(root, "build.sh"), "utf8");
+    assert.match(source, /tauri_signing_config_args/);
+    assert.match(source, /TAURI_SIGNING_PRIVATE_KEY/);
+    assert.match(source, /createUpdaterArtifacts":false/);
+    assert.match(source, /--config/);
+  });
+
   it("defines a non-publishing package dry-run workflow", () => {
     const workflow = readFileSync(
       join(root, ".github/workflows/package-dry-run.yml"),
@@ -360,6 +457,11 @@ describe("release artifact names", () => {
     assert.match(workflow, /actions\/upload-artifact@v4/);
     assert.doesNotMatch(workflow, /gh release/);
     assert.match(workflow, /node-version: 24/);
+    assert.match(workflow, /fromJSON\(needs\.select\.outputs\.include\)/);
+    assert.match(workflow, /\$env:Path = "\$nsis;\$env:Path"/);
+    assert.match(workflow, /prefetch-appimage-tools\.sh/);
+    assert.doesNotMatch(workflow, /if:[^\n]*matrix\./);
+    assert.doesNotMatch(workflow, /if: >-[\s\S]*?matrix\./);
     const autocrlf = workflow.indexOf(
       "git config --global core.autocrlf false",
     );
@@ -368,6 +470,29 @@ describe("release artifact names", () => {
       autocrlf >= 0 && checkout > autocrlf,
       "Windows autocrlf must be set before checkout",
     );
+  });
+
+  it("keeps pnpm lockfile specifiers aligned with desktop package.json", () => {
+    const pkg = JSON.parse(
+      readFileSync(join(root, "apps/desktop/package.json"), "utf8"),
+    );
+    const lock = readFileSync(join(root, "pnpm-lock.yaml"), "utf8");
+    const importer = lock
+      .split(/^ {2}apps\/desktop:\n/m)[1]
+      ?.split(/^packages:\n/m)[0];
+    assert.ok(importer, "pnpm-lock.yaml must contain an apps/desktop importer");
+    const specs = { ...pkg.dependencies, ...pkg.devDependencies };
+    for (const [name, spec] of Object.entries(specs)) {
+      const escape = (value) =>
+        value.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+      assert.match(
+        importer,
+        new RegExp(
+          `(?:^|\\n)\\s+['"]?${escape(name)}['"]?:\\n\\s+specifier: ${escape(spec)}`,
+        ),
+        `${name} lockfile specifier must be ${spec}`,
+      );
+    }
   });
 
   it("allows MPL-2.0 and other lockfile licenses without a blanket allow", () => {

@@ -94,14 +94,23 @@ jobs:
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libfuse2t64
+      - name: Prefetch AppImage tools
+        if: runner.os == 'Linux'
+        run: ./scripts/prefetch-appimage-tools.sh
       - name: Install NSIS
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install nsis -y --no-progress
-          $nsis = "${env:ProgramFiles(x86)}\NSIS"
-          if (Test-Path $nsis) {
-            Add-Content -Path $env:GITHUB_PATH -Value $nsis
+          $nsisDirs = @(
+            "${env:ProgramFiles(x86)}\NSIS",
+            "${env:ProgramFiles}\NSIS"
+          )
+          foreach ($nsis in $nsisDirs) {
+            if (Test-Path $nsis) {
+              Add-Content -Path $env:GITHUB_PATH -Value $nsis
+              $env:Path = "$nsis;$env:Path"
+            }
           }
           Get-Command makensis -ErrorAction Stop
       - run: pnpm install --frozen-lockfile

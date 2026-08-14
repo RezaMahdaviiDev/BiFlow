@@ -77,6 +77,26 @@ describe("Tauri frontend contract", () => {
     );
   });
 
+  it("disables WebKitGTK DMA-BUF rendering before the Linux webview starts", () => {
+    const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    assert.match(rust, /WEBKIT_DISABLE_DMABUF_RENDERER/);
+    assert.match(rust, /WEBKIT_DISABLE_COMPOSITING_MODE/);
+    assert.match(rust, /LIBGL_ALWAYS_SOFTWARE/);
+    assert.match(rust, /apply_linux_webview_workarounds\(\)/);
+    assert.match(rust, /BIFLOW_WEBKIT_WORKAROUNDS/);
+    assert.match(rust, /current_exe\(\)/);
+    assert.match(rust, /single_instance_dbus_id/);
+    assert.match(rust, /dbus_id\(single_instance_dbus_id/);
+    const run = rust.match(/pub fn run\(\) \{([\s\S]*?)let builder =/);
+    assert.ok(run, "run() is missing");
+    const apply = run[1].indexOf("apply_linux_webview_workarounds");
+    const diagnostics = run[1].indexOf("initialize_diagnostics");
+    assert.ok(
+      apply >= 0 && diagnostics > apply,
+      "WebKit env must be set before diagnostics and GTK start",
+    );
+  });
+
   it("uses tail expressions in cfg blocks so host Clippy needless_return stays clean", () => {
     const cfgReturn = /#\[cfg\([^\]]+\)\]\s*\{\s*return /;
     const offenders = rustSources(root).filter((path) =>

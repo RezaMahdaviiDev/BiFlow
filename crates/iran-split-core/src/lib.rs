@@ -507,9 +507,7 @@ impl<B: PlatformBackend> Engine<B> {
     /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
     /// longer available.
     pub async fn stop_stack(&self) -> Result<OperationAccepted, CoreError> {
-        if self.snapshot().phase == StackPhase::Stopped
-            && self.operations.lock().await.is_empty()
-        {
+        if self.snapshot().phase == StackPhase::Stopped && self.operations.lock().await.is_empty() {
             return Ok(OperationAccepted {
                 operation_id: Uuid::new_v4(),
                 already_complete: true,

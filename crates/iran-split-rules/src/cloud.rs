@@ -560,7 +560,10 @@ mod tests {
     #[test]
     fn runtime_urls_use_only_biflow_repository() {
         assert!(manifest_fetch_url().starts_with(BIFLOW_RAW_PREFIX));
-        let file_url = snapshot_file_url("abc123def4567890abc123def4567890abc123de", "iran-domains.txt");
+        let file_url = snapshot_file_url(
+            "abc123def4567890abc123def4567890abc123de",
+            "iran-domains.txt",
+        );
         assert!(file_url.starts_with(BIFLOW_RAW_PREFIX));
         assert!(file_url.ends_with("/resources/rules/iran-domains.txt"));
     }
@@ -642,10 +645,7 @@ mod tests {
             snapshot_file_url(&commit, "iran-networks.txt"),
             Ok(network_bytes),
         );
-        responses.insert(
-            snapshot_file_url(&commit, "private.txt"),
-            Ok(private_bytes),
-        );
+        responses.insert(snapshot_file_url(&commit, "private.txt"), Ok(private_bytes));
 
         let store = CloudRuleStore::with_fetcher(
             bundled,
@@ -686,12 +686,7 @@ mod tests {
         let manifest = manifest_for(
             &commit,
             &[
-                (
-                    "iran-domains.txt",
-                    ProviderKind::Domain,
-                    1_000,
-                    "deadbeef",
-                ),
+                ("iran-domains.txt", ProviderKind::Domain, 1_000, "deadbeef"),
                 (
                     "iran-networks.txt",
                     ProviderKind::IpCidr,

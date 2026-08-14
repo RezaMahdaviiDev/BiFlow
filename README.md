@@ -147,6 +147,8 @@ Release packages:
 ./build.sh ci-windows       # GitHub-hosted native Windows packaging
 ./build.sh linux            # artifacts/linux/BiFlow_<version>_amd64.deb
 ./build.sh windows          # artifacts/windows/BiFlow.exe and NSIS setup
+./build.sh linux --from appimage   # resume after a late AppImage failure
+./build.sh linux --force           # rebuild every Linux packaging stage
 ```
 
 Do not run `./build.sh all` or `ci-windows` on a disk-constrained Linux
@@ -192,6 +194,20 @@ shipped with the app. Live refreshes come only from `devlifeX/BiFlow`.
 **How do updates install?**
 Signed AppImage and Windows NSIS builds can install in-app from GitHub
 Releases. Debian `.deb` installs stay a download/open from the Release page.
+
+**Why is the Linux window blank?**
+WebKitGTK 2.44+ can paint an empty view on VMware and NVIDIA GPUs. Current
+builds disable that renderer at startup and, on virtual machines, force
+Mesa software GL. Closing the window leaves BiFlow in the tray: a new
+AppImage or `.deb` of a _different_ version starts its own process, but
+the same version still activates the running instance. Quit from the tray
+before testing a newly installed build of the same version.
+
+To confirm on an older AppImage:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 ./BiFlow_*.AppImage
+```
 
 **Is the app window a root process?**
 No. The UI runs as your user. Only the helper performs privileged network

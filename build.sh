@@ -7,6 +7,9 @@ CRATE_BIN="iran-split-desktop"
 BUILD_VERSION=""
 WINDOWS_TARGET=""
 WINDOWS_TAURI_ARGS=()
+TAURI_SIGNING_CONFIG_ARGS=()
+FROM_STAGE=""
+FORCE=0
 NODE_VERSION="24.11.1"
 PNPM_VERSION="9.0.1"
 # cargo-xwin 0.20+ requires rustc 1.89; pin the last release that builds on 1.88.
@@ -55,7 +58,7 @@ usage() {
   command cat <<'EOF'
 BiFlow release builder
 
-Usage: ./build.sh [mode]
+Usage: ./build.sh [mode] [--from STAGE] [--force]
 
 Focused local verification (default developer gate):
   check-frontend   pnpm check and pnpm build only
@@ -69,6 +72,15 @@ Full packaging (machines with spare disk; not the local default):
   linux          Native Linux .deb and AppImage
   windows        Windows app .exe and NSIS installer
   all            Linux and Windows (default when no mode is given)
+
+Resume (linux stages: compile, deb, appimage, collect;
+        windows stages: compile, nsis, collect):
+  --from STAGE   Start at STAGE. Earlier finished work is left in place.
+  --force        Rebuild every packaging stage for this version.
+
+Without --from, packaging skips stages that already produced this version
+(for example a .deb after AppImage download failed). Re-run the same
+command to continue.
 
 One-shot packaging installs missing tools, then builds.
 Installs Node.js 24, pnpm, Rust (from rust-toolchain.toml), Linux desktop
@@ -213,8 +225,13 @@ ensure_rust() {
     refresh_path
   fi
   have cargo && have rustc || die "Rust install finished but cargo is not on PATH"
-  rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
   local actual
+  actual="$(cd -- "${PROJECT_DIR}" && rustc --version | command awk '{print $2}')"
+  if [[ "${actual}" == "${RUST_VERSION}" ]]; then
+    log "Rust ${actual} is ready"
+    return 0
+  fi
+  rustup toolchain install "${RUST_VERSION}" --profile minimal --component rustfmt,clippy
   actual="$(cd -- "${PROJECT_DIR}" && rustc --version | command awk '{print $2}')"
   [[ "${actual}" == "${RUST_VERSION}" ]] || \
     die "Rust ${RUST_VERSION} is required by rust-toolchain.toml; active version is ${actual}"
@@ -277,6 +294,13 @@ ensure_linux_desktop_dependencies() {
   log "Linux desktop libraries are ready"
 }
 
+ensure_tauri_appimage_tools() {
+  [[ "$(host_os)" == "linux" ]] || return 0
+  ensure_curl
+  log "Prefetching Tauri AppImage tools with curl..."
+  "${PROJECT_DIR}/scripts/prefetch-appimage-tools.sh"
+}
+
 ensure_rust_target() {
   local triple="$1"
   refresh_path
@@ -302,6 +326,17 @@ ensure_windows_cross_from_linux() {
     # On a Unix host, Tauri selects NSIS from the Windows target. Passing
     # `--bundles nsis` is rejected by the host CLI before target detection.
     WINDOWS_TAURI_ARGS=(--runner cargo-xwin --target x86_64-pc-windows-msvc)
+    # cargo-xwin 0.19.2 defaults to x86_64,aarch64 and downloads the CRT with
+    # ureq. Pin the arch we actually package and prefetch with curl first.
+    export XWIN_ARCH="${XWIN_ARCH:-x86_64}"
+    export XWIN_VERSION="${XWIN_VERSION:-16}"
+    export XWIN_ACCEPT_LICENSE=1
+    # Parallel ureq GETs against Microsoft CDNs often end mid-body
+    # (Jake-Shadle/xwin#141). One download thread plus curl prefetch
+    # is the combination that actually finishes on Linux.
+    export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-1}"
+    log "Prefetching MSVC CRT payloads for ${XWIN_ARCH} with curl..."
+    "${PROJECT_DIR}/scripts/prefetch-msvc-crt.sh"
     log "Windows cross-compile toolchain (cargo-xwin) is ready"
     return 0
   fi
@@ -320,6 +355,215 @@ copy_one() {
   command mkdir -p -- "$(dirname -- "${destination}")"
   command cp -f -- "${source}" "${destination}"
   log "wrote ${destination}"
+}
+
+tauri_signing_config_args() {
+  TAURI_SIGNING_CONFIG_ARGS=()
+  if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+    return 0
+  fi
+  log "TAURI_SIGNING_PRIVATE_KEY is unset; building unsigned local packages"
+  TAURI_SIGNING_CONFIG_ARGS=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+}
+
+linux_binary_path() {
+  command printf '%s/release/%s\n' "${TARGET_DIR}" "${CRATE_BIN}"
+}
+
+linux_deb_path() {
+  command printf '%s/release/bundle/deb/%s\n' "${TARGET_DIR}" "$(linux_deb_name)"
+}
+
+linux_appimage_path() {
+  command printf '%s/release/bundle/appimage/%s\n' "${TARGET_DIR}" "$(linux_appimage_name)"
+}
+
+windows_prefix() {
+  local triple="${1:-}"
+  if [[ -n "${triple}" ]]; then
+    command printf '%s/%s/release\n' "${TARGET_DIR}" "${triple}"
+  else
+    command printf '%s/release\n' "${TARGET_DIR}"
+  fi
+}
+
+frontend_dist_ready() {
+  [[ -f "${PROJECT_DIR}/apps/desktop/dist/index.html" ]]
+}
+
+stage_index() {
+  local needle="$1"
+  shift
+  local i=0
+  local item
+  for item in "$@"; do
+    if [[ "${item}" == "${needle}" ]]; then
+      command printf '%s\n' "${i}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+stamp_dir() {
+  command printf '%s/biflow-build\n' "${TARGET_DIR}"
+}
+
+stamp_file() {
+  command printf '%s/%s.stamp\n' "$(stamp_dir)" "$1"
+}
+
+write_stamp() {
+  command mkdir -p -- "$(stamp_dir)"
+  command printf '%s\n' "${BUILD_VERSION}" > "$(stamp_file "$1")"
+}
+
+stamp_is_current() {
+  local file
+  file="$(stamp_file "$1")"
+  [[ -f "${file}" ]] || return 1
+  [[ "$(command cat "${file}")" == "${BUILD_VERSION}" ]]
+}
+
+linux_stage_done() {
+  local stage="$1"
+  local deb
+  case "${stage}" in
+    compile)
+      [[ -x "$(linux_binary_path)" ]] || return 1
+      stamp_is_current linux-compile && return 0
+      linux_stage_done deb && return 0
+      linux_stage_done appimage
+      ;;
+    deb)
+      deb="$(linux_deb_path)"
+      [[ -f "${deb}" ]] || return 1
+      [[ "$(dpkg-deb -f "${deb}" Version)" == "${BUILD_VERSION}" ]]
+      ;;
+    appimage)
+      [[ -s "$(linux_appimage_path)" ]]
+      ;;
+    collect)
+      [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)" ]] && \
+        [[ -s "${PROJECT_DIR}/$(plan linux.dir)/$(linux_appimage_name)" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+windows_stage_done() {
+  local stage="$1"
+  local prefix
+  prefix="$(windows_prefix "${WINDOWS_TARGET}")"
+  case "${stage}" in
+    compile)
+      [[ -f "${prefix}/${CRATE_BIN}.exe" ]] || return 1
+      stamp_is_current windows-compile && return 0
+      windows_stage_done nsis
+      ;;
+    nsis)
+      [[ -f "${prefix}/bundle/nsis/$(windows_installer_name)" ]]
+      ;;
+    collect)
+      [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.exe)" ]] && \
+        [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+should_run_linux_stage() {
+  local stage="$1"
+  local stages=(compile deb appimage collect)
+  local from_i stage_i
+  if [[ "${FORCE}" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -n "${FROM_STAGE}" ]]; then
+    if from_i="$(stage_index "${FROM_STAGE}" "${stages[@]}")"; then
+      stage_i="$(stage_index "${stage}" "${stages[@]}")"
+      [[ "${stage_i}" -ge "${from_i}" ]]
+      return
+    fi
+  fi
+  if linux_stage_done "${stage}"; then
+    return 1
+  fi
+  return 0
+}
+
+should_run_windows_stage() {
+  local stage="$1"
+  local stages=(compile nsis collect)
+  local from_i stage_i
+  if [[ "${FORCE}" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -n "${FROM_STAGE}" ]]; then
+    if from_i="$(stage_index "${FROM_STAGE}" "${stages[@]}")"; then
+      stage_i="$(stage_index "${stage}" "${stages[@]}")"
+      [[ "${stage_i}" -ge "${from_i}" ]]
+      return
+    fi
+  fi
+  if windows_stage_done "${stage}"; then
+    return 1
+  fi
+  return 0
+}
+
+run_tauri_build() {
+  local frontend_mode="$1"
+  shift
+  local configs=("${TAURI_SIGNING_CONFIG_ARGS[@]}")
+  if [[ "${frontend_mode}" == "skip-frontend" ]]; then
+    frontend_dist_ready || \
+      die "cannot skip the frontend build: apps/desktop/dist/index.html is missing"
+    configs+=(--config '{"build":{"beforeBuildCommand":""}}')
+  fi
+  (cd -- "${PROJECT_DIR}" && pnpm tauri build "$@" "${configs[@]}")
+}
+
+run_windows_cross_tauri_build() {
+  local attempt=1
+  local max_attempts=5
+  while true; do
+    if run_tauri_build "$@"; then
+      return 0
+    fi
+    if [[ "${attempt}" -ge "${max_attempts}" ]]; then
+      die "Windows cross-compile failed after ${max_attempts} attempts (MSVC CRT download)"
+    fi
+    log "Windows cross-compile failed on MSVC CRT/CDN; prefetching and retrying (${attempt}/${max_attempts})..."
+    "${PROJECT_DIR}/scripts/prefetch-msvc-crt.sh"
+    attempt=$((attempt + 1))
+  done
+}
+
+validate_from_stage() {
+  local target="$1"
+  [[ -n "${FROM_STAGE}" ]] || return 0
+  case "${target}" in
+    linux)
+      case "${FROM_STAGE}" in
+        compile|deb|appimage|collect) ;;
+        *) die "linux --from must be compile, deb, appimage, or collect" ;;
+      esac
+      ;;
+    windows)
+      case "${FROM_STAGE}" in
+        compile|nsis|collect) ;;
+        *) die "windows --from must be compile, nsis, or collect" ;;
+      esac
+      ;;
+    all)
+      case "${FROM_STAGE}" in
+        compile|deb|appimage|nsis|collect) ;;
+        *) die "--from must be compile, deb, appimage, nsis, or collect" ;;
+      esac
+      ;;
+  esac
 }
 
 collect_linux() {
@@ -356,9 +600,44 @@ collect_windows() {
 build_linux() {
   [[ "$(host_os)" == "linux" ]] || die "Linux .deb packages must be built on Linux"
   assert_build_version
-  log "Building Linux .deb and AppImage for BiFlow ${BUILD_VERSION}"
-  (cd -- "${PROJECT_DIR}" && pnpm tauri build --bundles deb,appimage)
-  collect_linux
+  tauri_signing_config_args
+  local frontend_mode="run-frontend"
+  if frontend_dist_ready && ! should_run_linux_stage compile; then
+    frontend_mode="skip-frontend"
+  fi
+  if should_run_linux_stage compile; then
+    log "Stage compile: release binary for BiFlow ${BUILD_VERSION}"
+    run_tauri_build run-frontend --no-bundle
+    [[ -x "$(linux_binary_path)" ]] || die "compile did not produce $(linux_binary_path)"
+    write_stamp linux-compile
+    frontend_mode="skip-frontend"
+  else
+    log "Skipping compile; already have $(linux_binary_path)"
+  fi
+  if should_run_linux_stage deb; then
+    log "Stage deb: $(linux_deb_name)"
+    run_tauri_build "${frontend_mode}" --bundles deb
+    write_stamp linux-deb
+    frontend_mode="skip-frontend"
+  else
+    log "Skipping deb; already have $(linux_deb_path)"
+  fi
+  if should_run_linux_stage appimage; then
+    [[ -x "$(linux_binary_path)" ]] || die "stage appimage needs a compiled binary; run ./build.sh linux --from compile"
+    log "Stage appimage: $(linux_appimage_name)"
+    ensure_tauri_appimage_tools
+    run_tauri_build "${frontend_mode}" --bundles appimage
+    write_stamp linux-appimage
+  else
+    log "Skipping appimage; already have $(linux_appimage_path)"
+  fi
+  if should_run_linux_stage collect; then
+    log "Stage collect: copying Linux artifacts"
+    collect_linux
+    write_stamp linux-collect
+  else
+    log "Skipping collect; Linux artifacts already in $(plan linux.dir)"
+  fi
 }
 
 build_windows() {
@@ -374,22 +653,63 @@ build_windows() {
   else
     die "Windows packages require Windows or Linux"
   fi
-  (cd -- "${PROJECT_DIR}" && pnpm tauri build "${WINDOWS_TAURI_ARGS[@]}")
-  collect_windows "${WINDOWS_TARGET}"
+  tauri_signing_config_args
+  local frontend_mode="run-frontend"
+  local prefix compile_args
+  prefix="$(windows_prefix "${WINDOWS_TARGET}")"
+  if frontend_dist_ready && ! should_run_windows_stage compile; then
+    frontend_mode="skip-frontend"
+  fi
+  if should_run_windows_stage compile; then
+    log "Stage compile: Windows app for BiFlow ${BUILD_VERSION}"
+    compile_args=(--no-bundle)
+    if [[ "${os}" == "linux" ]]; then
+      compile_args+=("${WINDOWS_TAURI_ARGS[@]}")
+      run_windows_cross_tauri_build run-frontend "${compile_args[@]}"
+    else
+      run_tauri_build run-frontend "${compile_args[@]}"
+    fi
+    write_stamp windows-compile
+    frontend_mode="skip-frontend"
+  else
+    log "Skipping compile; already have ${prefix}/${CRATE_BIN}.exe"
+  fi
+  if should_run_windows_stage nsis; then
+    log "Stage nsis: $(windows_installer_name)"
+    if [[ "${os}" == "linux" ]]; then
+      run_windows_cross_tauri_build "${frontend_mode}" "${WINDOWS_TAURI_ARGS[@]}"
+    else
+      run_tauri_build "${frontend_mode}" "${WINDOWS_TAURI_ARGS[@]}"
+    fi
+    write_stamp windows-nsis
+  else
+    log "Skipping nsis; installer already built"
+  fi
+  if should_run_windows_stage collect; then
+    log "Stage collect: copying Windows artifacts"
+    collect_windows "${WINDOWS_TARGET}"
+    write_stamp windows-collect
+  else
+    log "Skipping collect; Windows artifacts already in $(plan windows.dir)"
+  fi
 }
 
 print_summary() {
   assert_build_version
   log ""
   log "BiFlow ${BUILD_VERSION} artifacts:"
-  [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)" ]] && \
+  if [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_deb_name)" ]]; then
     log "  Linux deb:          $(plan linux.dir)/$(linux_deb_name)"
-  [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_appimage_name)" ]] && \
+  fi
+  if [[ -f "${PROJECT_DIR}/$(plan linux.dir)/$(linux_appimage_name)" ]]; then
     log "  Linux AppImage:     $(plan linux.dir)/$(linux_appimage_name)"
-  [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.exe)" ]] && \
+  fi
+  if [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(plan windows.exe)" ]]; then
     log "  Windows app:        $(plan windows.dir)/$(plan windows.exe)"
-  [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)" ]] && \
+  fi
+  if [[ -f "${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)" ]]; then
     log "  Windows installer:  $(plan windows.dir)/$(windows_installer_name)"
+  fi
 }
 
 ensure_requirements() {
@@ -445,9 +765,44 @@ check_rust() {
 }
 
 main() {
-  local target="${1:-all}"
+  local target="all"
+  local -a rest=()
+  FROM_STAGE=""
+  FORCE=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from)
+        [[ $# -ge 2 ]] || die "--from requires a stage name"
+        FROM_STAGE="$(command printf '%s' "$2" | command tr '[:upper:]' '[:lower:]')"
+        shift 2
+        ;;
+      --force)
+        FORCE=1
+        shift
+        ;;
+      -h|--help|help)
+        usage
+        return 0
+        ;;
+      --)
+        shift
+        rest+=("$@")
+        break
+        ;;
+      -*)
+        die "unknown option: $1"
+        ;;
+      *)
+        rest+=("$1")
+        shift
+        ;;
+    esac
+  done
+  if [[ "${#rest[@]}" -gt 0 ]]; then
+    target="${rest[0]}"
+  fi
+
   case "${target}" in
-    -h|--help|help) usage; return 0 ;;
     check-frontend)
       ensure_requirements "${target}"
       check_frontend
@@ -455,7 +810,7 @@ main() {
       ;;
     check-rust)
       ensure_requirements "${target}"
-      check_rust "$@"
+      check_rust "${rest[@]}"
       return 0
       ;;
     ci-linux)
@@ -470,6 +825,7 @@ main() {
     *) usage >&2; die "unknown target: ${target}" ;;
   esac
 
+  validate_from_stage "${target}"
   ensure_requirements "${target}"
   (cd -- "${PROJECT_DIR}" && pnpm version:sync)
   BUILD_VERSION="$(plan version)"
@@ -486,4 +842,4 @@ main() {
   print_summary
 }
 
-main "${1:-all}"
+main "$@"
