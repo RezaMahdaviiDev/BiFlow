@@ -704,13 +704,7 @@ fn is_zip(bytes: &[u8]) -> bool {
 }
 
 pub fn open_allowlisted_url(url: &str) -> Result<(), DepsError> {
-    const PREFIXES: &[&str] = &[
-        "https://github.com/hiddify/hiddify-app/releases/",
-        "https://github.com/MetaCubeX/mihomo/releases/",
-        "https://github.com/devlifeX/BiFlow",
-        "https://raw.githubusercontent.com/devlifeX/BiFlow/",
-    ];
-    if !PREFIXES.iter().any(|prefix| url.starts_with(prefix)) {
+    if !open_url_allowed(url) {
         return Err(DepsError::Fetch("URL is not allowlisted".into()));
     }
     let result = if cfg!(target_os = "windows") {
@@ -723,6 +717,16 @@ pub fn open_allowlisted_url(url: &str) -> Result<(), DepsError> {
     result
         .map(|_| ())
         .map_err(|error| DepsError::Install(error.to_string()))
+}
+
+fn open_url_allowed(url: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "https://github.com/hiddify/hiddify-app/releases/",
+        "https://github.com/MetaCubeX/mihomo/releases/",
+        "https://github.com/devlifeX/BiFlow",
+        "https://raw.githubusercontent.com/devlifeX/BiFlow/",
+    ];
+    PREFIXES.iter().any(|prefix| url.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -738,20 +742,11 @@ mod tests {
 
     #[test]
     fn opens_biflow_repository_links() {
-        match open_allowlisted_url("https://github.com/devlifeX/BiFlow") {
-            Ok(()) | Err(DepsError::Install(_)) => {}
-            Err(DepsError::Fetch(message)) => {
-                panic!("BiFlow repository URL should be allowlisted: {message}");
-            }
-            Err(other) => panic!("unexpected open error: {other:?}"),
-        }
-        match open_allowlisted_url("https://github.com/devlifeX/BiFlow/releases/latest") {
-            Ok(()) | Err(DepsError::Install(_)) => {}
-            Err(DepsError::Fetch(message)) => {
-                panic!("BiFlow release URL should be allowlisted: {message}");
-            }
-            Err(other) => panic!("unexpected open error: {other:?}"),
-        }
+        assert!(open_url_allowed("https://github.com/devlifeX/BiFlow"));
+        assert!(open_url_allowed(
+            "https://github.com/devlifeX/BiFlow/releases/latest"
+        ));
+        assert!(!open_url_allowed("https://github.com/example/not-biflow"));
     }
 
     #[test]

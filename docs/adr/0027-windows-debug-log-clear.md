@@ -25,8 +25,15 @@ After Windows Clippy started passing, `cargo test --workspace` on
   old handle can drop before the truncate open.
 - Write dependency fixtures with `mihomo_file_name()` and assert reveal
   arguments from `path.to_string_lossy()` instead of a Unix path literal.
+- Validate generated Mihomo YAML with the host-native vendored binary
+  (`vendor/mihomo/windows-x86_64/mihomo.exe` on Windows). The Linux ELF is
+  present in every checkout, so running it on `windows-2025` fails with
+  "not a valid Win32 application".
+- Keep URL allowlist unit tests from spawning `cmd /C start` or `xdg-open`.
 
 ## Consequences
 
 Windows CI exercises the same clear and install-detection contracts as Linux.
 The Diagnostics delete action works on Windows without dropping later events.
+Vendored Mihomo validation runs on each OS against a binary that OS can
+execute.

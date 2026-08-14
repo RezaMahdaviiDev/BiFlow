@@ -834,7 +834,17 @@ mod tests {
             .join("../..")
             .canonicalize()
             .expect("workspace root");
-        let mihomo = workspace.join("vendor/mihomo/linux-x86_64/mihomo");
+        let (mihomo, platform) = if cfg!(windows) {
+            (
+                workspace.join("vendor/mihomo/windows-x86_64/mihomo.exe"),
+                Platform::Windows,
+            )
+        } else {
+            (
+                workspace.join("vendor/mihomo/linux-x86_64/mihomo"),
+                Platform::Linux,
+            )
+        };
         if !mihomo.is_file() {
             eprintln!("skipping vendored Mihomo validation: {}", mihomo.display());
             return;
@@ -851,7 +861,7 @@ mod tests {
 
         let generated = generate_config(
             &AppConfig::default(),
-            Platform::Linux,
+            platform,
             &paths(),
             &DirectRulesDocument::default(),
         )
