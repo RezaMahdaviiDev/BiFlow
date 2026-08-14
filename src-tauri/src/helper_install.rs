@@ -13,6 +13,7 @@ use tracing::{error, info};
 #[cfg(target_os = "linux")]
 use sha2::{Digest, Sha256};
 
+#[cfg(target_os = "linux")]
 const LINUX_HELPER_ROOT: &str = "/usr/lib/biflow";
 #[cfg(target_os = "linux")]
 const PKEXEC: &str = "/usr/bin/pkexec";
@@ -187,6 +188,7 @@ async fn install_windows(
     Err("privileged helper installation failed".into())
 }
 
+#[cfg(target_os = "linux")]
 fn helper_binary_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBuf> {
     vec![
         PathBuf::from(LINUX_HELPER_ROOT).join("iran-split-helper"),
@@ -262,6 +264,7 @@ fn current_linux_ids() -> Result<(u32, u32), String> {
     parse_proc_status_ids(&status).ok_or_else(|| "could not read process uid/gid".into())
 }
 
+#[cfg(target_os = "linux")]
 #[must_use]
 pub(crate) fn parse_proc_status_ids(status: &str) -> Option<(u32, u32)> {
     let mut uid = None;
@@ -289,18 +292,22 @@ fn helper_src_arg(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        first_existing_file, helper_binary_candidates, parse_proc_status_ids, LINUX_HELPER_ROOT,
-    };
+    use super::first_existing_file;
     use std::fs;
+
+    #[cfg(target_os = "linux")]
+    use super::{helper_binary_candidates, parse_proc_status_ids, LINUX_HELPER_ROOT};
+    #[cfg(target_os = "linux")]
     use std::path::PathBuf;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn parse_proc_status_ids_reads_real_and_effective() {
         let sample = "Uid:\t1000\t1000\t1000\t1000\nGid:\t1001\t1001\t1001\t1001\n";
         assert_eq!(parse_proc_status_ids(sample), Some((1000, 1001)));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn helper_candidates_prefer_system_install_root() {
         let resource = PathBuf::from("/tmp/resources");

@@ -141,16 +141,30 @@ export function verifyUpdaterSigning(key, password, spawn = spawnSync) {
   const env = { ...process.env, TAURI_PRIVATE_KEY: key };
   env.TAURI_PRIVATE_KEY_PASSWORD = password ?? "";
   delete env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD;
+  const cli = join(root, "node_modules/@tauri-apps/cli/tauri.js");
+  const args = ["signer", "sign", probe];
+  if (password !== undefined) {
+    args.push("-p", password);
+  } else {
+    args.push("-p", "");
+  }
   try {
-    const result = spawn("pnpm", ["tauri", "signer", "sign", probe], {
+    const result = spawn(process.execPath, [cli, ...args], {
       cwd: root,
       env,
       encoding: "utf8",
+      windowsHide: true,
     });
     if (result.status === 0) {
       return;
     }
-    const detail = redact(`${result.stderr ?? ""}\n${result.stdout ?? ""}`);
+    const spawnError = result.error ? `${result.error.message}\n` : "";
+    let detail = redact(
+      `${spawnError}${result.stderr ?? ""}\n${result.stdout ?? ""}`,
+    );
+    if (password) {
+      detail = detail.split(password).join("[redacted-password]");
+    }
     throw new Error(
       `${SIGNING_HELP}\n\nTauri signer output:\n${detail.trim()}`,
     );
@@ -170,7 +184,10 @@ function appendGitHubEnv(file, name, value) {
 function writeGitHubEnv(prepared) {
   const file = process.env.GITHUB_ENV;
   if (!file) {
-    throw new Error("GITHUB_ENV is not set");
+    console.log(
+      "GITHUB_ENV is unset; skipping GitHub env export (local verify only)",
+    );
+    return;
   }
   if (prepared.unsigned) {
     return;

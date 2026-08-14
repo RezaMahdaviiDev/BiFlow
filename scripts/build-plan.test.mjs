@@ -240,6 +240,16 @@ describe("release artifact names", () => {
     assert.match(script, /dependencies\/mihomo\.exe/);
     assert.match(script, /stage-helper\.sh/);
     assert.match(script, /helper\/iran-split-helper\.exe/);
+    const stageHelper = readFileSync(
+      join(root, "scripts/stage-helper.sh"),
+      "utf8",
+    );
+    assert.match(stageHelper, /cargo xwin/);
+    assert.match(stageHelper, /windows-msvc/);
+    assert.doesNotMatch(
+      stageHelper,
+      /cargo build --release -p iran-split-helper --target/,
+    );
   });
 
   it("plans a root-owned helper install without executing privileged steps", () => {

@@ -134,6 +134,38 @@ describe("Tauri frontend contract", () => {
     assert.match(desktop, /^Terminal=false$/m);
   });
 
+  it("commits the current updater public key and verifies signing via the Tauri CLI", () => {
+    const config = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+    );
+    const prepare = readFileSync(
+      join(root, "scripts/prepare-tauri-signing.mjs"),
+      "utf8",
+    );
+    const decoded = Buffer.from(
+      config.plugins.updater.pubkey,
+      "base64",
+    ).toString("utf8");
+    assert.match(
+      decoded,
+      /untrusted comment: minisign public key: 4D42AC0D9C21345C/,
+    );
+    assert.match(prepare, /node_modules\/@tauri-apps\/cli\/tauri\.js/);
+    assert.doesNotMatch(prepare, /spawn\("pnpm"/);
+  });
+
+  it("passes Win32 security-descriptor out-params as raw pointers", () => {
+    const source = readFileSync(
+      join(root, "crates/iran-split-helper-winacl/src/windows_impl.rs"),
+      "utf8",
+    );
+    assert.match(source, /&raw mut descriptor/);
+    assert.doesNotMatch(
+      source,
+      /ConvertStringSecurityDescriptorToSecurityDescriptorW\([\s\S]*?&mut descriptor/,
+    );
+  });
+
   it("keeps Unix-only OpenOptions inside the Unix sync_directory function", () => {
     const config = readFileSync(
       join(root, "crates/iran-split-config/src/lib.rs"),
@@ -142,6 +174,29 @@ describe("Tauri frontend contract", () => {
     assert.doesNotMatch(config, /use std::fs::OpenOptions/);
     assert.doesNotMatch(config, /fs::\{self, OpenOptions\}/);
     assert.match(config, /fs::OpenOptions::new\(\)/);
+  });
+
+  it("gates Linux helper-install paths so Windows dead_code stays clean", () => {
+    const source = readFileSync(
+      join(root, "src-tauri/src/helper_install.rs"),
+      "utf8",
+    );
+    assert.match(
+      source,
+      /#\[cfg\(target_os = "linux"\)\]\s*const LINUX_HELPER_ROOT/,
+    );
+    assert.match(
+      source,
+      /#\[cfg\(target_os = "linux"\)\]\s*fn helper_binary_candidates/,
+    );
+    assert.match(
+      source,
+      /#\[cfg\(target_os = "linux"\)\]\s*#\[must_use\]\s*pub\(crate\) fn parse_proc_status_ids/,
+    );
+    assert.match(
+      source,
+      /#\[cfg\(target_os = "linux"\)\]\s*use std::path::PathBuf;/,
+    );
   });
 
   it("uses tail expressions in cfg blocks so host Clippy needless_return stays clean", () => {

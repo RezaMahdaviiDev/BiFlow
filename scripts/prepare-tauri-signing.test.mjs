@@ -47,7 +47,7 @@ describe("prepare-tauri-signing", () => {
       /missing untrusted comment/,
     );
     const pubkey =
-      "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDIxNkJEMTg2MDIxRUM3MkIKUldRcnh4NENodEZySVhQRTF5V1NuOGFlMVNSYjY3bzZZcWUwanoxS3lzeEFMVVZxL09XT3o5VHIK";
+      "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRENDJBQzBEOUMyMTM0NUMKUldSY05DR2NEYXhDVFZUMVd6L0JZc1NHb0srR3JrKzd2S2RRdTBhMDkwenQrV05ITW9tejdkQkIK";
     assert.throws(
       () => normalizeUpdaterPrivateKey(pubkey),
       /missing untrusted comment|public key/,
@@ -73,11 +73,13 @@ describe("prepare-tauri-signing", () => {
       () =>
         verifyUpdaterSigning(SAMPLE_KEY, undefined, () => ({
           status: 1,
+          error: { message: "spawn pnpm ENOENT" },
           stdout: "",
           stderr: `failed to decode secret key: incorrect updater private key password: Missing comment in secret key\n${SAMPLE_KEY}`,
         })),
       (error) => {
         assert.match(String(error), /repository secret/);
+        assert.match(String(error), /spawn pnpm ENOENT/);
         assert.doesNotMatch(String(error), /dW50cnVzdGVk/);
         return true;
       },

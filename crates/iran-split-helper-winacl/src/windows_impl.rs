@@ -43,7 +43,7 @@ pub fn create_helper_server(pipe_name: &str, first_instance: bool) -> io::Result
         ConvertStringSecurityDescriptorToSecurityDescriptorW(
             &sddl,
             SDDL_REVISION_1,
-            &mut descriptor,
+            &raw mut descriptor,
             None,
         )
         .map_err(|error| io::Error::other(error.to_string()))?;

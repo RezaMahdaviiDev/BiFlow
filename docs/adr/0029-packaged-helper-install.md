@@ -40,7 +40,12 @@ blocks the unelevated desktop process (UIPI).
 - First launch of an AppImage or a `.deb` installed without `SUDO_UID` shows
   Install on the Helper card and prompts for polkit/UAC.
 - `./build.sh` and GitHub Release stage `packaging/staged/iran-split-helper`
-  before bundling. That directory is gitignored.
+  before bundling. That directory is gitignored. Linux cross-compiles of the
+  Windows helper must use `cargo xwin build` for `x86_64-pc-windows-msvc`;
+  plain `cargo build --target` looks for `link.exe` and fails on Linux.
+  Linux-only helper-install items (`LINUX_HELPER_ROOT`, binary candidates,
+  `/proc` uid parsing) stay behind `#[cfg(target_os = "linux")]` so a
+  Windows `dead_code` build of the desktop lib stays clean.
 - Windows Connect/TUN is still implemented by the Windows platform backend;
   this change makes the helper reachable so status is accurate and future TUN
   work has a running service.

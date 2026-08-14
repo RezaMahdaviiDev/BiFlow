@@ -29,6 +29,11 @@ secret key`). If a password was set at generate time, the password secret must
   and minisign reports that as `Missing comment in secret key`.
 - Release jobs run `scripts/prepare-tauri-signing.mjs --require --verify-sign`
   after `pnpm install` so a bad key or password fails before the release compile.
+  That probe invokes `node_modules/@tauri-apps/cli/tauri.js` directly; spawning
+  `pnpm` from Node on Windows GitHub runners returns `ENOENT` and an empty
+  signer log. Rotating keys requires updating `plugins.updater.pubkey` in the
+  same change as the GitHub private-key secret, or installed apps reject the
+  new signatures.
   Local `./build.sh` packaging without the private key passes
   `--config '{"bundle":{"createUpdaterArtifacts":false}}'` so unsigned `.deb` /
   AppImage / NSIS still complete. Package dry-run uses the same unsigned overlay.
