@@ -189,6 +189,7 @@ fn linux_webview_reexec_needed(already_relaunched: bool, planned: LinuxWebviewWo
 
 #[cfg(target_os = "linux")]
 fn apply_linux_webview_workarounds() {
+    use std::os::unix::process::CommandExt;
     let virtual_machine = linux_virtual_machine();
     let planned = linux_webview_workarounds(
         LinuxWebviewEnv {
@@ -208,8 +209,20 @@ fn apply_linux_webview_workarounds() {
         return;
     }
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("/proc/self/exe"));
+    let mut command = linux_webview_reexec_command(exe, std::env::args_os().skip(1), planned);
+    // Replace this process so a waiting parent (and its terminal) does not linger.
+    let cause = command.exec();
+    eprintln!("BiFlow could not relaunch with WebKit view workarounds: {cause}");
+}
+
+#[cfg(target_os = "linux")]
+fn linux_webview_reexec_command(
+    exe: PathBuf,
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    planned: LinuxWebviewWorkarounds,
+) -> std::process::Command {
     let mut command = std::process::Command::new(exe);
-    command.args(std::env::args_os().skip(1));
+    command.args(args);
     command.env("BIFLOW_WEBKIT_WORKAROUNDS", "1");
     if planned.disable_dmabuf {
         command.env(WEBKIT_DISABLE_DMABUF_RENDERER, "1");
@@ -220,12 +233,7 @@ fn apply_linux_webview_workarounds() {
     if planned.software_gl {
         command.env(LIBGL_ALWAYS_SOFTWARE, "1");
     }
-    match command.status() {
-        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-        Err(cause) => {
-            eprintln!("BiFlow could not relaunch with WebKit view workarounds: {cause}");
-        }
-    }
+    command
 }
 
 #[cfg(target_os = "linux")]
@@ -1970,6 +1978,43 @@ mod tests {
         assert!(linux_webview_reexec_needed(false, virtual_gpu));
         assert!(!linux_webview_reexec_needed(true, virtual_gpu));
         assert!(!linux_webview_reexec_needed(false, respected));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_webview_reexec_command_sets_workaround_env() {
+        use std::ffi::OsStr;
+        let command = linux_webview_reexec_command(
+            PathBuf::from("/usr/bin/BiFlow"),
+            [std::ffi::OsString::from("--flag")],
+            LinuxWebviewWorkarounds {
+                disable_dmabuf: true,
+                disable_compositing: true,
+                software_gl: false,
+            },
+        );
+        assert_eq!(command.get_program(), OsStr::new("/usr/bin/BiFlow"));
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, [OsStr::new("--flag")]);
+        let env: Vec<(String, String)> = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                Some((
+                    key.to_string_lossy().into_owned(),
+                    value?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect();
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == "BIFLOW_WEBKIT_WORKAROUNDS" && value == "1"));
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == WEBKIT_DISABLE_DMABUF_RENDERER && value == "1"));
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == WEBKIT_DISABLE_COMPOSITING_MODE && value == "1"));
+        assert!(!env.iter().any(|(key, _)| key == LIBGL_ALWAYS_SOFTWARE));
     }
 
     #[cfg(target_os = "linux")]

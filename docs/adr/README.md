@@ -33,3 +33,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0027](./0027-windows-debug-log-clear.md)       | Windows debug.log clear and tests        | Accepted   |
 | [0028](./0028-embedded-windows-rules.md)        | Embedded Iran rules for portable Windows | Accepted   |
 | [0029](./0029-packaged-helper-install.md)       | Packaged privileged helper install       | Accepted   |
+| [0030](./0030-no-background-console.md)         | No background console or terminal        | Accepted   |

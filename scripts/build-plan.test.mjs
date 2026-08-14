@@ -227,6 +227,10 @@ describe("release artifact names", () => {
       "../packaging/staged/iran-split-helper",
     );
     assert.equal(
+      config.bundle.linux.deb.desktopTemplate,
+      "../packaging/linux/app.desktop",
+    );
+    assert.equal(
       config.bundle.windows.nsis.installerHooks,
       "../packaging/windows/installer-hooks.nsh",
     );

@@ -84,6 +84,12 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /LIBGL_ALWAYS_SOFTWARE/);
     assert.match(rust, /apply_linux_webview_workarounds\(\)/);
     assert.match(rust, /BIFLOW_WEBKIT_WORKAROUNDS/);
+    const applyFn = rust.match(
+      /fn apply_linux_webview_workarounds\(\) \{[\s\S]*?\n\}/,
+    );
+    assert.ok(applyFn, "apply_linux_webview_workarounds is missing");
+    assert.match(applyFn[0], /command\.exec\(\)/);
+    assert.doesNotMatch(applyFn[0], /\.status\(\)/);
     assert.match(rust, /current_exe\(\)/);
     assert.match(rust, /single_instance_dbus_id/);
     assert.match(rust, /dbus_id\(single_instance_dbus_id/);
@@ -95,6 +101,34 @@ describe("Tauri frontend contract", () => {
       apply >= 0 && diagnostics > apply,
       "WebKit env must be set before diagnostics and GTK start",
     );
+  });
+
+  it("does not attach a console or leftover terminal when the GUI starts", () => {
+    const desktopMain = readFileSync(join(root, "src-tauri/src/main.rs"), "utf8");
+    const helperMain = readFileSync(
+      join(root, "crates/iran-split-helper/src/main.rs"),
+      "utf8",
+    );
+    const config = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+    );
+    const desktop = readFileSync(
+      join(root, "packaging/linux/app.desktop"),
+      "utf8",
+    );
+    assert.match(
+      desktopMain,
+      /#!\[cfg_attr\(windows, windows_subsystem = "windows"\)\]/,
+    );
+    assert.match(
+      helperMain,
+      /#!\[cfg_attr\(windows, windows_subsystem = "windows"\)\]/,
+    );
+    assert.equal(
+      config.bundle.linux.deb.desktopTemplate,
+      "../packaging/linux/app.desktop",
+    );
+    assert.match(desktop, /^Terminal=false$/m);
   });
 
   it("keeps Unix-only OpenOptions inside the Unix sync_directory function", () => {

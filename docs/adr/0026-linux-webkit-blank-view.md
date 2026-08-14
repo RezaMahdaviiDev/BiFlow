@@ -34,9 +34,11 @@ Before Tauri starts GTK/WebKit, Linux builds relaunch once with
 `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already set it. On virtual
 or NVIDIA GPUs they also set `WEBKIT_DISABLE_COMPOSITING_MODE=1`. On virtual
 machines they also set `LIBGL_ALWAYS_SOFTWARE=1`. Workspace
-`unsafe_code = "forbid"` blocks `std::env::set_var`, so the first process execs
-itself with those variables and `BIFLOW_WEBKIT_WORKAROUNDS=1` to prevent a loop.
-The child records a structured `webview.linux_workarounds` event after
+`unsafe_code = "forbid"` blocks `std::env::set_var`, so the first process
+`exec()`s itself with those variables and `BIFLOW_WEBKIT_WORKAROUNDS=1` to
+prevent a loop. `Command::status()` must not wait on a child: that leftover
+parent keeps a terminal attached for the whole GUI session. The replacement
+process records a structured `webview.linux_workarounds` event after
 `debug.log` is opened. Existing environment values are left unchanged.
 
 The single-instance D-Bus name includes the full package version
