@@ -424,6 +424,7 @@ describe("release artifact names", () => {
     assert.match(source, /XWIN_VERSION:-16/);
     assert.match(source, /RAYON_NUM_THREADS/);
     assert.match(source, /run_windows_cross_tauri_build/);
+    assert.match(source, /Failed to setup MSVC CRT/);
     assert.match(script, /curl -fL/);
     assert.match(script, /--retry 8/);
     assert.match(script, /--max-time 900/);
@@ -436,6 +437,13 @@ describe("release artifact names", () => {
       script,
       /CACHE="\$\{XDG_CACHE_HOME:-\$\{HOME\}\/\.cache\}\/cargo-xwin\/xwin"/,
     );
+    const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+    const release = readFileSync(
+      join(root, ".github/workflows/release.yml"),
+      "utf8",
+    );
+    assert.match(ci, /python3 --version/);
+    assert.match(release, /python3 --version/);
   });
 
   it("skips updater signatures when TAURI_SIGNING_PRIVATE_KEY is unset", () => {

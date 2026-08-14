@@ -97,6 +97,16 @@ describe("Tauri frontend contract", () => {
     );
   });
 
+  it("keeps Unix-only OpenOptions inside the Unix sync_directory function", () => {
+    const config = readFileSync(
+      join(root, "crates/iran-split-config/src/lib.rs"),
+      "utf8",
+    );
+    assert.doesNotMatch(config, /use std::fs::OpenOptions/);
+    assert.doesNotMatch(config, /fs::\{self, OpenOptions\}/);
+    assert.match(config, /fs::OpenOptions::new\(\)/);
+  });
+
   it("uses tail expressions in cfg blocks so host Clippy needless_return stays clean", () => {
     const cfgReturn = /#\[cfg\([^\]]+\)\]\s*\{\s*return /;
     const offenders = rustSources(root).filter((path) =>

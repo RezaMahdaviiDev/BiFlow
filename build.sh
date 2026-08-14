@@ -528,11 +528,24 @@ run_tauri_build() {
 run_windows_cross_tauri_build() {
   local attempt=1
   local max_attempts=5
+  local log_file status
+  log_file="$(command mktemp)"
   while true; do
-    if run_tauri_build "$@"; then
+    set +e
+    run_tauri_build "$@" >"${log_file}" 2>&1
+    status=$?
+    set -e
+    command cat -- "${log_file}"
+    if [[ "${status}" -eq 0 ]]; then
+      command rm -f -- "${log_file}"
       return 0
     fi
+    if ! command grep -Eq 'Failed to setup MSVC CRT|unexpected end of file' "${log_file}"; then
+      command rm -f -- "${log_file}"
+      die "Windows cross-compile failed"
+    fi
     if [[ "${attempt}" -ge "${max_attempts}" ]]; then
+      command rm -f -- "${log_file}"
       die "Windows cross-compile failed after ${max_attempts} attempts (MSVC CRT download)"
     fi
     log "Windows cross-compile failed on MSVC CRT/CDN; prefetching and retrying (${attempt}/${max_attempts})..."

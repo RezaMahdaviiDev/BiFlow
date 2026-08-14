@@ -1,7 +1,7 @@
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, OpenOptions},
+    fs,
     io::Write,
     net::IpAddr,
     path::{Path, PathBuf},
@@ -375,7 +375,10 @@ impl ConfigStore {
         #[cfg(not(unix))]
         set_private_permissions(temporary.path());
         temporary.persist(&self.path)?;
+        #[cfg(unix)]
         sync_directory(parent)?;
+        #[cfg(not(unix))]
+        sync_directory(parent);
         Ok(())
     }
 }
@@ -406,14 +409,12 @@ fn set_private_permissions(_path: &Path) {}
 
 #[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), std::io::Error> {
-    let directory = OpenOptions::new().read(true).open(path)?;
+    let directory = fs::OpenOptions::new().read(true).open(path)?;
     directory.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
-    Ok(())
-}
+fn sync_directory(_path: &Path) {}
 
 #[cfg(test)]
 mod tests {

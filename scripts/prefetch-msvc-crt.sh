@@ -48,11 +48,11 @@ download() {
   local dest="$1"
   local url="$2"
   local expected="${3:-}"
-  if [[ -n "${expected}" ]] && sha256_ok "${dest}" "${expected}"; then
-    log "already present: ${dest}"
-    return 0
-  fi
-  if [[ -e "${dest}" ]]; then
+  if [[ -s "${dest}" ]]; then
+    if [[ -z "${expected}" ]] || sha256_ok "${dest}" "${expected}"; then
+      log "already present: ${dest}"
+      return 0
+    fi
     log "checksum mismatch or incomplete, re-downloading $(basename -- "${dest}")"
     command rm -f -- "${dest}"
   fi
