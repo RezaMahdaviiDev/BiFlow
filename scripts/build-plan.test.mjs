@@ -418,6 +418,10 @@ describe("release artifact names", () => {
     assert.match(workflow, /gh release upload/);
     assert.match(workflow, /gh release edit/);
     assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
+    assert.match(workflow, /prepare-tauri-signing\.mjs/);
+    assert.match(workflow, /--verify-sign/);
+    assert.doesNotMatch(workflow, /^ {2}TAURI_SIGNING_PRIVATE_KEY:/m);
+    assert.doesNotMatch(workflow, /^ {2}TAURI_SIGNING_PRIVATE_KEY_PASSWORD:/m);
     assert.match(workflow, /generate-latest-json\.mjs/);
     assert.match(workflow, /latest\.json/);
     assert.match(workflow, /\.AppImage\.sig/);
@@ -557,6 +561,7 @@ describe("release artifact names", () => {
     assert.match(workflow, /fromJSON\(needs\.select\.outputs\.include\)/);
     assert.match(workflow, /\$env:Path = "\$nsis;\$env:Path"/);
     assert.match(workflow, /prefetch-appimage-tools\.sh/);
+    assert.match(workflow, /createUpdaterArtifacts/);
     assert.doesNotMatch(workflow, /if:[^\n]*matrix\./);
     assert.doesNotMatch(workflow, /if: >-[\s\S]*?matrix\./);
     const autocrlf = workflow.indexOf(

@@ -18,11 +18,21 @@ and Windows NSIS channels together with a static `latest.json` manifest.
   Set `bundle.createUpdaterArtifacts` to `true` and point the updater endpoint at
   `https://github.com/devlifeX/BiFlow/releases/latest/download/latest.json`.
 - Store `TAURI_SIGNING_PRIVATE_KEY` and optional
-  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in GitHub Actions secrets only. Never log,
-  commit, or upload the private key. Local `./build.sh` packaging without that
-  secret passes `--config '{"bundle":{"createUpdaterArtifacts":false}}'` so
-  unsigned `.deb` / AppImage / NSIS still complete. GitHub release jobs keep the
-  secret and produce `.sig` files.
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as GitHub **repository** Actions secrets
+  only (Settings → Secrets and variables → Actions). Environment secrets are
+  invisible unless the job sets `environment:`. Never log, commit, or upload the
+  private key. The secret value is the single-line Base64 blob from
+  `pnpm tauri signer generate` (it decodes to `untrusted comment: … encrypted
+secret key`). If a password was set at generate time, the password secret must
+  match; a passwordless key must not use a dummy password secret. An empty
+  workflow-level `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` still decrypts as `""`,
+  and minisign reports that as `Missing comment in secret key`.
+- Release jobs run `scripts/prepare-tauri-signing.mjs --require --verify-sign`
+  after `pnpm install` so a bad key or password fails before the release compile.
+  Local `./build.sh` packaging without the private key passes
+  `--config '{"bundle":{"createUpdaterArtifacts":false}}'` so unsigned `.deb` /
+  AppImage / NSIS still complete. Package dry-run uses the same unsigned overlay.
+  GitHub release jobs keep the secret and produce `.sig` files.
 - Build signed AppImage and NSIS updater bundles on native GitHub runners. Upload
   `.sig` files with the release artifacts.
 - Generate and schema-validate `latest.json` in the publish job with

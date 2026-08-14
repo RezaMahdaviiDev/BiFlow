@@ -104,7 +104,10 @@ describe("Tauri frontend contract", () => {
   });
 
   it("does not attach a console or leftover terminal when the GUI starts", () => {
-    const desktopMain = readFileSync(join(root, "src-tauri/src/main.rs"), "utf8");
+    const desktopMain = readFileSync(
+      join(root, "src-tauri/src/main.rs"),
+      "utf8",
+    );
     const helperMain = readFileSync(
       join(root, "crates/iran-split-helper/src/main.rs"),
       "utf8",

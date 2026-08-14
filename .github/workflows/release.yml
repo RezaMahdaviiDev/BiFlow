@@ -9,8 +9,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 # Tag v* publishes Linux .deb + AppImage and Windows portable .exe + NSIS.
 # Third-party VPN apps stay in-app (ADR 0004); this workflow does not vendor them.
@@ -116,6 +114,12 @@ jobs:
           }
           Get-Command makensis -ErrorAction Stop
       - run: pnpm install --frozen-lockfile
+      - name: Prepare updater signing
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/prepare-tauri-signing.mjs --require --github-env --verify-sign
       - name: Stage privileged helper
         shell: bash
         run: |

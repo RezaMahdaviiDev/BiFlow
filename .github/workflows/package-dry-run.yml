@@ -35,8 +35,8 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
         run: |
           set -euo pipefail
-          linux='{"platform":"ubuntu-24.04","args":"--bundles deb,appimage"}'
-          windows='{"platform":"windows-2025","args":"--bundles nsis"}'
+          linux='{"platform":"ubuntu-24.04","args":"--bundles deb,appimage --config {\"bundle\":{\"createUpdaterArtifacts\":false}}"}'
+          windows='{"platform":"windows-2025","args":"--bundles nsis --config {\"bundle\":{\"createUpdaterArtifacts\":false}}"}'
           case "${PLATFORM}" in
             linux) include="[${linux}]" ;;
             windows) include="[${windows}]" ;;
