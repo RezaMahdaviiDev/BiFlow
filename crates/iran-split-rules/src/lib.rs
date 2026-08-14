@@ -17,8 +17,9 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 pub use cloud::{
-    provider_entry_count, resolve_provider_path, CloudRuleSetStatus, CloudRuleStore,
-    CloudRulesStatus, CloudSyncError, RuleFetcher,
+    bundled_snapshot_is_complete, ensure_bundled_snapshot, provider_entry_count,
+    resolve_provider_path, CloudRuleSetStatus, CloudRuleStore, CloudRulesStatus, CloudSyncError,
+    RuleFetcher,
 };
 
 #[derive(Debug, Error)]

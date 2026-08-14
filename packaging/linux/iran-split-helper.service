@@ -1,0 +1,33 @@
+[Unit]
+Description=BiFlow privileged helper
+Documentation=https://github.com/devlifeX/BiFlow
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/biflow/iran-split-helper --config /etc/iran-split/helper.toml
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+KillMode=control-group
+UMask=0007
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+DevicePolicy=closed
+DeviceAllow=/dev/net/tun rw
+RuntimeDirectory=iran-split
+RuntimeDirectoryMode=0750
+StateDirectory=iran-split
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/iran-split /run/iran-split
+
+[Install]
+WantedBy=multi-user.target

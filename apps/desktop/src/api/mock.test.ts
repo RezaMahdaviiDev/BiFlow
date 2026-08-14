@@ -4,6 +4,7 @@ import { mockApi, resetMockState } from "./mock";
 
 describe("mock transport", () => {
   beforeEach(() => {
+    sessionStorage.removeItem("biflow-mock-force-missing-helper");
     resetMockState();
   });
 
@@ -27,6 +28,16 @@ describe("mock transport", () => {
     expect(localStorage.getItem("biflow-mock-installed-deps")).toMatch(
       /"installed":true/,
     );
+  });
+
+  it("installs a missing mock helper", async () => {
+    sessionStorage.setItem("biflow-mock-force-missing-helper", "1");
+    resetMockState();
+    const boot = await mockApi.bootstrap();
+    expect(boot.snapshot.helper.phase).toBe("unavailable");
+    await mockApi.installHelper();
+    const snapshot = await mockApi.getSnapshot();
+    expect(snapshot.helper.phase).toBe("running");
   });
 
   it("routes .ir hosts direct and other hosts through the vpn", async () => {

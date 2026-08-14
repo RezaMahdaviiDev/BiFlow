@@ -1,6 +1,6 @@
 use iran_split_ipc::{CleanupReport, ProcessStatus, ServiceLogEntry};
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -47,9 +47,11 @@ pub enum HelperServiceError {
     Protocol(#[from] iran_split_ipc::ProtocolError),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HelperSettings {
     pub authorized_uid: u32,
+    #[serde(default)]
+    pub authorized_gid: u32,
     pub socket_path: PathBuf,
     pub staging_dir: PathBuf,
     pub runtime_dir: PathBuf,
@@ -79,7 +81,7 @@ impl HelperSettings {
         Ok(settings)
     }
 
-    fn validate(&self) -> Result<(), HelperServiceError> {
+    pub(crate) fn validate(&self) -> Result<(), HelperServiceError> {
         for (name, path) in [
             ("socket_path", &self.socket_path),
             ("staging_dir", &self.staging_dir),
@@ -595,6 +597,8 @@ async fn delete_owned_interface(name: &str) -> Result<(), HelperServiceError> {
 #[cfg(not(unix))]
 fn delete_owned_interface(_name: &str) {}
 
+mod commands;
+
 #[cfg(unix)]
 mod linux;
 
@@ -602,21 +606,10 @@ mod linux;
 pub use linux::run_linux;
 
 #[cfg(windows)]
-pub mod windows {
-    use super::HelperServiceError;
+mod windows;
 
-    /// Starts the privileged helper as a Windows service.
-    ///
-    /// # Errors
-    ///
-    /// Always returns [`HelperServiceError::UnsafeConfig`]. The packaged Windows
-    /// service must be started from the native service entry point, not this stub.
-    pub fn run_service() -> Result<(), HelperServiceError> {
-        Err(HelperServiceError::UnsafeConfig(
-            "Windows service packaging must invoke the native service entry point".into(),
-        ))
-    }
-}
+#[cfg(windows)]
+pub use windows::{install, run_named_pipe, uninstall};
 
 #[cfg(test)]
 mod tests {
@@ -638,6 +631,7 @@ mod tests {
     fn rejects_unsafe_tun_name_and_hash() {
         let settings = HelperSettings {
             authorized_uid: 1_000,
+            authorized_gid: 1_000,
             socket_path: "/run/iran-split/helper.sock".into(),
             staging_dir: "/home/user/.local/share/iran-split/runtime".into(),
             runtime_dir: "/var/lib/iran-split".into(),
@@ -646,6 +640,24 @@ mod tests {
             tun_name: "../../tun".into(),
         };
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn helper_toml_defaults_missing_gid() {
+        let parsed: HelperSettings = toml::from_str(
+            r#"
+authorized_uid = 1000
+socket_path = "/run/iran-split/helper.sock"
+staging_dir = "/home/user/.local/share/biflow/runtime/generations"
+runtime_dir = "/var/lib/iran-split"
+mihomo_binary = "/usr/lib/biflow/mihomo"
+mihomo_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+tun_name = "clash-iran"
+"#,
+        )
+        .expect("toml");
+        assert_eq!(parsed.authorized_gid, 0);
+        assert!(parsed.validate().is_ok());
     }
 
     #[cfg(not(unix))]
@@ -657,9 +669,10 @@ mod tests {
         delete_owned_interface("unused");
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_service_stub_rejects_direct_invocation() {
-        assert!(windows::run_service().is_err());
+    fn production_linux_helper_paths_are_absolute() {
+        assert!(Path::new("/run/iran-split/helper.sock").is_absolute());
+        assert!(Path::new("/var/lib/iran-split").is_absolute());
+        assert!(Path::new("/usr/lib/biflow/iran-split-helper").is_absolute());
     }
 }

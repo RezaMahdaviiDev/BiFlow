@@ -1,14 +1,15 @@
-use super::{HelperServiceError, HelperSettings, Supervisor};
-use iran_split_ipc::{
-    read_frame, validate_envelope, write_frame, Envelope, HelloReply, HelperCommand, HelperError,
-    HelperReply, ServiceStatus, PROTOCOL_VERSION,
-};
+use super::{commands, HelperServiceError, HelperSettings, Supervisor};
+use iran_split_ipc::{HelloReply, HelperCommand, HelperError, HelperReply, PROTOCOL_VERSION};
 use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc, time::Duration};
-use tokio::{net::UnixListener, net::UnixStream, time::timeout};
-use tracing::{error, info, warn};
-
-const IO_TIMEOUT: Duration = Duration::from_secs(5);
+use nix::unistd::{chown, Gid, Uid};
+use std::{
+    fs,
+    os::unix::fs::{FileTypeExt, PermissionsExt},
+    path::Path,
+    sync::Arc,
+};
+use tokio::net::{UnixListener, UnixStream};
+use tracing::{info, warn};
 
 /// Runs the Linux helper service and accepts authenticated local IPC clients.
 ///
@@ -23,7 +24,7 @@ pub async fn run_linux(config_path: &Path) -> Result<(), HelperServiceError> {
         .parent()
         .ok_or_else(|| HelperServiceError::UnsafeConfig("socket has no parent".into()))?;
     fs::create_dir_all(socket_parent)?;
-    fs::set_permissions(socket_parent, fs::Permissions::from_mode(0o750))?;
+    apply_socket_dir_permissions(socket_parent, settings.authorized_gid)?;
     if socket_path.exists() {
         let metadata = fs::symlink_metadata(&socket_path)?;
         if !metadata.file_type().is_socket() {
@@ -34,7 +35,7 @@ pub async fn run_linux(config_path: &Path) -> Result<(), HelperServiceError> {
         fs::remove_file(&socket_path)?;
     }
     let listener = UnixListener::bind(&socket_path)?;
-    fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))?;
+    apply_socket_permissions(&socket_path, settings.authorized_gid)?;
     let supervisor = Arc::new(Supervisor::new(settings));
     info!(
         event = "helper.listening",
@@ -64,6 +65,24 @@ pub async fn run_linux(config_path: &Path) -> Result<(), HelperServiceError> {
     }
 }
 
+fn apply_socket_dir_permissions(path: &Path, gid: u32) -> Result<(), HelperServiceError> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o750))?;
+    chown_root_group(path, gid)
+}
+
+fn apply_socket_permissions(path: &Path, gid: u32) -> Result<(), HelperServiceError> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o660))?;
+    chown_root_group(path, gid)
+}
+
+fn chown_root_group(path: &Path, gid: u32) -> Result<(), HelperServiceError> {
+    if gid == 0 || !nix::unistd::geteuid().is_root() {
+        return Ok(());
+    }
+    chown(path, Some(Uid::from_raw(0)), Some(Gid::from_raw(gid)))
+        .map_err(|error| HelperServiceError::Io(std::io::Error::other(error.to_string())))
+}
+
 async fn handle_connection(
     mut stream: UnixStream,
     supervisor: Arc<Supervisor>,
@@ -84,13 +103,13 @@ async fn handle_connection(
         return Ok(());
     }
 
-    let hello = read_request(&mut stream).await?;
+    let hello = commands::read_request(&mut stream).await?;
     let HelperCommand::Hello {
         supported_protocols,
         ..
     } = &hello.payload
     else {
-        send_reply(
+        commands::send_reply(
             &mut stream,
             hello.reply(HelperReply::Error(HelperError {
                 code: "HELLO_REQUIRED".into(),
@@ -102,7 +121,7 @@ async fn handle_connection(
         return Ok(());
     };
     if !supported_protocols.contains(&PROTOCOL_VERSION) {
-        send_reply(
+        commands::send_reply(
             &mut stream,
             hello.reply(HelperReply::Error(HelperError {
                 code: "PROTOCOL_MISMATCH".into(),
@@ -113,7 +132,7 @@ async fn handle_connection(
         .await?;
         return Ok(());
     }
-    send_reply(
+    commands::send_reply(
         &mut stream,
         hello.reply(HelperReply::Hello(HelloReply {
             helper_version: env!("CARGO_PKG_VERSION").into(),
@@ -128,7 +147,7 @@ async fn handle_connection(
     .await?;
 
     loop {
-        let request = match read_request(&mut stream).await {
+        let request = match commands::read_request(&mut stream).await {
             Ok(request) => request,
             Err(HelperServiceError::Protocol(iran_split_ipc::ProtocolError::Io(error)))
                 if matches!(
@@ -141,173 +160,43 @@ async fn handle_connection(
             Err(error) => return Err(error),
         };
         request.payload.validate()?;
-        send_reply(
+        commands::send_reply(
             &mut stream,
-            execute_audited(&supervisor, request, peer_uid).await,
+            commands::execute_audited(&supervisor, request, &peer_uid.to_string()).await,
         )
         .await?;
     }
 }
 
-async fn execute_audited(
-    supervisor: &Supervisor,
-    request: Envelope<HelperCommand>,
-    peer_uid: u32,
-) -> Envelope<HelperReply> {
-    info!(
-        event = "helper.command_received",
-        section = "helper_command",
-        initiator = "authorized_ipc_peer",
-        cause = "ipc_request",
-        trace_id = %request.request_id,
-        trace_route = "desktop->helper_ipc->command_handler",
-        peer_uid,
-        request_id = %request.request_id,
-        command = request.payload.audit_name(),
-        "authorized helper command"
-    );
-    let request_id = request.request_id;
-    let protocol_version = request.protocol_version;
-    let reply = execute(supervisor, request.payload).await;
-    if let HelperReply::Error(reply_error) = &reply {
-        error!(
-            event = "helper.command_failed",
-            section = "helper_command",
-            initiator = "command_handler",
-            cause = %reply_error.message,
-            trace_id = %request_id,
-            trace_route = "desktop->helper_ipc->command_handler->error_reply",
-            error_code = reply_error.code,
-            retryable = reply_error.retryable,
-            "helper command failed"
+#[cfg(test)]
+mod tests {
+    use super::{apply_socket_dir_permissions, apply_socket_permissions};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn socket_permission_helpers_set_group_readable_modes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let parent = directory.path();
+        let socket = parent.join("helper.sock");
+        fs::write(&socket, []).expect("socket fixture");
+        apply_socket_dir_permissions(parent, 0).expect("dir mode");
+        apply_socket_permissions(&socket, 0).expect("socket mode");
+        assert_eq!(
+            fs::metadata(parent)
+                .expect("parent meta")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o750
         );
-    } else {
-        info!(
-            event = "helper.command_completed",
-            section = "helper_command",
-            initiator = "command_handler",
-            cause = "none",
-            trace_id = %request_id,
-            trace_route = "desktop->helper_ipc->command_handler->reply",
-            "helper command completed"
+        assert_eq!(
+            fs::metadata(&socket)
+                .expect("socket meta")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o660
         );
     }
-    Envelope {
-        protocol_version,
-        request_id,
-        payload: reply,
-    }
 }
-
-async fn execute(supervisor: &Supervisor, command: HelperCommand) -> HelperReply {
-    let result: Result<HelperReply, HelperServiceError> = async {
-        Ok(match command {
-            HelperCommand::Hello { .. } => HelperReply::Error(HelperError {
-                code: "HELLO_ALREADY_COMPLETED".into(),
-                message: "protocol negotiation is already complete".into(),
-                retryable: false,
-            }),
-            HelperCommand::GetServiceStatus => HelperReply::ServiceStatus(ServiceStatus {
-                helper_version: env!("CARGO_PKG_VERSION").into(),
-                protocol_version: PROTOCOL_VERSION,
-                authorized: true,
-                active_generation: supervisor.status().await?.generation_id,
-            }),
-            HelperCommand::RegisterRuntimeGeneration {
-                generation_id,
-                config_sha256,
-            } => {
-                supervisor
-                    .register_generation(generation_id, &config_sha256)
-                    .await?;
-                HelperReply::GenerationRegistered { generation_id }
-            }
-            HelperCommand::StartMihomo {
-                generation_id,
-                config_sha256,
-            } => HelperReply::ProcessStatus(supervisor.start(generation_id, &config_sha256).await?),
-            HelperCommand::StopMihomo => HelperReply::ProcessStatus(supervisor.stop().await?),
-            HelperCommand::RestartMihomo {
-                generation_id,
-                config_sha256,
-            } => {
-                supervisor.stop().await?;
-                HelperReply::ProcessStatus(supervisor.start(generation_id, &config_sha256).await?)
-            }
-            HelperCommand::GetMihomoProcessStatus => {
-                HelperReply::ProcessStatus(supervisor.status().await?)
-            }
-            HelperCommand::CleanupOwnedNetworkState => {
-                HelperReply::CleanupReport(supervisor.cleanup().await?)
-            }
-            HelperCommand::CollectServiceLogs { max_entries } => {
-                HelperReply::Logs(supervisor.logs(usize::from(max_entries)).await)
-            }
-            HelperCommand::PrepareForUpdate => {
-                let report = supervisor.cleanup().await?;
-                if !report.clean() {
-                    return Err(HelperServiceError::Process(
-                        "owned network state remains before update".into(),
-                    ));
-                }
-                HelperReply::ReadyForUpdate
-            }
-        })
-    }
-    .await;
-    result.unwrap_or_else(|error| {
-        HelperReply::Error(HelperError {
-            code: helper_error_code(&error).into(),
-            message: error.to_string(),
-            retryable: matches!(
-                error,
-                HelperServiceError::Io(_) | HelperServiceError::Process(_)
-            ),
-        })
-    })
-}
-
-fn helper_error_code(error: &HelperServiceError) -> &'static str {
-    match error {
-        HelperServiceError::InvalidGeneration(_) => "INVALID_GENERATION",
-        HelperServiceError::BinaryIntegrity => "BINARY_INTEGRITY_FAILED",
-        HelperServiceError::Process(_) => "PROCESS_FAILED",
-        HelperServiceError::UnsafeConfig(_) | HelperServiceError::Toml(_) => {
-            "HELPER_CONFIG_INVALID"
-        }
-        HelperServiceError::Io(_) => "IO_FAILED",
-        HelperServiceError::Protocol(_) => "PROTOCOL_ERROR",
-    }
-}
-
-async fn read_request(
-    stream: &mut UnixStream,
-) -> Result<Envelope<HelperCommand>, HelperServiceError> {
-    let request = timeout(IO_TIMEOUT, read_frame(stream))
-        .await
-        .map_err(|_| {
-            HelperServiceError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "helper request timed out",
-            ))
-        })??;
-    validate_envelope(&request)?;
-    Ok(request)
-}
-
-async fn send_reply(
-    stream: &mut UnixStream,
-    reply: Envelope<HelperReply>,
-) -> Result<(), HelperServiceError> {
-    timeout(IO_TIMEOUT, write_frame(stream, &reply))
-        .await
-        .map_err(|_| {
-            HelperServiceError::Io(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "helper response timed out",
-            ))
-        })??;
-    Ok(())
-}
-
-use std::os::unix::fs::FileTypeExt;

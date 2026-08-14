@@ -101,6 +101,9 @@ export const desktop = {
       ? invoke("install_dependency", { id })
       : mockApi.installDependency(id);
   },
+  installHelper(): Promise<{ installed: boolean }> {
+    return native ? invoke("install_helper") : mockApi.installHelper();
+  },
   getInstallGuide(id: string): Promise<InstallGuide> {
     return native
       ? invoke("get_install_guide", { id })

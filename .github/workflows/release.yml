@@ -116,6 +116,14 @@ jobs:
           }
           Get-Command makensis -ErrorAction Stop
       - run: pnpm install --frozen-lockfile
+      - name: Stage privileged helper
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./scripts/stage-helper.sh windows
+          else
+            ./scripts/stage-helper.sh
+          fi
       - uses: tauri-apps/tauri-action@v1
         with:
           args: ${{ matrix.args }}

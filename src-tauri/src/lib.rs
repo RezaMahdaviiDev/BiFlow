@@ -1,5 +1,6 @@
 mod deps;
 mod diagnostics;
+mod helper_install;
 mod network;
 mod version;
 
@@ -7,8 +8,8 @@ use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
 use iran_split_core::{Engine, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot};
 use iran_split_rules::{
-    CloudRuleStore, CloudRulesStatus, DirectRulesDocument, DohResolver, Outbound, RuleManager,
-    RuleSet,
+    bundled_snapshot_is_complete, ensure_bundled_snapshot, CloudRuleStore, CloudRulesStatus,
+    DirectRulesDocument, DohResolver, Outbound, RuleManager, RuleSet,
 };
 use serde::Serialize;
 use std::{
@@ -257,7 +258,7 @@ impl AppPaths {
             .path()
             .resource_dir()
             .map_err(|error| error.to_string())?;
-        let resources = resource_root.join("rules");
+        let resources = packaged_rule_snapshot_dir(&resource_root);
         let dependencies = resource_root.join("dependencies");
         fs::create_dir_all(&data).map_err(|error| error.to_string())?;
         fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
@@ -269,6 +270,17 @@ impl AppPaths {
             dependencies,
         })
     }
+}
+
+fn packaged_rule_snapshot_dir(resource_root: &Path) -> PathBuf {
+    [
+        resource_root.join("rules"),
+        resource_root.join("resources").join("rules"),
+        resource_root.join("_up_").join("resources").join("rules"),
+    ]
+    .into_iter()
+    .find(|dir| bundled_snapshot_is_complete(dir))
+    .unwrap_or_else(|| resource_root.join("rules"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -721,6 +733,14 @@ async fn sync_cloud_rules(app: AppHandle) -> Result<CloudRulesStatus, String> {
                 .map_err(|error| error.to_string())
         },
     )
+    .await
+}
+
+#[tauri::command]
+async fn install_helper(app: AppHandle) -> Result<helper_install::InstallHelperResult, String> {
+    diagnostics::trace_action("helper", "tauri_command", "install_helper", async move {
+        helper_install::install_helper(&app).await
+    })
     .await
 }
 
@@ -1238,6 +1258,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         .map_err(|error| error.to_string())?;
     let rules_cache = paths.cache.join("rules");
     fs::create_dir_all(&rules_cache).map_err(|error| error.to_string())?;
+    let bundled_rules = open_bundled_rules_dir(&paths)?;
     #[cfg(target_os = "linux")]
     let mihomo_binary = linux_mihomo_binary(
         deps::first_existing(&deps::mihomo_candidates(&paths.data))
@@ -1262,7 +1283,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
                 socket_path,
                 user_data_dir: paths.data.clone(),
                 system_runtime_dir,
-                resources_dir: paths.resources.clone(),
+                resources_dir: bundled_rules.clone(),
                 rules_cache_dir: rules_cache.clone(),
                 mihomo_binary,
             },
@@ -1279,7 +1300,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         Arc::new(DohResolver::default()),
     )
     .map_err(|error| error.to_string())?;
-    let cloud_rules = CloudRuleStore::load(paths.resources.clone(), rules_cache);
+    let cloud_rules = CloudRuleStore::load(bundled_rules, rules_cache);
     let network = network::NetworkMonitor::new().map_err(|error| error.to_string())?;
     info!(
         event = "services.initialized",
@@ -1298,6 +1319,23 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         network,
         paths,
     })
+}
+
+fn open_bundled_rules_dir(paths: &AppPaths) -> Result<PathBuf, String> {
+    let fallback = paths.data.join("bundled-rules");
+    let bundled =
+        ensure_bundled_snapshot(&paths.resources, &fallback).map_err(|error| error.to_string())?;
+    if bundled != paths.resources {
+        warn!(
+            event = "cloud_rules.embedded_snapshot_used",
+            section = "startup",
+            initiator = "create_services",
+            cause = "packaged_rules_missing",
+            trace_route = "application_process->create_services->bundled_rules",
+            "packaged Iran rule snapshot was missing; using the embedded copy"
+        );
+    }
+    Ok(bundled)
 }
 
 fn handle_tray_icon<R: Runtime>(tray: &TrayIcon<R>, event: &TrayIconEvent) {
@@ -1771,6 +1809,7 @@ pub fn run() {
             sync_cloud_rules,
             list_dependencies,
             install_dependency,
+            install_helper,
             get_install_guide,
             open_external_url,
             run_full_diagnostics,
@@ -1797,8 +1836,10 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        single_instance_dbus_id, update_download_percent, UpdateProgress, BUNDLE_IDENTIFIER,
+        packaged_rule_snapshot_dir, single_instance_dbus_id, update_download_percent,
+        UpdateProgress, BUNDLE_IDENTIFIER,
     };
+    use std::fs;
 
     #[test]
     fn update_download_percent_is_bounded() {
@@ -1807,6 +1848,30 @@ mod tests {
         assert_eq!(update_download_percent(100, Some(100)), Some(100));
         assert_eq!(update_download_percent(150, Some(100)), Some(100));
         assert_eq!(update_download_percent(10, None), None);
+    }
+
+    #[test]
+    fn packaged_rule_snapshot_dir_finds_complete_nested_layout() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let nested = directory
+            .path()
+            .join("_up_")
+            .join("resources")
+            .join("rules");
+        fs::create_dir_all(&nested).expect("nested rules");
+        for name in ["iran-domains.txt", "iran-networks.txt", "private.txt"] {
+            fs::write(nested.join(name), b"ok").expect("rule file");
+        }
+        assert_eq!(packaged_rule_snapshot_dir(directory.path()), nested);
+    }
+
+    #[test]
+    fn packaged_rule_snapshot_dir_defaults_to_rules_when_missing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            packaged_rule_snapshot_dir(directory.path()),
+            directory.path().join("rules")
+        );
     }
 
     #[test]

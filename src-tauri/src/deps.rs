@@ -137,6 +137,7 @@ pub fn mihomo_candidates(data: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![
         data.join(mihomo_file_name()),
         data.join("bin/clash-meta"),
+        PathBuf::from("/usr/lib/biflow/mihomo"),
         PathBuf::from("/opt/biflow/mihomo"),
         PathBuf::from("/opt/iran-split/mihomo"),
         PathBuf::from("/usr/local/bin/mihomo"),

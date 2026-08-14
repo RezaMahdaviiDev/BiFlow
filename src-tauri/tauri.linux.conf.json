@@ -1,7 +1,10 @@
 {
   "bundle": {
     "resources": {
-      "../vendor/mihomo/linux-x86_64/mihomo": "dependencies/mihomo"
+      "../vendor/mihomo/linux-x86_64/mihomo": "dependencies/mihomo",
+      "../packaging/linux/install-helper.sh": "helper/install-helper.sh",
+      "../packaging/linux/iran-split-helper.service": "helper/iran-split-helper.service",
+      "../packaging/staged/iran-split-helper": "helper/iran-split-helper"
     }
   }
 }

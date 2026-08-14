@@ -52,6 +52,7 @@ interface AppStore {
   syncCloudRules: () => Promise<void>;
   refreshNetworkStatus: () => Promise<void>;
   installDependency: (id: string) => Promise<void>;
+  installHelper: () => Promise<void>;
   runDiagnostics: () => Promise<void>;
   applyUpdateProgress: (progress: UpdateProgress) => void;
   checkForUpdate: () => Promise<void>;
@@ -236,6 +237,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch (error) {
       const guide = await desktop.getInstallGuide(id).catch(() => null);
       set({ installingId: null, error: message(error), installGuide: guide });
+    }
+  },
+  installHelper: async () => {
+    set({ installingId: "helper", error: null });
+    try {
+      await desktop.installHelper();
+      const snapshot = await desktop.getSnapshot();
+      set({ installingId: null, snapshot });
+    } catch (error) {
+      set({ installingId: null, error: message(error) });
     }
   },
   runDiagnostics: async () => {

@@ -491,6 +491,57 @@ fn write_atomic(path: &Path, content: &[u8]) -> Result<(), CloudSyncError> {
     Ok(())
 }
 
+const EMBEDDED_BUNDLED_RULES: &[(&str, &str)] = &[
+    (
+        "iran-domains.txt",
+        include_str!("../../../resources/rules/iran-domains.txt"),
+    ),
+    (
+        "iran-networks.txt",
+        include_str!("../../../resources/rules/iran-networks.txt"),
+    ),
+    (
+        "private.txt",
+        include_str!("../../../resources/rules/private.txt"),
+    ),
+];
+
+/// Returns whether `dir` contains every bundled Iran/private rule file.
+#[must_use]
+pub fn bundled_snapshot_is_complete(dir: &Path) -> bool {
+    CATALOG
+        .iter()
+        .all(|entry| dir.join(entry.local_name).is_file())
+}
+
+/// Uses `packaged` when it already has the snapshot; otherwise writes the
+/// compile-time snapshot into `fallback`.
+///
+/// # Errors
+///
+/// Returns [`CloudSyncError`] when the fallback directory cannot be created or
+/// the embedded files cannot be written.
+pub fn ensure_bundled_snapshot(
+    packaged: &Path,
+    fallback: &Path,
+) -> Result<PathBuf, CloudSyncError> {
+    if bundled_snapshot_is_complete(packaged) {
+        return Ok(packaged.to_owned());
+    }
+    fs::create_dir_all(fallback)?;
+    for (name, contents) in EMBEDDED_BUNDLED_RULES {
+        write_atomic(&fallback.join(name), contents.as_bytes())?;
+    }
+    if bundled_snapshot_is_complete(fallback) {
+        Ok(fallback.to_owned())
+    } else {
+        Err(CloudSyncError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "embedded Iran rule snapshot could not be materialized",
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +647,36 @@ mod tests {
         let store = CloudRuleStore::load(directory.path(), directory.path().join("cache"));
 
         assert!(matches!(store.status(), Err(CloudSyncError::Io(_))));
+    }
+
+    #[test]
+    fn ensure_bundled_snapshot_keeps_a_complete_packaged_dir() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let packaged = directory.path().join("packaged");
+        seed_bundled(&packaged);
+        let fallback = directory.path().join("fallback");
+
+        let resolved = ensure_bundled_snapshot(&packaged, &fallback).expect("packaged snapshot");
+
+        assert_eq!(resolved, packaged);
+        assert!(!fallback.exists());
+    }
+
+    #[test]
+    fn ensure_bundled_snapshot_writes_embedded_files_when_packaged_is_missing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let packaged = directory.path().join("missing");
+        let fallback = directory.path().join("fallback");
+
+        let resolved = ensure_bundled_snapshot(&packaged, &fallback).expect("embedded snapshot");
+        let store = CloudRuleStore::load(resolved.clone(), directory.path().join("cache"));
+        let status = store.status().expect("bundled status");
+
+        assert_eq!(resolved, fallback);
+        assert!(bundled_snapshot_is_complete(&fallback));
+        assert!(status.domain_count >= 1_000);
+        assert!(status.ip_count >= 105);
+        assert_eq!(status.source, "bundled");
     }
 
     #[tokio::test]

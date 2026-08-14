@@ -33,6 +33,9 @@ semantics between maintainers and users.
 ## Consequences
 
 - Routing still works offline from the bundled snapshot.
+- When the packaged `rules/` folder is missing (common for a Windows portable
+  `BiFlow.exe`), the desktop materializes the same snapshot from bytes embedded
+  in `iran-split-rules`. See [0028](./0028-embedded-windows-rules.md).
 - `test_route` and runtime generation read cache before bundled files.
 - External URL allowlists for user-facing links include BiFlow GitHub/raw
   prefixes and no longer include third-party rule hosts.

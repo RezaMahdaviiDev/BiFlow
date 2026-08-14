@@ -34,6 +34,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
     dependencies,
     installingId,
     installDependency,
+    installHelper,
   } = useAppStore();
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
   const paused = snapshot.phase === "paused";
@@ -176,6 +177,12 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
             name={t("helper")}
             status={snapshot.helper}
             icon={<ShieldCheck />}
+            installed={
+              snapshot.helper.phase !== "unavailable" &&
+              snapshot.helper.phase !== "error"
+            }
+            installing={installingId === "helper"}
+            onInstall={() => void installHelper()}
           />
           <Component
             name="Hiddify"

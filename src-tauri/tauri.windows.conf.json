@@ -1,7 +1,8 @@
 {
   "bundle": {
     "resources": {
-      "../vendor/mihomo/windows-x86_64/mihomo.exe": "dependencies/mihomo.exe"
+      "../vendor/mihomo/windows-x86_64/mihomo.exe": "dependencies/mihomo.exe",
+      "../packaging/staged/iran-split-helper.exe": "helper/iran-split-helper.exe"
     }
   }
 }

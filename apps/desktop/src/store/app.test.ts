@@ -13,8 +13,10 @@ vi.mock("../api/desktop", () => ({
     pause: vi.fn(),
     resume: vi.fn(),
     installDependency: vi.fn(),
+    installHelper: vi.fn(),
     listDependencies: vi.fn(),
     getInstallGuide: vi.fn(),
+    getSnapshot: vi.fn(),
     syncCloudRules: vi.fn(),
     getNetworkStatus: vi.fn(),
     checkUpdate: vi.fn(),
@@ -165,6 +167,15 @@ describe("app store", () => {
     expect(state.installingId).toBeNull();
     expect(state.error).toMatch(/download blocked/);
     expect(state.installGuide?.steps[0]).toMatch(/AppImage/);
+  });
+
+  it("installs the privileged helper from the dashboard action", async () => {
+    vi.mocked(desktop.installHelper).mockResolvedValue({ installed: true });
+    vi.mocked(desktop.getSnapshot).mockResolvedValue(boot.snapshot);
+    await useAppStore.getState().installHelper();
+    expect(desktop.installHelper).toHaveBeenCalledOnce();
+    expect(desktop.getSnapshot).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().installingId).toBeNull();
   });
 
   it("updates cloud rule counts after a successful sync", async () => {

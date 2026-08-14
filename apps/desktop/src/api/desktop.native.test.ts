@@ -36,6 +36,7 @@ describe("native desktop transport", () => {
     await desktop.saveSettings(draft, 4);
     await desktop.cancel("operation-1");
     await desktop.installDependency("mihomo");
+    await desktop.installHelper();
     const listener = vi.fn();
     await expect(desktop.subscribe(listener)).resolves.toBe(unlisten);
 
@@ -51,6 +52,7 @@ describe("native desktop transport", () => {
     expect(tauri.invoke).toHaveBeenNthCalledWith(5, "install_dependency", {
       id: "mihomo",
     });
+    expect(tauri.invoke).toHaveBeenNthCalledWith(6, "install_helper");
     expect(tauri.listen).toHaveBeenCalledWith(
       "stack-snapshot",
       expect.any(Function),

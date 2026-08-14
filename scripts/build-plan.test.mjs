@@ -210,6 +210,90 @@ describe("release artifact names", () => {
       windows.bundle.resources["../vendor/mihomo/windows-x86_64/mihomo.exe"],
       "dependencies/mihomo.exe",
     );
+    assert.equal(
+      linux.bundle.resources["../packaging/staged/iran-split-helper"],
+      "helper/iran-split-helper",
+    );
+    assert.equal(
+      linux.bundle.resources["../packaging/linux/install-helper.sh"],
+      "helper/install-helper.sh",
+    );
+    assert.equal(
+      windows.bundle.resources["../packaging/staged/iran-split-helper.exe"],
+      "helper/iran-split-helper.exe",
+    );
+    assert.equal(
+      config.bundle.linux.deb.files["/usr/lib/biflow/iran-split-helper"],
+      "../packaging/staged/iran-split-helper",
+    );
+    assert.equal(
+      config.bundle.windows.nsis.installerHooks,
+      "../packaging/windows/installer-hooks.nsh",
+    );
+    const script = readFileSync(join(root, "build.sh"), "utf8");
+    assert.match(script, /collect_windows\(\)/);
+    assert.match(script, /resources\/rules\/\./);
+    assert.match(script, /dependencies\/mihomo\.exe/);
+    assert.match(script, /stage-helper\.sh/);
+    assert.match(script, /helper\/iran-split-helper\.exe/);
+  });
+
+  it("plans a root-owned helper install without executing privileged steps", () => {
+    const result = spawnSync(
+      "sh",
+      [
+        join(root, "packaging/linux/install-helper.sh"),
+        "--print-plan",
+        "--authorized-uid",
+        "1000",
+        "--authorized-gid",
+        "1000",
+        "--staging-dir",
+        "/home/user/.local/share/biflow/runtime/generations",
+        "--helper-src",
+        "/tmp/iran-split-helper",
+        "--mihomo-src",
+        "/tmp/mihomo",
+        "--helper-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--mihomo-sha256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--tun-name",
+        "clash-iran",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /HELPER_DEST=\/usr\/lib\/biflow\/iran-split-helper/,
+    );
+    assert.match(result.stdout, /SOCKET_PATH=\/run\/iran-split\/helper\.sock/);
+    const relative = spawnSync(
+      "sh",
+      [
+        join(root, "packaging/linux/install-helper.sh"),
+        "--print-plan",
+        "--authorized-uid",
+        "1000",
+        "--authorized-gid",
+        "1000",
+        "--staging-dir",
+        "relative/path",
+        "--helper-src",
+        "/tmp/iran-split-helper",
+        "--mihomo-src",
+        "/tmp/mihomo",
+        "--helper-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--mihomo-sha256",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "--tun-name",
+        "clash-iran",
+      ],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(relative.status, 0);
   });
 
   it("pins bundled rule bytes so Windows checkout does not rewrite line endings", () => {
@@ -252,6 +336,7 @@ describe("release artifact names", () => {
     assert.match(source, /BIFLOW_DEV_SYSTEM_RUNTIME/);
     assert.match(source, /BIFLOW_DEV_MIHOMO_BINARY/);
     assert.match(source, /authorized_uid/);
+    assert.match(source, /authorized_gid/);
     assert.match(source, /KillMode=control-group/);
     assert.match(source, /NoNewPrivileges=yes/);
     assert.match(source, /ProtectSystem=strict/);

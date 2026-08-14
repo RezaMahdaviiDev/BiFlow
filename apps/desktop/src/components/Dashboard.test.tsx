@@ -96,6 +96,43 @@ describe("Dashboard", () => {
     expect(install).toHaveBeenCalledWith("hiddify");
   });
 
+  it("shows a helper install action when the helper is unavailable", async () => {
+    const installHelper = vi.fn().mockResolvedValue(undefined);
+    const unavailable = {
+      ...stopped,
+      helper: {
+        phase: "unavailable" as const,
+        message: "Helper service is not installed or running",
+        since: now,
+      },
+    };
+    useAppStore.setState({
+      snapshot: unavailable,
+      actionPending: false,
+      installingId: null,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: "1",
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: "1",
+          path: "/tmp/mihomo",
+        },
+      ],
+      installHelper,
+    });
+    render(<Dashboard snapshot={unavailable} />);
+    await userEvent.click(screen.getByRole("button", { name: /^Install$/ }));
+    expect(installHelper).toHaveBeenCalledOnce();
+  });
+
   it("hides install actions when Hiddify and Mihomo are already installed", () => {
     useAppStore.setState({
       snapshot: stopped,

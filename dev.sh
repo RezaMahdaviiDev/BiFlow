@@ -231,6 +231,7 @@ prepare_dev_helper() {
   command chmod 600 -- "${DEV_HELPER_CONFIG_TEMP}"
   {
     command printf 'authorized_uid = %s\n' "${developer_uid}"
+    command printf 'authorized_gid = %s\n' "${developer_gid}"
     command printf 'socket_path = "%s"\n' "$(toml_escape "${DEV_HELPER_SOCKET}")"
     command printf 'staging_dir = "%s"\n' "$(toml_escape "${staging_dir}")"
     command printf 'runtime_dir = "%s"\n' "$(toml_escape "${DEV_HELPER_RUNTIME}")"

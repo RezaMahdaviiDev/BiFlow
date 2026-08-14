@@ -608,6 +608,17 @@ collect_windows() {
   dest_setup="${PROJECT_DIR}/$(plan windows.dir)/$(windows_installer_name)"
   copy_one "${exe}" "${dest_exe}"
   copy_one "${setup}" "${dest_setup}"
+  local dest_dir
+  dest_dir="$(dirname "${dest_exe}")"
+  mkdir -p "${dest_dir}/rules" "${dest_dir}/dependencies"
+  cp -a "${PROJECT_DIR}/resources/rules/." "${dest_dir}/rules/"
+  if [[ -f "${PROJECT_DIR}/vendor/mihomo/windows-x86_64/mihomo.exe" ]]; then
+    cp -a "${PROJECT_DIR}/vendor/mihomo/windows-x86_64/mihomo.exe" "${dest_dir}/dependencies/mihomo.exe"
+  fi
+  if [[ -f "${PROJECT_DIR}/packaging/staged/iran-split-helper.exe" ]]; then
+    mkdir -p "${dest_dir}/helper"
+    cp -a "${PROJECT_DIR}/packaging/staged/iran-split-helper.exe" "${dest_dir}/helper/iran-split-helper.exe"
+  fi
 }
 
 build_linux() {
@@ -620,6 +631,7 @@ build_linux() {
   fi
   if should_run_linux_stage compile; then
     log "Stage compile: release binary for BiFlow ${BUILD_VERSION}"
+    "${PROJECT_DIR}/scripts/stage-helper.sh"
     run_tauri_build run-frontend --no-bundle
     [[ -x "$(linux_binary_path)" ]] || die "compile did not produce $(linux_binary_path)"
     write_stamp linux-compile
@@ -629,6 +641,8 @@ build_linux() {
   fi
   if should_run_linux_stage deb; then
     log "Stage deb: $(linux_deb_name)"
+    [[ -x "${PROJECT_DIR}/packaging/staged/iran-split-helper" ]] || \
+      "${PROJECT_DIR}/scripts/stage-helper.sh"
     run_tauri_build "${frontend_mode}" --bundles deb
     write_stamp linux-deb
     frontend_mode="skip-frontend"
@@ -638,6 +652,8 @@ build_linux() {
   if should_run_linux_stage appimage; then
     [[ -x "$(linux_binary_path)" ]] || die "stage appimage needs a compiled binary; run ./build.sh linux --from compile"
     log "Stage appimage: $(linux_appimage_name)"
+    [[ -x "${PROJECT_DIR}/packaging/staged/iran-split-helper" ]] || \
+      "${PROJECT_DIR}/scripts/stage-helper.sh"
     ensure_tauri_appimage_tools
     run_tauri_build "${frontend_mode}" --bundles appimage
     write_stamp linux-appimage
@@ -675,6 +691,11 @@ build_windows() {
   fi
   if should_run_windows_stage compile; then
     log "Stage compile: Windows app for BiFlow ${BUILD_VERSION}"
+    if [[ "${os}" == "linux" ]]; then
+      STAGE_HELPER_TARGET="${WINDOWS_TARGET}" "${PROJECT_DIR}/scripts/stage-helper.sh" windows
+    else
+      "${PROJECT_DIR}/scripts/stage-helper.sh" windows
+    fi
     compile_args=(--no-bundle)
     if [[ "${os}" == "linux" ]]; then
       compile_args+=("${WINDOWS_TAURI_ARGS[@]}")
@@ -689,6 +710,13 @@ build_windows() {
   fi
   if should_run_windows_stage nsis; then
     log "Stage nsis: $(windows_installer_name)"
+    if [[ ! -f "${PROJECT_DIR}/packaging/staged/iran-split-helper.exe" ]]; then
+      if [[ "${os}" == "linux" ]]; then
+        STAGE_HELPER_TARGET="${WINDOWS_TARGET}" "${PROJECT_DIR}/scripts/stage-helper.sh" windows
+      else
+        "${PROJECT_DIR}/scripts/stage-helper.sh" windows
+      fi
+    fi
     if [[ "${os}" == "linux" ]]; then
       run_windows_cross_tauri_build "${frontend_mode}" "${WINDOWS_TAURI_ARGS[@]}"
     else

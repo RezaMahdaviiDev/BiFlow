@@ -1,34 +1,86 @@
 use clap::Parser;
 use std::path::PathBuf;
-#[cfg(unix)]
 use tracing_subscriber::EnvFilter;
+
+#[cfg(windows)]
+const DEFAULT_CONFIG: &str = r"C:\ProgramData\iran-split\helper.toml";
+#[cfg(not(windows))]
+const DEFAULT_CONFIG: &str = "/etc/iran-split/helper.toml";
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Privileged service for Iran Split Desktop")]
 struct Arguments {
     /// Root-owned helper configuration written by the installer.
-    #[arg(long, default_value = "/etc/iran-split/helper.toml")]
-    config: PathBuf,
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Copy this process and Mihomo into a system location and start the helper.
+    #[arg(long)]
+    install: bool,
+    /// Stop and remove the packaged Windows helper task.
+    #[arg(long)]
+    uninstall: bool,
+    /// Packaged Mihomo executable used with `--install`.
+    #[arg(long)]
+    mihomo: Option<PathBuf>,
+    /// Runtime generation staging directory used with `--install`.
+    #[arg(long)]
+    staging_dir: Option<PathBuf>,
+    /// TUN interface name used with `--install`.
+    #[arg(long)]
+    tun_name: Option<String>,
 }
 
-#[cfg(unix)]
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .json()
         .init();
+}
+
+fn config_path(arguments: &Arguments) -> PathBuf {
+    arguments
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG))
+}
+
+#[cfg(unix)]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
     let arguments = Arguments::parse();
-    iran_split_helper::run_linux(&arguments.config).await?;
+    if arguments.install || arguments.uninstall {
+        return Err("Linux helper installation uses install-helper.sh".into());
+    }
+    iran_split_helper::run_linux(&config_path(&arguments)).await?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _arguments = Arguments::parse();
-    iran_split_helper::windows::run_service()?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
+    let arguments = Arguments::parse();
+    if arguments.uninstall {
+        iran_split_helper::uninstall()?;
+        return Ok(());
+    }
+    if arguments.install {
+        let mihomo = arguments
+            .mihomo
+            .ok_or("Windows helper install requires --mihomo")?;
+        let staging_dir = arguments
+            .staging_dir
+            .ok_or("Windows helper install requires --staging-dir")?;
+        let tun_name = arguments
+            .tun_name
+            .ok_or("Windows helper install requires --tun-name")?;
+        iran_split_helper::install(&mihomo, &staging_dir, &tun_name)?;
+        return Ok(());
+    }
+    iran_split_helper::run_named_pipe(&config_path(&arguments)).await?;
     Ok(())
 }
 

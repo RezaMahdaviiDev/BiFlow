@@ -34,15 +34,24 @@ const component = (
 });
 
 function initialSnapshot(): StackSnapshot {
+  const helperMissing =
+    typeof sessionStorage !== "undefined" &&
+    sessionStorage.getItem("biflow-mock-force-missing-helper") === "1";
   return {
     revision: 1,
     phase: "stopped",
     operation_id: null,
-    helper: {
-      phase: "running",
-      message: "Mock helper is ready",
-      since: now(),
-    },
+    helper: helperMissing
+      ? {
+          phase: "unavailable",
+          message: "Helper service is not installed or running",
+          since: now(),
+        }
+      : {
+          phase: "running",
+          message: "Mock helper is ready",
+          since: now(),
+        },
     hiddify: component("stopped", "Hiddify proxy is not listening"),
     mihomo: component("stopped", "Mihomo controller is not listening"),
     tun: component("stopped", "TUN interface is absent"),
@@ -583,6 +592,21 @@ export const mockApi = {
       path: `/tmp/biflow/${id}`,
       guide: guideFor(id),
     };
+  },
+  async installHelper(): Promise<{ installed: boolean }> {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    snapshot = {
+      ...snapshot,
+      revision: snapshot.revision + 1,
+      helper: {
+        phase: "running",
+        message: "Mock helper is ready",
+        since: now(),
+      },
+      updated_at: now(),
+    };
+    for (const listener of listeners) listener(structuredClone(snapshot));
+    return { installed: true };
   },
   async getInstallGuide(id: string) {
     return guideFor(id);

@@ -87,6 +87,32 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.locator(".traffic-flow-route")).toHaveCount(0);
   });
 
+  test("installs a missing helper from the advanced dashboard", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.evaluate(() => {
+      sessionStorage.setItem("biflow-mock-force-missing-helper", "1");
+      window.__BIFLOW_RESET_MOCK?.();
+    });
+    await page.reload();
+    await expect(page.getByText("BiFlow")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Setup needs attention" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Helper service is not installed or running"),
+    ).toBeVisible();
+    const installButtons = page.getByRole("button", {
+      name: "Install",
+      exact: true,
+    });
+    await expect(installButtons).toHaveCount(3);
+    await installButtons.first().click();
+    await expect(page.getByText("Mock helper is ready")).toBeVisible();
+    await expect(installButtons).toHaveCount(2);
+  });
+
   test("shows cloud rule counts and adds a custom direct rule", async ({
     page,
   }) => {
