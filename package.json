@@ -1,6 +1,6 @@
 {
   "name": "iran-split-desktop-workspace",
-  "version": "1.2.16",
+  "version": "2.0.0",
   "private": true,
   "packageManager": "pnpm@9.0.1",
   "engines": {
@@ -26,6 +26,7 @@
     "test:e2e": "playwright test",
     "precheck": "node scripts/sync-version.mjs",
     "check": "pnpm version:check && pnpm bundle:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts",
+    "github:action-test": "node scripts/ci-local.mjs",
     "tauri": "tauri"
   },
   "devDependencies": {
