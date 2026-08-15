@@ -22,12 +22,13 @@ import type {
   LogEntry,
   RouteTestResult,
 } from "../api/models";
+import { extractHost } from "../lib/host";
 import { useAppStore } from "../store/app";
 import { FlowResult } from "./DirectRules";
 
 export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
   const { t } = useTranslation();
-  const { runDiagnostics, actionPending } = useAppStore();
+  const { runDiagnostics, actionPending, addRule, removeRule } = useAppStore();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [level, setLevel] = useState("all");
   const [exported, setExported] = useState<ExportResult | null>(null);
@@ -42,6 +43,8 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
   const [freshStarting, setFreshStarting] = useState(false);
   const [freshStart, setFreshStart] = useState<FreshStartReport | null>(null);
   const [freshStartError, setFreshStartError] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
   const refreshDebugLog = () => {
     setLogAction("refresh");
@@ -76,7 +79,7 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
   return (
     <section
       aria-labelledby="diagnostics-title"
-      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
+      className="flex flex-col gap-4 pb-2"
     >
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-4">
         <header>
@@ -110,10 +113,14 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
         className="rounded-2xl border border-ink/10 bg-surface p-4"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!target.trim()) return;
+          // Accept whatever the user pasted — a full URL, a host:port, an IP —
+          // and test the host a routing rule would actually match.
+          const host = extractHost(target);
+          if (!host) return;
           setTesting(true);
+          setMoveError(null);
           void desktop
-            .testRoute(target.trim())
+            .testRoute(host)
             .then(setRoute)
             .finally(() => setTesting(false));
         }}
@@ -133,7 +140,7 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
           />
           <button
             type="submit"
-            disabled={testing || !target.trim()}
+            disabled={testing || !extractHost(target)}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-4 py-2.5 font-semibold text-white disabled:opacity-50"
           >
             <Route size={18} aria-hidden />
@@ -142,7 +149,30 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
         </div>
         {route ? (
           <div className="mt-4">
-            <FlowResult route={route} />
+            <FlowResult
+              route={route}
+              moving={moving}
+              onMove={(host, destination) => {
+                setMoving(true);
+                setMoveError(null);
+                const applied =
+                  destination === "direct" ? addRule(host) : removeRule(host);
+                void applied
+                  .then(() => desktop.testRoute(host))
+                  .then(setRoute)
+                  .catch((error: unknown) =>
+                    setMoveError(
+                      error instanceof Error ? error.message : String(error),
+                    ),
+                  )
+                  .finally(() => setMoving(false));
+              }}
+            />
+            {moveError ? (
+              <p className="mt-2 text-sm text-danger" role="alert">
+                {moveError}
+              </p>
+            ) : null}
           </div>
         ) : null}
       </form>

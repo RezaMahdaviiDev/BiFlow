@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAppStore } from "../store/app";
 import { Diagnostics } from "./Diagnostics";
 
 vi.mock("../api/desktop", () => ({
@@ -65,6 +66,45 @@ describe("Diagnostics", () => {
     expect(
       screen.getByText("/home/user/.local/share/biflow/debug.log"),
     ).toBeVisible();
+  });
+
+  it("accepts a full URL and tests only its host", async () => {
+    render(<Diagnostics report={null} />);
+    await userEvent.type(
+      screen.getByLabelText("Test IP or domain"),
+      "https://www.rade.ir/some/path?a=1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Test flow" }));
+
+    const { desktop } = await import("../api/desktop");
+    expect(desktop.testRoute).toHaveBeenCalledWith("www.rade.ir");
+  });
+
+  it("offers to move a VPN host to direct and re-tests it", async () => {
+    const addRule = vi.fn().mockResolvedValue(undefined);
+    const previous = useAppStore.getState().addRule;
+    useAppStore.setState({ addRule });
+    try {
+      render(<Diagnostics report={null} />);
+      await userEvent.type(
+        screen.getByLabelText("Test IP or domain"),
+        "openai.com",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Test flow" }));
+
+      // openai.com resolves to VPN, so the offer is to pin it direct.
+      const move = await screen.findByRole("button", {
+        name: /Add openai\.com to direct/,
+      });
+      await userEvent.click(move);
+
+      expect(addRule).toHaveBeenCalledWith("openai.com");
+      const { desktop } = await import("../api/desktop");
+      // The result is re-tested so the card reflects the new routing.
+      expect(desktop.testRoute).toHaveBeenCalledTimes(2);
+    } finally {
+      useAppStore.setState({ addRule: previous });
+    }
   });
 
   it("restarts Hiddify on clean state and reports the backup", async () => {

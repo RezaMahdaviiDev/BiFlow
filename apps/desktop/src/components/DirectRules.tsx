@@ -1,5 +1,7 @@
 import {
   CloudDownload,
+  LoaderCircle,
+  Minus,
   Plus,
   RefreshCw,
   Route,
@@ -50,10 +52,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   }
 
   return (
-    <section
-      aria-labelledby="rules-title"
-      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
-    >
+    <section aria-labelledby="rules-title" className="flex flex-col gap-4 pb-2">
       <header className="shrink-0">
         <h1 id="rules-title" className="text-2xl font-semibold tracking-tight">
           Direct rules
@@ -151,13 +150,13 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-2xl border border-ink/10 bg-surface">
+      <div className="rounded-2xl border border-ink/10 bg-surface">
         {filtered.length === 0 ? (
           <p className="p-8 text-center text-muted">
             No matching direct rules.
           </p>
         ) : (
-          <ul className="max-h-full divide-y divide-ink/10 overflow-y-auto">
+          <ul className="divide-y divide-ink/10">
             {filtered.map((rule) => (
               <li
                 key={`${rule.target.kind}:${rule.target.value}`}
@@ -210,16 +209,50 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function FlowResult({ route }: { route: RouteTestResult }) {
+export function FlowResult({
+  route,
+  onMove,
+  moving = false,
+}: {
+  route: RouteTestResult;
+  /** Sends the host the other way: to direct when it is on the VPN, and back
+   * to the VPN when it is a direct rule. Omitted where there is nothing to
+   * act on. */
+  onMove?: (target: string, to: "direct" | "vpn") => void;
+  moving?: boolean;
+}) {
+  const { t } = useTranslation();
   const vpn = route.outbound === "vpn";
+  const destination = vpn ? "direct" : "vpn";
   return (
     <div
       className={`rounded-2xl border p-4 ${vpn ? "border-brand/20 bg-brand/5" : "border-success/20 bg-success/5"}`}
       role="status"
     >
-      <p className="font-semibold">
-        {route.target} → {route.outbound.toUpperCase()}
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 break-all font-semibold">
+          {route.target} → {route.outbound.toUpperCase()}
+        </p>
+        {onMove ? (
+          <button
+            type="button"
+            disabled={moving}
+            onClick={() => onMove(route.target, destination)}
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-ink/15 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+          >
+            {moving ? (
+              <LoaderCircle className="animate-spin" size={16} aria-hidden />
+            ) : vpn ? (
+              <Plus size={16} aria-hidden />
+            ) : (
+              <Minus size={16} aria-hidden />
+            )}
+            {vpn
+              ? t("moveToDirect", { target: route.target })
+              : t("moveToVpn", { target: route.target })}
+          </button>
+        ) : null}
+      </div>
       <p className="mt-1 text-sm text-muted">
         {route.reason.replaceAll("_", " ")} · matched{" "}
         {route.matched_rule ?? "none"}

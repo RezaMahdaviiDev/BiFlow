@@ -175,10 +175,25 @@ install -d -o root -g root -m 0755 /usr/lib/biflow
 install -d -o root -g root -m 0750 /etc/iran-split
 install -d -o root -g root -m 0700 "${RUNTIME_DIR}"
 install -d -o root -g "${AUTHORIZED_GID}" -m 0750 /run/iran-split
-install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_DEST}"
-install -o root -g root -m 0755 "${MIHOMO_SRC}" "${MIHOMO_DEST}"
-install -o root -g root -m 0644 "${UNIT_SRC}" "${UNIT_DEST}"
-install -o root -g root -m 0755 "$0" /usr/lib/biflow/install-helper.sh
+# A .deb already placed these under /usr/lib/biflow, so the source and the
+# destination can be the same path. `install` fails with "are the same file";
+# the file is already where it belongs, so only re-apply ownership and mode.
+install_or_reown() {
+  mode="$1"
+  source_path="$2"
+  destination="$3"
+  if [ "$(readlink -f -- "${source_path}")" = "$(readlink -f -- "${destination}")" ]; then
+    chown root:root -- "${destination}"
+    chmod "${mode}" -- "${destination}"
+    return 0
+  fi
+  install -o root -g root -m "${mode}" "${source_path}" "${destination}"
+}
+
+install_or_reown 0755 "${HELPER_SRC}" "${HELPER_DEST}"
+install_or_reown 0755 "${MIHOMO_SRC}" "${MIHOMO_DEST}"
+install_or_reown 0644 "${UNIT_SRC}" "${UNIT_DEST}"
+install_or_reown 0755 "$0" /usr/lib/biflow/install-helper.sh
 
 config_temp="$(mktemp /tmp/biflow-helper.XXXXXX.toml)"
 chmod 600 "${config_temp}"

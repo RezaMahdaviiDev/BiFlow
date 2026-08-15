@@ -22,7 +22,7 @@ export function About() {
   const showRetry = update.phase === "failed";
 
   return (
-    <section className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
+    <section className="flex flex-col gap-4 pb-2">
       <header className="flex items-start gap-3">
         <Info className="mt-1 text-brand" size={24} aria-hidden />
         <div>

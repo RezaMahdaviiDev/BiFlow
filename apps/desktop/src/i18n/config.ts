@@ -100,6 +100,8 @@ const resources = {
       testFlowHelp: "See whether a host would go DIRECT or through the VPN.",
       testFlowPlaceholder: "digikala.com or 5.22.12.1",
       testFlowButton: "Test flow",
+      moveToDirect: "Add {{target}} to direct",
+      moveToVpn: "Add {{target}} to VPN",
       freshHiddify: "Fresh Hiddify start",
       freshHiddifyHelp:
         "Use this when Hiddify opens on a blank window. It closes Hiddify, moves the generated configs, runtime folder, and logs into a backup, then starts Hiddify again. Your subscriptions and settings are kept.",
@@ -230,6 +232,8 @@ const resources = {
       testFlowHelp: "ببینید میزبان مستقیم می‌رود یا از وی‌پی‌ان.",
       testFlowPlaceholder: "digikala.com یا 5.22.12.1",
       testFlowButton: "آزمایش مسیر",
+      moveToDirect: "افزودن {{target}} به مستقیم",
+      moveToVpn: "افزودن {{target}} به وی‌پی‌ان",
       freshHiddify: "شروع تازهٔ هیدیفای",
       freshHiddifyHelp:
         "وقتی هیدیفای با صفحهٔ سفید باز می‌شود از این استفاده کنید. هیدیفای بسته می‌شود، پیکربندی‌های ساخته‌شده، پوشهٔ اجرا و لاگ‌ها به پشتیبان منتقل می‌شوند و هیدیفای دوباره اجرا می‌شود. اشتراک‌ها و تنظیمات شما حفظ می‌شود.",

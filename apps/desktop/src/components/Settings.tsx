@@ -105,10 +105,7 @@ export function Settings({ settings }: { settings: AppConfig }) {
   });
 
   return (
-    <section
-      aria-labelledby="settings-title"
-      className="flex h-full min-h-0 flex-col overflow-hidden"
-    >
+    <section aria-labelledby="settings-title" className="flex flex-col pb-2">
       <header className="shrink-0">
         <h1
           id="settings-title"
@@ -155,7 +152,7 @@ export function Settings({ settings }: { settings: AppConfig }) {
 
       <form
         onSubmit={(event) => void submit(event)}
-        className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden"
+        className="mt-4 flex flex-col"
       >
         <div className="min-h-0 flex-1 overflow-y-auto pe-1">
           {tab === "hiddify" ? (
