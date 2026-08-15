@@ -54,7 +54,7 @@ pub async fn run_named_pipe(config_path: &Path) -> Result<(), HelperServiceError
     }
 }
 
-/// Copies the helper and Mihomo into ProgramData and starts a SYSTEM task.
+/// Copies the helper and Mihomo into `ProgramData` and starts a SYSTEM task.
 ///
 /// # Errors
 ///

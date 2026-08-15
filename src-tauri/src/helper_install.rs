@@ -17,6 +17,13 @@ use sha2::{Digest, Sha256};
 const LINUX_HELPER_ROOT: &str = "/usr/lib/biflow";
 #[cfg(target_os = "linux")]
 const PKEXEC: &str = "/usr/bin/pkexec";
+/// `install-helper.sh` refuses `--authorized-uid 0`, so a root-owned UI can only
+/// ever fail. Say why instead of forwarding that exit code as a generic failure.
+#[cfg(target_os = "linux")]
+const ROOT_APP_REJECTION: &str = "BiFlow is running as root, so the helper cannot be installed. The helper authorizes one non-root user. Quit BiFlow, start it as your normal user without sudo, then install the helper again.";
+/// Keeps a runaway script error out of the dialog while preserving the reason.
+#[cfg(target_os = "linux")]
+const MAX_DETAIL_CHARS: usize = 200;
 #[cfg(target_os = "windows")]
 const WINDOWS_PROGRAMDATA_HELPER: &str = r"C:\ProgramData\iran-split\bin\iran-split-helper.exe";
 
@@ -109,6 +116,17 @@ async fn install_linux(
     tun_name: &str,
 ) -> Result<(), String> {
     let (uid, gid) = current_linux_ids()?;
+    if let Some(rejection) = root_install_rejection(uid) {
+        error!(
+            event = "helper.install_rejected",
+            section = "helper_install",
+            initiator = "tauri_command",
+            cause = "app_running_as_root",
+            trace_route = "ui->tauri_command->install_helper->install_linux",
+            "refusing to authorize the helper for root"
+        );
+        return Err(rejection.to_owned());
+    }
     let helper_src = first_existing_file(&helper_binary_candidates(resource_root, exe_dir))
         .ok_or_else(|| "packaged helper binary is missing".to_owned())?;
     let mihomo_src = first_existing_file(&mihomo_candidates(resource_root, exe_dir))
@@ -143,14 +161,60 @@ async fn install_linux(
     if let Some(unit) = unit {
         command.arg("--unit-src").arg(unit);
     }
-    let status = command.status().await.map_err(|error| error.to_string())?;
-    if status.success() {
+    let output = command.output().await.map_err(|error| error.to_string())?;
+    if output.status.success() {
         return Ok(());
     }
-    if status.code() == Some(126) || status.code() == Some(127) {
+    if output.status.code() == Some(126) || output.status.code() == Some(127) {
         return Err("helper installation was cancelled".into());
     }
-    Err("privileged helper installation failed".into())
+    let detail = last_error_line(&output.stderr);
+    error!(
+        event = "helper.install_failed",
+        section = "helper_install",
+        initiator = "tauri_command",
+        cause = "install_script_failed",
+        trace_route = "ui->tauri_command->install_helper->install_linux",
+        exit_code = output.status.code().unwrap_or(-1),
+        detail = %detail,
+        "privileged helper installation failed"
+    );
+    if detail.is_empty() {
+        Err("privileged helper installation failed".into())
+    } else {
+        Err(format!("privileged helper installation failed: {detail}"))
+    }
+}
+
+/// The helper authorizes exactly one non-root uid, so a root-owned UI can never
+/// be its client. Returns the operator-facing reason when `uid` is not usable.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub(crate) fn root_install_rejection(uid: u32) -> Option<&'static str> {
+    if uid == 0 {
+        Some(ROOT_APP_REJECTION)
+    } else {
+        None
+    }
+}
+
+/// `install-helper.sh` reports the reason it stopped on its last stderr line.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub(crate) fn last_error_line(stderr: &[u8]) -> String {
+    let text = String::from_utf8_lossy(stderr);
+    let Some(line) = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .next_back()
+    else {
+        return String::new();
+    };
+    if line.chars().count() <= MAX_DETAIL_CHARS {
+        return line.to_owned();
+    }
+    line.chars().take(MAX_DETAIL_CHARS).collect::<String>() + "…"
 }
 
 #[cfg(target_os = "windows")]
@@ -296,7 +360,10 @@ mod tests {
     use std::fs;
 
     #[cfg(target_os = "linux")]
-    use super::{helper_binary_candidates, parse_proc_status_ids, LINUX_HELPER_ROOT};
+    use super::{
+        helper_binary_candidates, last_error_line, parse_proc_status_ids, root_install_rejection,
+        LINUX_HELPER_ROOT, MAX_DETAIL_CHARS,
+    };
     #[cfg(target_os = "linux")]
     use std::path::PathBuf;
 
@@ -320,6 +387,28 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|path| path.ends_with("helper/iran-split-helper")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_cannot_be_the_authorized_helper_user() {
+        let rejection = root_install_rejection(0).expect("root is rejected");
+        assert!(rejection.contains("running as root"));
+        assert!(rejection.contains("without sudo"));
+        assert!(root_install_rejection(1000).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn last_error_line_reports_the_final_script_message() {
+        assert_eq!(
+            last_error_line(b"install -d ...\nauthorized-uid must not be root\n\n"),
+            "authorized-uid must not be root"
+        );
+        assert_eq!(last_error_line(b"   \n\n"), "");
+        let long = last_error_line(&vec![b'x'; MAX_DETAIL_CHARS + 50]);
+        assert_eq!(long.chars().count(), MAX_DETAIL_CHARS + 1);
+        assert!(long.ends_with('…'));
     }
 
     #[test]

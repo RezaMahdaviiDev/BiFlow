@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PLATFORM_KEYS = ["linux-x86_64", "windows-x86_64"];
@@ -108,31 +108,65 @@ export function validateLatestJson(manifest) {
 }
 
 /**
+ * `actions/download-artifact` keeps each upload's own directory layout, so the
+ * updater bundles land under `appimage/` and `target/release/bundle/nsis/`
+ * rather than the staging root. Walk the tree so discovery matches the
+ * recursive `find` the publish job runs over the same directory.
+ *
+ * @param {string} directory
+ * @returns {string[]}
+ */
+function collectFiles(directory) {
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectFiles(entryPath));
+    } else if (entry.isFile()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+/**
+ * @param {string[]} files
+ * @param {string} suffix
+ */
+function findUniqueBundle(files, suffix) {
+  const matches = files.filter((file) => basename(file).endsWith(suffix));
+  if (matches.length > 1) {
+    throw new Error(
+      `expected one ${suffix} bundle, found ${matches.length}: ${matches.sort().join(", ")}`,
+    );
+  }
+  return matches[0];
+}
+
+/**
  * @param {string} directory
  */
 export function discoverSignedArtifacts(directory) {
-  const files = readdirSync(directory);
+  const files = collectFiles(directory);
   const artifacts = [];
 
-  const appImage = files.find((name) => name.endsWith(".AppImage"));
+  const appImage = findUniqueBundle(files, ".AppImage");
   if (appImage) {
-    const signature = readSignature(join(directory, `${appImage}.sig`));
     artifacts.push({
       platform: "linux-x86_64",
-      bundlePath: join(directory, appImage),
-      fileName: appImage,
-      signature,
+      bundlePath: appImage,
+      fileName: basename(appImage),
+      signature: readSignature(`${appImage}.sig`),
     });
   }
 
-  const nsis = files.find((name) => name.endsWith("-setup.exe"));
+  const nsis = findUniqueBundle(files, "-setup.exe");
   if (nsis) {
-    const signature = readSignature(join(directory, `${nsis}.sig`));
     artifacts.push({
       platform: "windows-x86_64",
-      bundlePath: join(directory, nsis),
-      fileName: nsis,
-      signature,
+      bundlePath: nsis,
+      fileName: basename(nsis),
+      signature: readSignature(`${nsis}.sig`),
     });
   }
 
@@ -168,8 +202,11 @@ export function generateLatestJsonFromDirectory(
 ) {
   const artifacts = discoverSignedArtifacts(directory);
   if (artifacts.length !== PLATFORM_KEYS.length) {
+    const staged = collectFiles(directory)
+      .map((file) => relative(directory, file))
+      .sort();
     throw new Error(
-      `expected ${PLATFORM_KEYS.length} signed updater artifacts, found ${artifacts.length}`,
+      `expected ${PLATFORM_KEYS.length} signed updater artifacts, found ${artifacts.length} under ${directory}: ${staged.join(", ") || "<empty>"}`,
     );
   }
   for (const artifact of artifacts) {

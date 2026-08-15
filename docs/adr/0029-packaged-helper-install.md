@@ -34,6 +34,11 @@ blocks the unelevated desktop process (UIPI).
   lives in `iran-split-helper-winacl`.
 - The Advanced dashboard Install button on the Helper card runs
   `install_helper`. Hiddify and Mihomo remain separate in-app installs.
+- The helper authorizes exactly one non-root uid, so `install_linux` rejects
+  uid 0 before spawning `pkexec` and names the cause: a `sudo`-launched UI can
+  only ever fail the script's `authorized-uid must not be root` check. Script
+  failures carry the last stderr line into the returned error and the debug log
+  so the dialog states which check stopped the install.
 
 ## Consequences
 

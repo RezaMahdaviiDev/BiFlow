@@ -42,7 +42,12 @@ secret key`). If a password was set at generate time, the password secret must
   `.sig` files with the release artifacts.
 - Generate and schema-validate `latest.json` in the publish job with
   `scripts/generate-latest-json.mjs`, then upload installers, signatures, and the
-  manifest atomically.
+  manifest atomically. Discovery walks the downloaded asset tree recursively:
+  `actions/download-artifact` keeps each upload's directory layout (`appimage/`,
+  `target/release/bundle/nsis/`) even with `merge-multiple: true`, so a flat
+  directory listing sees no bundles. Match on the file's base name, treat two
+  bundles for one platform as a failure, and name the staged files when a
+  platform is missing.
 - Before installation, pause the owned stack so TUN, routes, and Mihomo are
   detached safely while Hiddify keeps running.
 - Emit bounded `update-progress` events from Rust during download and install,

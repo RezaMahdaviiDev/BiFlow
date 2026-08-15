@@ -15,6 +15,7 @@ const FAKE_SIG =
   "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTVGVzdEtleVNpZ25hdHVyZQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzAwMDAwMDAwCWZpbGU6dGVzdC5idW5kbGUKdGVzdA==";
 
 function writeFakeBundle(directory, name, signature = FAKE_SIG) {
+  mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, name), `bundle:${name}`, "utf8");
   writeFileSync(join(directory, `${name}.sig`), `${signature}\n`, "utf8");
 }
@@ -100,6 +101,70 @@ describe("generate-latest-json", () => {
     assert.match(
       readFileSync(join(directory, "BiFlow_1.2.0_amd64.AppImage"), "utf8"),
       /bundle:/,
+    );
+  });
+
+  it("discovers artifacts through the layout download-artifact preserves", () => {
+    const directory = mkdtempSync(join(tmpdir(), "biflow-latest-json-nested-"));
+    writeFakeBundle(
+      join(directory, "appimage"),
+      "BiFlow_1.2.16_amd64.AppImage",
+    );
+    writeFakeBundle(
+      join(directory, "target", "release", "bundle", "nsis"),
+      "BiFlow_1.2.16_x64-setup.exe",
+    );
+    writeFileSync(join(directory, "BiFlow.exe"), "portable", "utf8");
+    mkdirSync(join(directory, "deb"), { recursive: true });
+    writeFileSync(
+      join(directory, "deb", "BiFlow_1.2.16_amd64.deb"),
+      "deb",
+      "utf8",
+    );
+
+    const manifest = generateLatestJsonFromDirectory(
+      directory,
+      "devlifeX/BiFlow",
+      "v1.2.16",
+    );
+    assert.equal(
+      manifest.platforms["linux-x86_64"].url,
+      "https://github.com/devlifeX/BiFlow/releases/download/v1.2.16/BiFlow_1.2.16_amd64.AppImage",
+    );
+    assert.equal(
+      manifest.platforms["windows-x86_64"].url,
+      "https://github.com/devlifeX/BiFlow/releases/download/v1.2.16/BiFlow_1.2.16_x64-setup.exe",
+    );
+    validateLatestJson(manifest);
+  });
+
+  it("rejects duplicate bundles for one platform", () => {
+    const directory = mkdtempSync(join(tmpdir(), "biflow-latest-json-dupe-"));
+    writeFakeBundle(
+      join(directory, "appimage"),
+      "BiFlow_1.2.16_amd64.AppImage",
+    );
+    writeFakeBundle(join(directory, "stale"), "BiFlow_1.2.15_amd64.AppImage");
+    assert.throws(
+      () => discoverSignedArtifacts(directory),
+      /expected one \.AppImage bundle, found 2/,
+    );
+  });
+
+  it("names the staged files when a platform is missing", () => {
+    const directory = mkdtempSync(join(tmpdir(), "biflow-latest-json-report-"));
+    writeFakeBundle(
+      join(directory, "appimage"),
+      "BiFlow_1.2.16_amd64.AppImage",
+    );
+    assert.throws(
+      () =>
+        generateLatestJsonFromDirectory(
+          directory,
+          "devlifeX/BiFlow",
+          "v1.2.16",
+        ),
+      /appimage[/\\]BiFlow_1\.2\.16_amd64\.AppImage/,
     );
   });
 
