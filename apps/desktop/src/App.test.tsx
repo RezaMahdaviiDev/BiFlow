@@ -77,6 +77,20 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 
+  it("leaves About for the Basic dashboard when Basic is selected", async () => {
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "About" }));
+    expect(screen.getByRole("heading", { name: "About" })).toBeVisible();
+    await userEvent.click(screen.getByRole("radio", { name: "Basic" }));
+    expect(
+      screen.queryByRole("heading", { name: "About" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
+  });
+
   it("blocks the document context menu", () => {
     render(<App />);
     const event = new MouseEvent("contextmenu", {

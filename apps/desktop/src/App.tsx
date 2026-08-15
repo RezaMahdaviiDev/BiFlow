@@ -171,7 +171,15 @@ export function App() {
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
         <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden p-5">
           <div className="shrink-0 pb-4">
-            <UiModeSwitch mode={uiMode} onChange={setUiMode} />
+            <UiModeSwitch
+              mode={uiMode}
+              onChange={(mode) => {
+                setUiMode(mode);
+                if (mode === "basic") {
+                  useAppStore.getState().setPage("dashboard");
+                }
+              }}
+            />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {!advanced && store.page !== "about" && store.snapshot ? (

@@ -16,8 +16,9 @@ pause, resume, and disconnect controls. The preference must survive restarts.
   every current screen and capability until they opt into Basic.
 - Render Basic mode as a dedicated minimal dashboard with only the segmented
   mode control, lifecycle actions, progress/cancel, and concise inline errors.
-- Keep About reachable from the tray menu and Advanced sidebar even when Basic
-  mode hides navigation and the status bar.
+- Keep About reachable from the tray menu even when Basic mode hides
+  navigation. Selecting Basic from About (or any other page) returns to the
+  Basic dashboard so the control matches every other screen.
 
 ## Consequences
 
