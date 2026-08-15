@@ -4,3 +4,7 @@ This file keeps the Tauri resource glob `resources/licenses/*` valid for local b
 Bundled Iran routing lists in `resources/rules/` are snapshotted from
 Chocolate4U/Iran-clash-rules (GPL-3.0) for maintainer provenance. Installed
 clients refresh those files only from the BiFlow repository.
+
+Windows packages also ship `wintun.dll` 0.14.1 from wintun.net, redistributed
+alongside Mihomo under the Wintun Prebuilt Binaries License
+(`vendor/wintun/windows-x86_64/LICENSE.txt`).

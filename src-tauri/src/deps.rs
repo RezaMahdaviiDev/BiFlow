@@ -25,6 +25,8 @@ const MIHOMO_WINDOWS_ZIP_SHA256: &str =
     "1a8520cfe425441eba3eba8623b27b985020031243fe1ecaa1af2b92358a03f9";
 const MIHOMO_WINDOWS_SHA256: &str =
     "4316ff91fecec2fca9acb5612d7400ba228c069ffd325b1f17f46f1d4ef7e0cd";
+const WINTUN_WINDOWS_SHA256: &str =
+    "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce";
 
 #[derive(Debug, Error)]
 pub enum DepsError {
@@ -423,6 +425,7 @@ async fn install_mihomo(data: &Path, bundled_dependencies: &Path) -> Result<Path
         if bundled.is_file() {
             let bytes = fs::read(bundled)?;
             install_windows_mihomo_bytes(&dest, &bytes, MIHOMO_WINDOWS_SHA256)?;
+            install_windows_wintun(dest.parent().unwrap_or(data), bundled_dependencies)?;
             return Ok(dest);
         }
         let bytes = download_first(&[mihomo_windows_url()]).await?;
@@ -434,6 +437,7 @@ async fn install_mihomo(data: &Path, bundled_dependencies: &Path) -> Result<Path
         fs::create_dir_all(dest.parent().unwrap_or(data))?;
         let executable = fs::read(found)?;
         install_windows_mihomo_bytes(&dest, &executable, MIHOMO_WINDOWS_SHA256)?;
+        install_windows_wintun(dest.parent().unwrap_or(data), bundled_dependencies)?;
         if let Err(cause) = fs::remove_dir_all(staging) {
             warn!(
                 event = "dependency.staging_cleanup_failed",
@@ -487,6 +491,21 @@ fn install_windows_mihomo_bytes(
         fs::create_dir_all(parent)?;
     }
     fs::write(destination, bytes)?;
+    Ok(())
+}
+
+fn install_windows_wintun(
+    destination_dir: &Path,
+    bundled_dependencies: &Path,
+) -> Result<(), DepsError> {
+    let bundled = bundled_dependencies.join("wintun.dll");
+    if !bundled.is_file() {
+        return Ok(());
+    }
+    let bytes = fs::read(bundled)?;
+    verify_sha256(&bytes, WINTUN_WINDOWS_SHA256)?;
+    fs::create_dir_all(destination_dir)?;
+    fs::write(destination_dir.join("wintun.dll"), bytes)?;
     Ok(())
 }
 
@@ -831,6 +850,18 @@ mod tests {
         let found = files_named_in(std::iter::once(dir.clone()), &["hiddify", "mihomo"]);
         fs::remove_dir_all(&dir).expect("cleanup path fixture");
         assert_eq!(found.len(), 2);
+    }
+
+    #[test]
+    fn bundled_wintun_is_optional_and_integrity_checked() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let bundled = directory.path().join("bundled");
+        let dest = directory.path().join("bin");
+        fs::create_dir_all(&bundled).expect("bundled");
+        install_windows_wintun(&dest, &bundled).expect("missing wintun is skipped");
+        assert!(!dest.join("wintun.dll").is_file());
+        fs::write(bundled.join("wintun.dll"), b"not-wintun").expect("write");
+        assert!(install_windows_wintun(&dest, &bundled).is_err());
     }
 
     #[test]

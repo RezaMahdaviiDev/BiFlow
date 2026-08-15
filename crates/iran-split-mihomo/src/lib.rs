@@ -487,6 +487,10 @@ impl ControllerClient {
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(2))
                 .timeout(Duration::from_secs(5))
+                // Loopback controller traffic must never follow HTTP_PROXY /
+                // HTTPS_PROXY / ALL_PROXY. Hiddify and other local proxies
+                // intercept those and return connection errors or HTTP 500.
+                .no_proxy()
                 .build()?,
         })
     }
@@ -798,6 +802,20 @@ mod tests {
     fn controller_rejects_remote_binding_and_empty_secret() {
         assert!(ControllerClient::new("0.0.0.0", 9090, "secret").is_err());
         assert!(ControllerClient::new("127.0.0.1", 9090, "").is_err());
+    }
+
+    #[test]
+    fn controller_client_bypasses_environment_proxies() {
+        let source = include_str!("lib.rs");
+        let constructor = source
+            .split("impl ControllerClient")
+            .nth(1)
+            .and_then(|rest| rest.split("fn get(").next())
+            .expect("ControllerClient::new");
+        assert!(
+            constructor.contains(".no_proxy()"),
+            "loopback controller requests must ignore HTTP_PROXY"
+        );
     }
 
     #[test]

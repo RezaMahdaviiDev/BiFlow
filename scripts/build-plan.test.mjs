@@ -211,6 +211,10 @@ describe("release artifact names", () => {
       "dependencies/mihomo.exe",
     );
     assert.equal(
+      windows.bundle.resources["../vendor/wintun/windows-x86_64/wintun.dll"],
+      "dependencies/wintun.dll",
+    );
+    assert.equal(
       linux.bundle.resources["../packaging/staged/iran-split-helper"],
       "helper/iran-split-helper",
     );
@@ -238,6 +242,7 @@ describe("release artifact names", () => {
     assert.match(script, /collect_windows\(\)/);
     assert.match(script, /resources\/rules\/\./);
     assert.match(script, /dependencies\/mihomo\.exe/);
+    assert.match(script, /dependencies\/wintun\.dll/);
     assert.match(script, /stage-helper\.sh/);
     assert.match(script, /helper\/iran-split-helper\.exe/);
     const stageHelper = readFileSync(

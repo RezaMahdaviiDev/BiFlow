@@ -18,6 +18,12 @@ const assets = [
     sha256: "4316ff91fecec2fca9acb5612d7400ba228c069ffd325b1f17f46f1d4ef7e0cd",
     magic: Buffer.from("MZ"),
   },
+  {
+    name: "Windows Wintun",
+    path: "vendor/wintun/windows-x86_64/wintun.dll",
+    sha256: "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
+    magic: Buffer.from("MZ"),
+  },
 ];
 
 for (const asset of assets) {
@@ -34,4 +40,4 @@ for (const asset of assets) {
   );
 }
 
-process.stdout.write(`verified ${assets.length} bundled Mihomo executables\n`);
+process.stdout.write(`verified ${assets.length} bundled native assets\n`);

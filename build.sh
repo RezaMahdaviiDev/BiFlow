@@ -615,6 +615,9 @@ collect_windows() {
   if [[ -f "${PROJECT_DIR}/vendor/mihomo/windows-x86_64/mihomo.exe" ]]; then
     cp -a "${PROJECT_DIR}/vendor/mihomo/windows-x86_64/mihomo.exe" "${dest_dir}/dependencies/mihomo.exe"
   fi
+  if [[ -f "${PROJECT_DIR}/vendor/wintun/windows-x86_64/wintun.dll" ]]; then
+    cp -a "${PROJECT_DIR}/vendor/wintun/windows-x86_64/wintun.dll" "${dest_dir}/dependencies/wintun.dll"
+  fi
   if [[ -f "${PROJECT_DIR}/packaging/staged/iran-split-helper.exe" ]]; then
     mkdir -p "${dest_dir}/helper"
     cp -a "${PROJECT_DIR}/packaging/staged/iran-split-helper.exe" "${dest_dir}/helper/iran-split-helper.exe"

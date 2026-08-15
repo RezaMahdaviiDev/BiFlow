@@ -18,8 +18,8 @@ use iran_split_ipc::{
     PROTOCOL_VERSION,
 };
 use iran_split_mihomo::{
-    generate_config, probe_hiddify_egress, validate_with_binary, ControllerClient, Platform,
-    RuntimePaths,
+    generate_config, probe_hiddify_egress, validate_with_binary, ControllerClient, MihomoError,
+    Platform, RuntimePaths,
 };
 use iran_split_rules::{DirectRulesDocument, DirectTarget};
 use std::{
@@ -885,7 +885,7 @@ impl PlatformBackend for WindowsBackend {
                     trace_route = "desktop_engine->windows_platform_backend->mihomo_controller",
                     "Mihomo readiness wait failed"
                 );
-                return Err(CoreError::Platform(error.to_string()));
+                return Err(readiness_error(error));
             }
         };
         if cancel.is_cancelled() {
@@ -949,6 +949,14 @@ pub fn tun_enabled(configs: &serde_json::Value, tun_name: &str) -> bool {
 
 fn platform_error(error: &io::Error) -> CoreError {
     CoreError::Platform(error.to_string())
+}
+
+fn readiness_error(error: MihomoError) -> CoreError {
+    match error {
+        MihomoError::Cancelled => CoreError::Cancelled,
+        MihomoError::ReadinessTimeout(_) => CoreError::ControllerTimeout,
+        other => CoreError::MihomoStartFailed(other.to_string()),
+    }
 }
 
 fn copy_rule_file(

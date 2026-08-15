@@ -19,6 +19,7 @@ use tokio::{
 use uuid::Uuid;
 
 const PROCESS_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const MIHOMO_STAY_ALIVE: Duration = Duration::from_millis(400);
 const MAX_LOG_ENTRIES: usize = 2_000;
 const GENERATION_FILES: [&str; 8] = [
     "config.yaml",
@@ -295,32 +296,20 @@ impl Supervisor {
                 "published config changed after registration".into(),
             ));
         }
-        let mut child = Command::new(&self.settings.mihomo_binary)
-            .arg("-d")
-            .arg(&generation_root)
-            .arg("-f")
-            .arg(&config_path)
-            .current_dir(&generation_root)
-            .env_clear()
-            .env(
-                "PATH",
-                if cfg!(windows) {
-                    r"C:\Windows\System32;C:\Windows"
-                } else {
-                    "/usr/sbin:/usr/bin:/sbin:/bin"
-                },
-            )
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(false)
-            .spawn()
-            .map_err(|error| HelperServiceError::Process(error.to_string()))?;
+        let mut child = spawn_mihomo(&self.settings, &generation_root, &config_path)?;
         if let Some(stdout) = child.stdout.take() {
             capture_lines(stdout, Arc::clone(&self.logs), "info");
         }
         if let Some(stderr) = child.stderr.take() {
             capture_lines(stderr, Arc::clone(&self.logs), "warn");
+        }
+        tokio::time::sleep(MIHOMO_STAY_ALIVE).await;
+        if let Some(status) = child.try_wait()? {
+            let detail = last_mihomo_output(&self.logs).await;
+            return Err(HelperServiceError::Process(match detail {
+                Some(message) => format!("Mihomo exited immediately ({status}): {message}"),
+                None => format!("Mihomo exited immediately ({status})"),
+            }));
         }
         let managed = ManagedChild {
             child,
@@ -442,6 +431,75 @@ impl Supervisor {
             fields,
         });
     }
+}
+
+fn spawn_mihomo(
+    settings: &HelperSettings,
+    generation_root: &Path,
+    config_path: &Path,
+) -> Result<Child, HelperServiceError> {
+    let mut command = Command::new(&settings.mihomo_binary);
+    command
+        .arg("-d")
+        .arg(generation_root)
+        .arg("-f")
+        .arg(config_path)
+        .current_dir(generation_root)
+        .env_clear()
+        .env("PATH", mihomo_search_path(&settings.mihomo_binary))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(false);
+    apply_windows_mihomo_spawn(&mut command);
+    command
+        .spawn()
+        .map_err(|error| HelperServiceError::Process(error.to_string()))
+}
+
+fn mihomo_search_path(binary: &Path) -> String {
+    let system = if cfg!(windows) {
+        r"C:\Windows\System32;C:\Windows"
+    } else {
+        "/usr/sbin:/usr/bin:/sbin:/bin"
+    };
+    match binary.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            if cfg!(windows) {
+                format!("{};{system}", parent.display())
+            } else {
+                format!("{}:{system}", parent.display())
+            }
+        }
+        _ => system.to_owned(),
+    }
+}
+
+#[cfg(windows)]
+fn apply_windows_mihomo_spawn(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let system_root = std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".into());
+    let system_drive = std::env::var("SYSTEMDRIVE").unwrap_or_else(|_| r"C:".into());
+    command
+        .env("SYSTEMROOT", &system_root)
+        .env("SystemRoot", &system_root)
+        .env("WINDIR", &system_root)
+        .env("SYSTEMDRIVE", system_drive)
+        .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        .creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn apply_windows_mihomo_spawn(_command: &mut Command) {}
+
+async fn last_mihomo_output(logs: &Mutex<VecDeque<ServiceLogEntry>>) -> Option<String> {
+    logs.lock().await.iter().rev().find_map(|entry| {
+        if entry.event == "mihomo_output" {
+            entry.fields.get("message").cloned()
+        } else {
+            None
+        }
+    })
 }
 
 fn process_status(managed: Option<&ManagedChild>) -> ProcessStatus {
@@ -851,6 +909,32 @@ tun_name = "clash-iran"
     }
 
     #[test]
+    fn windows_mihomo_spawn_keeps_system_root_and_hides_the_console() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("fn apply_windows_mihomo_spawn"));
+        assert!(source.contains("SYSTEMROOT"));
+        assert!(source.contains("CREATE_NO_WINDOW"));
+        assert!(source.contains("MIHOMO_STAY_ALIVE"));
+        assert!(source.contains("exited immediately"));
+    }
+
+    #[test]
+    fn mihomo_search_path_puts_the_binary_directory_first() {
+        #[cfg(windows)]
+        {
+            let path = mihomo_search_path(Path::new(r"C:\ProgramData\iran-split\bin\mihomo.exe"));
+            assert!(path.starts_with(r"C:\ProgramData\iran-split\bin;"));
+            assert!(path.contains(r"C:\Windows\System32"));
+        }
+        #[cfg(not(windows))]
+        {
+            let path = mihomo_search_path(Path::new("/usr/lib/biflow/mihomo"));
+            assert!(path.starts_with("/usr/lib/biflow:"));
+            assert!(path.contains("/usr/bin"));
+        }
+    }
+
+    #[test]
     fn windows_main_persists_clap_errors_before_exit() {
         let source = include_str!("main.rs");
         assert!(source.contains("Arguments::try_parse()"));
@@ -885,6 +969,7 @@ tun_name = "clash-iran"
         assert!(source.contains("/XML"));
         assert!(source.contains("scheduled_task_xml"));
         assert!(source.contains("wait_until_pipe_ready"));
+        assert!(source.contains("wintun.dll"));
         assert!(!source.contains("\"/TR\""));
     }
 

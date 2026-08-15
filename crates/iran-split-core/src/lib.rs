@@ -1494,6 +1494,17 @@ mod tests {
         assert_eq!(mihomo.remediation, Some(Remediation::InstallDependency));
     }
 
+    #[test]
+    fn controller_timeout_is_not_an_internal_error() {
+        let timeout = CoreError::ControllerTimeout.to_app_error(Uuid::nil());
+        assert_eq!(timeout.code, ErrorCode::ControllerTimeout);
+        assert_eq!(timeout.message_key, "errors.controllerTimeout");
+        let wrapped =
+            CoreError::Platform("Mihomo readiness check timed out: controller unavailable".into())
+                .to_app_error(Uuid::nil());
+        assert_eq!(wrapped.message_key, "errors.internal");
+    }
+
     #[tokio::test]
     async fn missing_hiddify_marks_the_stack_error() {
         let backend = Arc::new(FakeBackend::default());

@@ -2,6 +2,7 @@
   "bundle": {
     "resources": {
       "../vendor/mihomo/windows-x86_64/mihomo.exe": "dependencies/mihomo.exe",
+      "../vendor/wintun/windows-x86_64/wintun.dll": "dependencies/wintun.dll",
       "../packaging/staged/iran-split-helper.exe": "helper/iran-split-helper.exe"
     }
   }

@@ -121,6 +121,11 @@ fn install_inner(
     stop_previous_helper();
     super::copy_file_unless_same(&helper_src, &helper_dest)?;
     super::copy_file_unless_same(mihomo_src, &mihomo_dest)?;
+    if let Some(wintun_src) = mihomo_src.parent().map(|parent| parent.join("wintun.dll")) {
+        if wintun_src.is_file() {
+            super::copy_file_unless_same(&wintun_src, &bin.join("wintun.dll"))?;
+        }
+    }
     let mihomo_sha256 = sha256_file(&mihomo_dest)?;
     let settings = HelperSettings {
         authorized_uid: 0,

@@ -208,6 +208,12 @@ describe("Tauri frontend contract", () => {
     // silently loses the Windows-only strict-route flag.
     assert.match(linux, /generate_config\(&config, Platform::Linux,/);
     assert.match(windows, /generate_config\(&config, Platform::Windows,/);
+    // A readiness timeout used to be CoreError::Platform, which the UI maps
+    // to "An internal error occurred." Keep both backends on the typed error.
+    assert.match(linux, /fn readiness_error/);
+    assert.match(windows, /fn readiness_error/);
+    assert.match(linux, /CoreError::ControllerTimeout/);
+    assert.match(windows, /CoreError::ControllerTimeout/);
     // Both compile only for their own OS, so host Clippy never sees the other.
     assert.match(linux, /^#!\[cfg\(target_os = "linux"\)\]/m);
     assert.match(windows, /^#!\[cfg\(windows\)\]/m);
