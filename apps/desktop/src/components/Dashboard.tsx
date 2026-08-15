@@ -234,7 +234,7 @@ function Metric({
         {icon}
       </div>
       <p className="text-sm text-muted">{label}</p>
-      <p className="mt-1 truncate text-lg font-semibold" title={value}>
+      <p className="mt-1 text-lg font-semibold leading-snug break-words">
         {value}
       </p>
     </div>

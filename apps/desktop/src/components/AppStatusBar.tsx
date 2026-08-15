@@ -50,7 +50,7 @@ export function AppStatusBar() {
 
   return (
     <footer
-      className="app-status-bar sticky bottom-0 z-20 shrink-0 border-t border-ink/10 bg-surface/90 px-5 py-3 text-xs text-muted backdrop-blur sm:px-8 lg:px-10"
+      className="app-status-bar sticky bottom-0 z-20 shrink-0 border-t border-ink/10 bg-surface/90 px-3 py-2 text-xs text-muted backdrop-blur sm:px-8 sm:py-3 lg:px-10"
       role="status"
       aria-live="polite"
       title={current.detail ?? undefined}

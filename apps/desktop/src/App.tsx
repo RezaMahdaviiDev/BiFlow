@@ -176,7 +176,7 @@ export function App() {
       ) : null}
 
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden p-5">
+        <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden p-3 sm:p-5">
           <div className="shrink-0 pb-4">
             <UiModeSwitch
               mode={uiMode}

@@ -231,6 +231,13 @@ describe("Dashboard", () => {
     expect(useAppStore.getState().actionPending).toBe(true);
   });
 
+  it("lets metric values wrap instead of clipping on narrow columns", () => {
+    render(<Dashboard snapshot={stopped} />);
+    const exitIp = screen.getByText("Available after connection");
+    expect(exitIp.className).toMatch(/break-words/);
+    expect(exitIp.className).not.toMatch(/truncate/);
+  });
+
   it("scrolls the dashboard section vertically when content overflows", () => {
     const { container } = render(<Dashboard snapshot={stopped} />);
     expect(container.querySelector("section")?.className).toMatch(
