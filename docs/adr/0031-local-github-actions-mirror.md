@@ -31,9 +31,16 @@ that breaks.
 - A required tool that is not installed is a **failure** with the install
   command, never a silent skip. A skipped Windows Clippy is how these breakages
   reach CI in the first place.
-- Coverage gaps are printed on every run rather than left implicit. Windows
-  `cargo test --workspace` cannot execute Windows test binaries on a Linux
-  host; `--all-targets` in the cross Clippy step type-checks them instead.
+- The `windows-2025` `cargo test --workspace` job runs through
+  `cargo xwin test --workspace --target x86_64-pc-windows-msvc`, which executes
+  the Windows test binaries under wine. Type-checking alone is not enough:
+  Clippy compiles `#[test]` bodies but never runs them, so an assertion that
+  holds on Linux and fails on Windows — `Path::new("/run/…").is_absolute()` is
+  `false` on Windows — passes every local check and fails only after a push.
+  That happened, which is why this step exists.
+- Coverage gaps are printed on every run rather than left implicit. wine is not
+  Windows: registry, scheduled-task, UAC, and named-pipe behaviour still differ
+  from the CI runner.
 - `scripts/ci-local.test.mjs` extracts every `run:` command from `ci.yml` and
   from the `release.yml` verify job and fails when one is neither mirrored by a
   step nor listed in `SETUP_ONLY`, so the mirror cannot drift from the
@@ -41,9 +48,9 @@ that breaks.
 
 ## Consequences
 
-- Developers need `cargo-xwin` and `cargo-deny` installed; the runner names the
-  exact install command when either is missing.
+- Developers need `cargo-xwin`, `cargo-deny`, and `wine64` installed; the
+  runner names the exact install command when any is missing.
 - Adding a workflow step requires adding a mirrored step or a `SETUP_ONLY`
   entry in the same change, enforced by the script contract test.
-- Local green still does not guarantee CI green: Windows unit tests and any
+- Local green still does not guarantee CI green: wine's API differences and any
   runner-provisioning step remain unverified until the push.

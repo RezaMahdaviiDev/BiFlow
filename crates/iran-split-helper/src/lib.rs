@@ -642,6 +642,9 @@ mod tests {
         assert!(settings.validate().is_err());
     }
 
+    // A leading `/` is root-relative on Windows, not absolute, so `validate`
+    // rejects this Linux fixture there. The Windows layout is covered below.
+    #[cfg(unix)]
     #[test]
     fn helper_toml_defaults_missing_gid() {
         let parsed: HelperSettings = toml::from_str(
@@ -669,10 +672,15 @@ tun_name = "clash-iran"
         delete_owned_interface("unused");
     }
 
+    #[cfg(unix)]
     #[test]
     fn production_linux_helper_paths_are_absolute() {
         assert!(Path::new("/run/iran-split/helper.sock").is_absolute());
         assert!(Path::new("/var/lib/iran-split").is_absolute());
         assert!(Path::new("/usr/lib/biflow/iran-split-helper").is_absolute());
     }
+
+    // A Windows counterpart belongs here, but every assertion about Windows
+    // path semantics has to be executed on Windows to be trusted. Add it once
+    // `pnpm github:action-test` can run the windows-2025 test job (ADR 0031).
 }

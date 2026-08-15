@@ -75,6 +75,19 @@ describe("ci-local", () => {
     assert.match(gaps.join("\n"), /windows-2025/);
   });
 
+  it("executes the Windows test binaries, not just type-checks them", () => {
+    const tests = planSteps("linux").steps.find(
+      (step) => step.id === "test-windows",
+    );
+
+    assert.ok(tests, "windows-2025 `cargo test` is not mirrored");
+    assert.equal(tests.ciCommand, "cargo test --workspace");
+    assert.equal(tests.runner, "windows-2025");
+    assert.equal(tests.requires, "wine");
+    assert.ok(tests.command.includes("x86_64-pc-windows-msvc"));
+    assert.ok(tests.command.includes("test"));
+  });
+
   it("reports the Linux job as uncovered when run from Windows", () => {
     const { steps, gaps } = planSteps("win32");
     assert.equal(

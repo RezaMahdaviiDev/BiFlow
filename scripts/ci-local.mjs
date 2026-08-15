@@ -35,6 +35,7 @@ export const SETUP_ONLY = [
  * @property {string} [requires] executable that must be on PATH
  * @property {string} [install] how to install a missing executable
  * @property {string} [note] why the local command differs from CI
+ * @property {Record<string, string>} [env] extra environment for this step
  */
 
 /**
@@ -143,8 +144,34 @@ export function planSteps(platform) {
       install: "cargo install cargo-xwin --version 0.19.2",
       note: "host Clippy never compiles #[cfg(windows)] modules",
     });
+    steps.push({
+      id: "test-windows",
+      job: "rust",
+      runner: "windows-2025",
+      ciCommand: "cargo test --workspace",
+      command: [
+        "cargo",
+        "xwin",
+        "test",
+        "--workspace",
+        "--target",
+        "x86_64-pc-windows-msvc",
+        "--",
+        "--test-threads=1",
+      ],
+      requires: "wine",
+      install: "sudo apt-get install -y wine64",
+      note: "Clippy only type-checks Windows tests; an assertion that is true on Linux and false on Windows fails only when the binary actually runs",
+      env: {
+        // Without WINEARCH=win64 wine builds a WOW64 prefix and stops on
+        // "wine32 is missing"; the target is 64-bit, so skip the 32-bit half.
+        WINEARCH: "win64",
+        WINEPREFIX: join(root, "target/.wine"),
+        WINEDEBUG: "-all",
+      },
+    });
     gaps.push(
-      "rust (windows-2025): `cargo test --workspace` cannot execute Windows test binaries here; clippy-windows type-checks them instead",
+      "rust (windows-2025): tests run under wine, which is not Windows. Registry, scheduled-task, UAC, and named-pipe behaviour still differ from the CI runner.",
     );
   }
 
@@ -263,17 +290,15 @@ function main() {
     }
 
     const started = Date.now();
+    const options = {
+      cwd: root,
+      stdio: /** @type {const} */ ("inherit"),
+      env: { ...process.env, ...step.env },
+    };
     const child =
       process.platform === "win32"
-        ? spawnSync(format(step.command), {
-            cwd: root,
-            stdio: "inherit",
-            shell: true,
-          })
-        : spawnSync(step.command[0], step.command.slice(1), {
-            cwd: root,
-            stdio: "inherit",
-          });
+        ? spawnSync(format(step.command), { ...options, shell: true })
+        : spawnSync(step.command[0], step.command.slice(1), options);
     const ms = Date.now() - started;
     const status = child.status === 0 ? "pass" : "fail";
     results.push({ step, status, ms });
