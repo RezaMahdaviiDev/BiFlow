@@ -40,6 +40,7 @@ const resources = {
       device: "This device",
       lastUpdated: "Last updated",
       currentIp: "Current IP",
+      refreshNetwork: "Refresh connection and IP status",
       internet: {
         checking: "Checking internet",
         online: "Internet connected",
@@ -179,6 +180,7 @@ const resources = {
       device: "این دستگاه",
       lastUpdated: "آخرین بروزرسانی",
       currentIp: "آی‌پی فعلی",
+      refreshNetwork: "تازه‌سازی وضعیت اتصال و آی‌پی",
       internet: {
         checking: "در حال بررسی اینترنت",
         online: "اینترنت متصل است",

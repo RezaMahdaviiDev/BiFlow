@@ -192,6 +192,12 @@ describe("app store", () => {
     expect(useAppStore.getState().actionPending).toBe(false);
   });
 
+  it("ignores a second network refresh while one is in flight", async () => {
+    useAppStore.setState({ networkRefreshing: true });
+    await useAppStore.getState().refreshNetworkStatus();
+    expect(desktop.getNetworkStatus).not.toHaveBeenCalled();
+  });
+
   it("does not start a second cloud rule sync while one is pending", async () => {
     useAppStore.setState({ actionPending: true });
     await useAppStore.getState().syncCloudRules();

@@ -23,6 +23,10 @@ function locationLabel(status: NetworkStatus, language: string): string | null {
 export function AppStatusBar() {
   const { i18n, t } = useTranslation();
   const status = useAppStore((state) => state.networkStatus);
+  const refreshing = useAppStore((state) => state.networkRefreshing);
+  const refreshNetworkStatus = useAppStore(
+    (state) => state.refreshNetworkStatus,
+  );
   const current: NetworkStatus = status ?? {
     state: "checking",
     public_ip: null,
@@ -33,6 +37,7 @@ export function AppStatusBar() {
   };
   const location = locationLabel(current, i18n.language);
   const flag = countryFlag(current.country_code);
+  const state = refreshing ? "checking" : current.state;
 
   return (
     <footer
@@ -42,10 +47,16 @@ export function AppStatusBar() {
       title={current.detail ?? undefined}
     >
       <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-5 gap-y-2">
-        <span className="inline-flex items-center gap-2 font-semibold text-ink">
-          {current.state === "online" ? (
+        <button
+          type="button"
+          className="inline-flex items-center gap-2 font-semibold text-ink disabled:opacity-70"
+          onClick={() => void refreshNetworkStatus()}
+          disabled={refreshing}
+          aria-label={t("refreshNetwork")}
+        >
+          {state === "online" ? (
             <Wifi className="text-success" size={16} aria-hidden />
-          ) : current.state === "offline" ? (
+          ) : state === "offline" ? (
             <WifiOff className="text-danger" size={16} aria-hidden />
           ) : (
             <LoaderCircle
@@ -54,13 +65,19 @@ export function AppStatusBar() {
               aria-hidden
             />
           )}
-          {t(`internet.${current.state}`)}
-        </span>
+          {t(`internet.${state}`)}
+        </button>
         {current.public_ip ? (
-          <span>
+          <button
+            type="button"
+            className="text-start disabled:opacity-70"
+            onClick={() => void refreshNetworkStatus()}
+            disabled={refreshing}
+            aria-label={t("refreshNetwork")}
+          >
             {t("currentIp")}:{" "}
             <bdi className="font-mono text-ink">{current.public_ip}</bdi>
-          </span>
+          </button>
         ) : null}
         {location ? (
           <span className="inline-flex items-center gap-1.5">

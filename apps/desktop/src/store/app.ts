@@ -38,6 +38,7 @@ interface AppStore {
   cloudRules: CloudRulesStatus | null;
   dependencies: DependencyStatus[];
   networkStatus: NetworkStatus | null;
+  networkRefreshing: boolean;
   diagnostics: DiagnosticsReport | null;
   error: string | null;
   installGuide: InstallGuide | null;
@@ -85,6 +86,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   cloudRules: null,
   dependencies: [],
   networkStatus: null,
+  networkRefreshing: false,
   diagnostics: null,
   error: null,
   installGuide: null,
@@ -226,11 +228,16 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   refreshNetworkStatus: async () => {
+    if (get().networkRefreshing) {
+      return;
+    }
+    set({ networkRefreshing: true });
     try {
       const networkStatus = await desktop.getNetworkStatus();
-      set({ networkStatus });
+      set({ networkStatus, networkRefreshing: false });
     } catch (error) {
       set({
+        networkRefreshing: false,
         networkStatus: {
           state: "offline",
           public_ip: null,
