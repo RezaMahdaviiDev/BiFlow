@@ -73,7 +73,7 @@ describe("App", () => {
     expect(
       screen.queryByRole("button", { name: "Direct rules" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("Internet connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeVisible();
     expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 

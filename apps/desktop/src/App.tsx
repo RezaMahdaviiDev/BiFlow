@@ -201,7 +201,7 @@ export function App() {
           </div>
         </main>
         {advanced && mobile ? <BottomNav /> : null}
-        {advanced ? <AppStatusBar /> : null}
+        <AppStatusBar />
       </div>
 
       {advanced ? (

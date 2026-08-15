@@ -23,6 +23,7 @@ describe("AppStatusBar", () => {
     expect(screen.getByRole("status")).toHaveTextContent("203.0.113.8");
     expect(screen.getByRole("status")).toHaveTextContent("Tehran");
     expect(screen.getByRole("status")).toHaveTextContent("🇮🇷");
+    expect(screen.getByRole("status").className).toMatch(/sticky/);
   });
 
   it("creates flags only for valid ISO country codes", () => {
