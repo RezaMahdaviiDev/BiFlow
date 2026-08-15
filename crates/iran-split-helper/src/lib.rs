@@ -652,6 +652,21 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{install, persist_install_error, run_named_pipe, uninstall};
 
+/// Safe `install.log` text for a clap parse failure. Omits argv and paths —
+/// those are user content. Help and version are not install failures.
+#[must_use]
+pub fn clap_install_error_message(error: &clap::Error) -> Option<String> {
+    use clap::error::ErrorKind;
+    match error.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => None,
+        ErrorKind::UnknownArgument => Some("unexpected argument".into()),
+        ErrorKind::MissingRequiredArgument
+        | ErrorKind::InvalidValue
+        | ErrorKind::ValueValidation => Some("missing or invalid install argument".into()),
+        _ => Some("helper argument error".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -719,6 +734,40 @@ tun_name = "clash-iran"
         assert!(Path::new("/run/iran-split/helper.sock").is_absolute());
         assert!(Path::new("/var/lib/iran-split").is_absolute());
         assert!(Path::new("/usr/lib/biflow/iran-split-helper").is_absolute());
+    }
+
+    #[test]
+    fn clap_install_error_message_omits_paths_and_help() {
+        use clap::error::ErrorKind;
+        assert_eq!(
+            clap_install_error_message(&clap::Error::new(ErrorKind::UnknownArgument)).as_deref(),
+            Some("unexpected argument")
+        );
+        assert_eq!(
+            clap_install_error_message(&clap::Error::new(ErrorKind::MissingRequiredArgument))
+                .as_deref(),
+            Some("missing or invalid install argument")
+        );
+        assert_eq!(
+            clap_install_error_message(&clap::Error::new(ErrorKind::DisplayHelp)),
+            None
+        );
+        let with_path = clap::Error::raw(
+            ErrorKind::UnknownArgument,
+            r"unexpected argument 'C:\Program Files\BiFlow\dependencies\mihomo.exe'",
+        );
+        let message = clap_install_error_message(&with_path).expect("message");
+        assert!(!message.contains("Program Files"));
+        assert!(!message.contains('\\'));
+    }
+
+    #[test]
+    fn windows_main_persists_clap_errors_before_exit() {
+        let source = include_str!("main.rs");
+        assert!(source.contains("Arguments::try_parse()"));
+        assert!(source.contains("clap_install_error_message"));
+        assert!(source.contains("persist_install_error"));
+        assert!(source.contains("error.exit()"));
     }
 
     #[test]

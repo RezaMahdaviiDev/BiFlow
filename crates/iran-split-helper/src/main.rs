@@ -61,6 +61,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(windows)]
+fn arguments_or_exit() -> Arguments {
+    match Arguments::try_parse() {
+        Ok(arguments) => arguments,
+        Err(error) => {
+            if let Some(message) = iran_split_helper::clap_install_error_message(&error) {
+                iran_split_helper::persist_install_error(&message);
+            }
+            error.exit()
+        }
+    }
+}
+
+#[cfg(windows)]
 fn install_from_args(arguments: &Arguments) -> Result<(), Box<dyn std::error::Error>> {
     let mihomo = arguments
         .mihomo
@@ -82,7 +95,7 @@ fn install_from_args(arguments: &Arguments) -> Result<(), Box<dyn std::error::Er
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
-    let arguments = Arguments::parse();
+    let arguments = arguments_or_exit();
     if arguments.uninstall {
         iran_split_helper::uninstall()?;
         return Ok(());

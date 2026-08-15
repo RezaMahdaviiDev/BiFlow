@@ -29,7 +29,7 @@ const ROOT_APP_REJECTION: &str = "BiFlow is running as root, so the helper canno
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 const MAX_DETAIL_CHARS: usize = 200;
 /// `ERROR_CANCELLED`: the operator refused the UAC prompt.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 const UAC_CANCELLED: i32 = 1223;
 /// `CREATE_NO_WINDOW`: keeps a spawned console program from flashing a window
 /// over the GUI (ADR 0030).
@@ -439,21 +439,64 @@ async fn install_windows(
 /// that failed — or a dismissed UAC prompt — still looked like success and the
 /// install only surfaced later as an unreachable-helper timeout. Re-raise the
 /// elevated process's exit code, and map a refused prompt to `ERROR_CANCELLED`.
-#[cfg(target_os = "windows")]
+///
+/// Pass one Windows-quoted `lpParameters` string. An `-ArgumentList` array is
+/// concatenated without quoting, so `C:\Program Files\…` becomes two argv
+/// tokens and clap exits 2 before `install.log` is written.
+#[cfg(any(target_os = "windows", test))]
 #[must_use]
 pub(crate) fn elevate_script(program: &str, arguments: &[&str]) -> String {
-    let argument_list = arguments
-        .iter()
-        .map(|argument| powershell_quote(argument))
-        .collect::<Vec<_>>()
-        .join(", ");
     format!(
         "$ErrorActionPreference = 'Stop'; \
-         try {{ $process = Start-Process -FilePath {} -ArgumentList @({argument_list}) -Verb RunAs -Wait -PassThru }} \
+         try {{ $process = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -Wait -PassThru }} \
          catch {{ Write-Error $_.Exception.Message; exit {UAC_CANCELLED} }}; \
          exit $process.ExitCode",
         powershell_quote(program),
+        powershell_quote(&windows_command_line(arguments)),
     )
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_command_line(arguments: &[&str]) -> String {
+    arguments
+        .iter()
+        .map(|argument| windows_quote(argument))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Quote one argv token the way `CommandLineToArgvW` (and clap) expect.
+#[cfg(any(target_os = "windows", test))]
+fn windows_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "\"\"".into();
+    }
+    let needs_quotes = value
+        .chars()
+        .any(|character| character == ' ' || character == '\t' || character == '"');
+    if !needs_quotes {
+        return value.to_owned();
+    }
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0_usize;
+    for character in value.chars() {
+        match character {
+            '\\' => backslashes += 1,
+            '"' => {
+                quoted.push_str(&"\\".repeat(backslashes.saturating_mul(2).saturating_add(1)));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                quoted.push_str(&"\\".repeat(backslashes));
+                quoted.push(character);
+                backslashes = 0;
+            }
+        }
+    }
+    quoted.push_str(&"\\".repeat(backslashes.saturating_mul(2)));
+    quoted.push('"');
+    quoted
 }
 
 #[cfg(target_os = "linux")]
@@ -546,7 +589,7 @@ pub(crate) fn parse_proc_status_ids(status: &str) -> Option<(u32, u32)> {
     Some((uid?, gid?))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
@@ -589,7 +632,6 @@ mod tests {
     use super::first_existing_file;
     use std::fs;
 
-    #[cfg(target_os = "windows")]
     use super::{elevate_script, UAC_CANCELLED};
     #[cfg(target_os = "linux")]
     use super::{
@@ -706,24 +748,36 @@ mod tests {
         assert!(!destination.path().join("helper-install").exists());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn elevation_reraises_the_child_exit_code_and_maps_a_refused_prompt() {
+    fn elevation_quotes_program_files_as_one_command_line() {
         let script = elevate_script(
-            r"C:\Program Files\BiFlow\helper.exe",
-            &["--install", "--tun-name", "x"],
+            r"C:\Program Files\BiFlow\helper\iran-split-helper.exe",
+            &[
+                "--install",
+                "--mihomo",
+                r"C:\Program Files\BiFlow\dependencies\mihomo.exe",
+                "--staging-dir",
+                r"C:\Users\name\AppData\Local\biflow\runtime\generations",
+                "--tun-name",
+                "clash-iran",
+            ],
         );
         assert!(script.contains("-PassThru"));
         assert!(script.contains("exit $process.ExitCode"));
         assert!(script.contains(&format!("exit {UAC_CANCELLED}")));
         assert!(script.contains("$ErrorActionPreference = 'Stop'"));
-        assert!(script.contains("-ArgumentList @("));
-        assert!(script.contains(r"'C:\Program Files\BiFlow\helper.exe'"));
-        assert!(script.contains("'--install'"));
-        assert!(script.contains("'--tun-name'"));
+        assert!(!script.contains("-ArgumentList @("));
+        assert!(
+            script.contains(r#""C:\Program Files\BiFlow\dependencies\mihomo.exe""#),
+            "spaced path must appear Windows-quoted inside the command line: {script}"
+        );
+        assert!(
+            script.contains("-ArgumentList '--install --mihomo "),
+            "Start-Process must receive one quoted command line: {script}"
+        );
+        assert!(script.contains(r"'C:\Program Files\BiFlow\helper\iran-split-helper.exe'"));
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
     fn elevation_escapes_single_quotes_in_paths() {
         let script = elevate_script(r"C:\Users\o'brien\helper.exe", &["--install"]);
@@ -747,7 +801,17 @@ mod tests {
         assert!(!helpers.contains("WINDOWS_PROGRAMDATA_HELPER"));
         assert!(!helpers.contains(r"C:\\ProgramData"));
         assert!(!mihomo.contains(r"C:\\ProgramData"));
-        assert!(source.contains("-ArgumentList @("));
+        let elevate_start = source.find("fn elevate_script").expect("elevate_script");
+        let elevate_end = source[elevate_start..]
+            .find("fn windows_command_line")
+            .expect("windows_command_line")
+            + elevate_start;
+        let elevate = &source[elevate_start..elevate_end];
+        assert!(
+            !elevate.contains("-ArgumentList @("),
+            "elevate_script must not pass a PowerShell argument array"
+        );
+        assert!(elevate.contains("windows_command_line"));
     }
 
     #[test]

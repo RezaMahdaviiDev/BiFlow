@@ -24,10 +24,20 @@ that do not occur on Linux:
    no reason. The NSIS hook used `$COMMONPROGRAMDATA`, which NSIS 3 does not
    define, so a first-run install could leave those leftovers.
 
+2.7.2 fixed the reveal path and stopped elevating ProgramData, but
+`debug (4).log` still showed Install dying with `exit_code: 2` and empty
+`detail`. `Start-Process -ArgumentList @('--mihomo', 'C:\Program Files\…')`
+concatenates array entries without quoting, so clap sees `C:\Program` and
+`Files\…` as extra arguments and calls `process::exit(2)` inside
+`Arguments::parse()` — before `persist_install_error`. The same session still
+logged Mihomo as `biflow\bin/mihomo.exe` because `mihomo_file_name()` returned
+`"bin/mihomo.exe"`.
+
 ## Decision
 
 - Build Windows paths from separate components (`.join("biflow").join("debug.log")`,
-  `.join("runtime").join("generations")`) so stored paths use `\`.
+  `.join("runtime").join("generations")`, `.join("bin").join("mihomo.exe")`) so
+  stored paths use `\`.
 - Reveal with `explorer.exe` and `CommandExt::raw_arg("/select," + normalized
 path)` so the switch is not quoted. Mixed `/` in an old `debug.log` path is
   rewritten to `\` before `/select,`.
@@ -35,11 +45,14 @@ path)` so the switch is not quoted. Mixed `/` in an old `debug.log` path is
   `dependencies/mihomo.exe`. ProgramData is the install destination, not the
   source.
 - Skip `fs::copy` when source and destination already resolve to the same file.
-- Pass `Start-Process -ArgumentList` as a PowerShell array of separate flags
-  and values. Keep `-PassThru` and the UAC 1223 mapping (ADR 0029).
-- On install/uninstall failure the elevated helper writes
-  `C:\ProgramData\iran-split\install.log` (error text only). The desktop reads
-  that file after a non-zero exit so the dialog is not a bare exit code.
+- Pass `Start-Process -ArgumentList` a single Windows-quoted command line
+  (`--install --mihomo "C:\Program Files\…"`). Do not pass a PowerShell array.
+  Keep `-PassThru` and the UAC 1223 mapping (ADR 0029).
+- Parse helper flags with `Arguments::try_parse()`. On a usage error, write a
+  redacted line to `C:\ProgramData\iran-split\install.log` (no argv or paths)
+  and then exit with clap's code. Runtime install/uninstall failures still
+  persist their own message. The desktop reads that file after a non-zero exit
+  so the dialog is not a bare exit code.
 - NSIS uses `$PROGRAMDATA\iran-split\staging` so `HelperSettings::validate`
   sees an absolute path. In-app Install still records
   `%LOCALAPPDATA%\biflow\runtime\generations` in `helper.toml` and overwrites a
@@ -48,5 +61,6 @@ path)` so the switch is not quoted. Mixed `/` in an old `debug.log` path is
 ## Consequences
 
 Open location selects the real `debug.log`. A leftover ProgramData helper no
-longer poisons in-app Install. A failed elevate reports the last install.log
-line. Linux paths and pkexec install are unchanged.
+longer poisons in-app Install. A `Program Files` path stays one argv token, so
+clap no longer exits 2. A failed elevate reports the last install.log line,
+including clap usage errors. Linux paths and pkexec install are unchanged.

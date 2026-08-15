@@ -93,11 +93,11 @@ pub struct InstallResult {
 #[must_use]
 pub fn hiddify_candidates(data: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![
-        data.join("bin/hiddify"),
-        data.join("bin/hiddify-app"),
-        data.join("apps/Hiddify.AppImage"),
-        data.join("apps/Hiddify/Hiddify.exe"),
-        data.join("apps/Hiddify/hiddify.exe"),
+        data.join("bin").join("hiddify"),
+        data.join("bin").join("hiddify-app"),
+        data.join("apps").join("Hiddify.AppImage"),
+        data.join("apps").join("Hiddify").join("Hiddify.exe"),
+        data.join("apps").join("Hiddify").join("hiddify.exe"),
         PathBuf::from("/usr/bin/hiddify"),
         PathBuf::from("/usr/bin/hiddify-app"),
         PathBuf::from("/usr/local/bin/hiddify"),
@@ -108,25 +108,34 @@ pub fn hiddify_candidates(data: &Path) -> Vec<PathBuf> {
     ];
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
-        candidates.push(home.join(".local/bin/hiddify"));
-        candidates.push(home.join(".local/bin/hiddify-app"));
-        candidates.push(home.join(".local/share/Hiddify/hiddify"));
+        candidates.push(home.join(".local").join("bin").join("hiddify"));
+        candidates.push(home.join(".local").join("bin").join("hiddify-app"));
+        candidates.push(
+            home.join(".local")
+                .join("share")
+                .join("Hiddify")
+                .join("hiddify"),
+        );
         candidates.extend(appimages_matching(&home.join("Applications"), "hiddify"));
         candidates.extend(appimages_matching(
-            &home.join(".local/share/biflow/apps"),
+            &home
+                .join(".local")
+                .join("share")
+                .join("biflow")
+                .join("apps"),
             "hiddify",
         ));
     }
     candidates.extend(appimages_matching(&data.join("apps"), "hiddify"));
     if let Some(local) = dirs::data_local_dir() {
-        candidates.push(local.join("Hiddify/Hiddify.exe"));
-        candidates.push(local.join("Hiddify/hiddify.exe"));
-        candidates.push(local.join("Programs/Hiddify/Hiddify.exe"));
+        candidates.push(local.join("Hiddify").join("Hiddify.exe"));
+        candidates.push(local.join("Hiddify").join("hiddify.exe"));
+        candidates.push(local.join("Programs").join("Hiddify").join("Hiddify.exe"));
     }
     if let Some(programs) = std::env::var_os("ProgramFiles") {
         let programs = PathBuf::from(programs);
-        candidates.push(programs.join("Hiddify/Hiddify.exe"));
-        candidates.push(programs.join("HiddifyNext/Hiddify.exe"));
+        candidates.push(programs.join("Hiddify").join("Hiddify.exe"));
+        candidates.push(programs.join("HiddifyNext").join("Hiddify.exe"));
     }
     candidates.extend(lookup_on_path(&["hiddify", "hiddify-app", "Hiddify"]));
     candidates
@@ -135,8 +144,8 @@ pub fn hiddify_candidates(data: &Path) -> Vec<PathBuf> {
 #[must_use]
 pub fn mihomo_candidates(data: &Path) -> Vec<PathBuf> {
     let mut candidates = vec![
-        data.join(mihomo_file_name()),
-        data.join("bin/clash-meta"),
+        mihomo_install_path(data),
+        data.join("bin").join("clash-meta"),
         PathBuf::from("/usr/lib/biflow/mihomo"),
         PathBuf::from("/opt/biflow/mihomo"),
         PathBuf::from("/opt/iran-split/mihomo"),
@@ -147,8 +156,8 @@ pub fn mihomo_candidates(data: &Path) -> Vec<PathBuf> {
     ];
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
-        candidates.push(home.join(".local/bin/mihomo"));
-        candidates.push(home.join(".local/bin/clash-meta"));
+        candidates.push(home.join(".local").join("bin").join("mihomo"));
+        candidates.push(home.join(".local").join("bin").join("clash-meta"));
     }
     candidates.extend(lookup_on_path(&["mihomo", "clash-meta"]));
     candidates
@@ -343,9 +352,9 @@ async fn install_hiddify_linux(data: &Path) -> Result<PathBuf, DepsError> {
             "Hiddify AppImage is not an ELF binary".into(),
         ));
     }
-    let appimage = data.join("apps/Hiddify.AppImage");
+    let appimage = data.join("apps").join("Hiddify.AppImage");
     write_executable(&appimage, &bytes)?;
-    let link = data.join("bin/hiddify");
+    let link = data.join("bin").join("hiddify");
     if let Err(cause) = fs::remove_file(&link) {
         if cause.kind() != std::io::ErrorKind::NotFound {
             return Err(cause.into());
@@ -366,7 +375,7 @@ async fn install_hiddify_windows(data: &Path) -> Result<PathBuf, DepsError> {
     let bytes =
         download_first(&[hiddify_windows_portable_url(), hiddify_windows_setup_url()]).await?;
     if is_zip(&bytes) {
-        let dest = data.join("apps/Hiddify");
+        let dest = data.join("apps").join("Hiddify");
         extract_zip(&bytes, &dest)?;
         return first_existing(&hiddify_candidates(data)).ok_or_else(|| {
             DepsError::Install("Hiddify portable archive did not contain Hiddify.exe".into())
@@ -377,7 +386,7 @@ async fn install_hiddify_windows(data: &Path) -> Result<PathBuf, DepsError> {
             "Hiddify installer is not a Windows executable".into(),
         ));
     }
-    let installer = data.join("apps/Hiddify-Setup.exe");
+    let installer = data.join("apps").join("Hiddify-Setup.exe");
     fs::write(&installer, bytes)?;
     let status = std::process::Command::new(&installer)
         .args(["/VERYSILENT", "/NORESTART", "/SUPPRESSMSGBOXES"])
@@ -408,7 +417,7 @@ async fn install_hiddify_windows(data: &Path) -> Result<PathBuf, DepsError> {
 }
 
 async fn install_mihomo(data: &Path, bundled_dependencies: &Path) -> Result<PathBuf, DepsError> {
-    let dest = data.join(mihomo_file_name());
+    let dest = mihomo_install_path(data);
     if cfg!(target_os = "windows") {
         let bundled = bundled_dependencies.join("mihomo.exe");
         if bundled.is_file() {
@@ -418,7 +427,7 @@ async fn install_mihomo(data: &Path, bundled_dependencies: &Path) -> Result<Path
         }
         let bytes = download_first(&[mihomo_windows_url()]).await?;
         verify_sha256(&bytes, MIHOMO_WINDOWS_ZIP_SHA256)?;
-        let staging = data.join("apps/mihomo-extract");
+        let staging = data.join("apps").join("mihomo-extract");
         extract_zip(&bytes, &staging)?;
         let found = find_file(&staging, "mihomo.exe")
             .ok_or_else(|| DepsError::Install("Mihomo zip did not contain mihomo.exe".into()))?;
@@ -481,11 +490,15 @@ fn install_windows_mihomo_bytes(
     Ok(())
 }
 
+fn mihomo_install_path(data: &Path) -> PathBuf {
+    data.join("bin").join(mihomo_file_name())
+}
+
 fn mihomo_file_name() -> &'static str {
     if cfg!(target_os = "windows") {
-        "bin/mihomo.exe"
+        "mihomo.exe"
     } else {
-        "bin/mihomo"
+        "mihomo"
     }
 }
 
@@ -761,10 +774,9 @@ mod tests {
     fn linux_install_paths_are_under_user_data() {
         let data = PathBuf::from("/tmp/biflow-user");
         let hiddify = hiddify_candidates(&data);
-        assert!(hiddify
-            .iter()
-            .any(|path| path.ends_with("apps/Hiddify.AppImage")));
-        assert!(mihomo_candidates(&data)[0].ends_with(mihomo_file_name()));
+        assert!(hiddify.iter().any(|path| path.ends_with("Hiddify.AppImage")
+            && path.parent().is_some_and(|parent| parent.ends_with("apps"))));
+        assert_eq!(mihomo_candidates(&data)[0], mihomo_install_path(&data));
     }
 
     #[test]
@@ -799,7 +811,7 @@ mod tests {
         fs::create_dir_all(&apps).expect("apps");
         fs::create_dir_all(&bin).expect("bin");
         fs::write(apps.join("Hiddify.AppImage"), b"elf").expect("hiddify");
-        fs::write(dir.join(mihomo_file_name()), b"elf").expect("mihomo");
+        fs::write(mihomo_install_path(&dir), b"elf").expect("mihomo");
         let status = dependency_status(&dir);
         fs::remove_dir_all(&dir).expect("cleanup dependency fixture");
         assert!(status
@@ -824,12 +836,27 @@ mod tests {
     #[test]
     fn bundled_linux_mihomo_is_verified_before_install() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let destination = directory.path().join("bin/mihomo");
+        let destination = directory.path().join("bin").join("mihomo");
         let bytes = b"\x7fELF bundled mihomo fixture";
         let expected = hex::encode(Sha256::digest(bytes));
 
         install_linux_mihomo_bytes(&destination, bytes, &expected).expect("install");
 
         assert_eq!(fs::read(destination).expect("installed bytes"), bytes);
+    }
+
+    #[test]
+    fn dependency_paths_join_components_separately() {
+        let data = PathBuf::from("data");
+        assert_eq!(
+            mihomo_install_path(&data),
+            data.join("bin").join(mihomo_file_name())
+        );
+        let source = include_str!("deps.rs");
+        assert!(!source.contains(".join(\"bin/"));
+        assert!(!source.contains(".join(\"apps/"));
+        assert!(!source.contains(".join(\"Hiddify/"));
+        assert!(!source.contains(".join(\".local/"));
+        assert!(!source.contains(".join(\"Programs/"));
     }
 }
