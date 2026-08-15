@@ -176,6 +176,110 @@ describe("Tauri frontend contract", () => {
     assert.match(config, /fs::OpenOptions::new\(\)/);
   });
 
+  it("keeps both platform backends staging the same runtime generation", () => {
+    const linux = readFileSync(
+      join(root, "crates/iran-split-platform-linux/src/lib.rs"),
+      "utf8",
+    );
+    const windows = readFileSync(
+      join(root, "crates/iran-split-platform-win/src/lib.rs"),
+      "utf8",
+    );
+    // The staging helpers are duplicated per platform (ADR 0033). A rule file
+    // added on one side and not the other ships a config Mihomo cannot load.
+    const providers = [
+      "private.txt",
+      "iran-domains.txt",
+      "iran-networks.txt",
+      "custom-direct-domains.txt",
+      "custom-direct-ips.txt",
+      "config.yaml",
+    ];
+    for (const name of providers) {
+      assert.ok(linux.includes(name), `${name} missing from the Linux backend`);
+      assert.ok(
+        windows.includes(name),
+        `${name} missing from the Windows backend`,
+      );
+    }
+    // Each backend must pin its own Platform value or the generated config
+    // silently loses the Windows-only strict-route flag.
+    assert.match(linux, /generate_config\(&config, Platform::Linux,/);
+    assert.match(windows, /generate_config\(&config, Platform::Windows,/);
+    // Both compile only for their own OS, so host Clippy never sees the other.
+    assert.match(linux, /^#!\[cfg\(target_os = "linux"\)\]/m);
+    assert.match(windows, /^#!\[cfg\(windows\)\]/m);
+  });
+
+  it("implements every PlatformBackend method on Windows", () => {
+    const core = readFileSync(
+      join(root, "crates/iran-split-core/src/lib.rs"),
+      "utf8",
+    );
+    const windows = readFileSync(
+      join(root, "crates/iran-split-platform-win/src/lib.rs"),
+      "utf8",
+    );
+    const trait = core.match(/pub trait PlatformBackend[\s\S]*?\n\}/);
+    assert.ok(trait, "PlatformBackend trait is missing");
+    // A signature ending in `;` has no default body, so every implementor must
+    // provide it. Methods with a default (`stop_user_proxy`,
+    // `verify_not_intercepting`) are checked separately.
+    const required = trait[0]
+      .split("async fn ")
+      .slice(1)
+      .filter((chunk) => {
+        const semicolon = chunk.indexOf(";");
+        const brace = chunk.indexOf("{");
+        return semicolon !== -1 && (brace === -1 || semicolon < brace);
+      })
+      .map((chunk) => /^(\w+)/.exec(chunk)[1]);
+    assert.ok(required.length > 8, "trait parse found too few methods");
+
+    const impl = windows.match(
+      /impl PlatformBackend for WindowsBackend \{[\s\S]*?\n\}\n/,
+    );
+    assert.ok(impl, "WindowsBackend does not implement PlatformBackend");
+    const missing = required.filter(
+      (name) => !new RegExp(`async fn ${name}\\(`).test(impl[0]),
+    );
+    assert.deepEqual(missing, [], "Windows backend is missing trait methods");
+    // Defaulted in the trait, but a backend that never stops the user's proxy
+    // leaves Hiddify running after Disconnect.
+    assert.match(impl[0], /async fn stop_user_proxy\(/);
+    // The pre-2.2.0 stub answered every call with one canned platform error.
+    assert.doesNotMatch(windows, /fn unavailable<T>\(\)/);
+  });
+
+  it("retries a flaky update check and polls in the background", () => {
+    const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    const config = JSON.parse(
+      readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+    );
+
+    // Missing the `latest/` segment yields a 404 that reads as "cannot reach".
+    assert.deepEqual(config.plugins.updater.endpoints, [
+      "https://github.com/devlifeX/BiFlow/releases/latest/download/latest.json",
+    ]);
+    // The command must go through the retry, not call the plugin directly.
+    assert.match(
+      rust,
+      /async fn check_for_update\([\s\S]*?check_update_with_retry\(&app, "tauri_command"\)/,
+    );
+    assert.match(rust, /fn spawn_background_update_checks\(/);
+    assert.match(rust, /spawn_background_update_checks\(app\.handle\(\)\)/);
+    // A background poll that surfaced its own failures would put an error
+    // banner on screen nobody asked for.
+    const poll = rust.match(
+      /fn spawn_background_update_checks\([\s\S]*?\n\}\n/,
+    );
+    assert.ok(poll, "background update poll is missing");
+    assert.doesNotMatch(poll[0], /phase: "failed"/);
+    // Signed self-replacement, not a browser link.
+    assert.match(rust, /update\s*\.download_and_install\(/);
+    assert.match(rust, /fn schedule_update_restart\(/);
+  });
+
   it("gates Linux helper-install paths so Windows dead_code stays clean", () => {
     const source = readFileSync(
       join(root, "src-tauri/src/helper_install.rs"),

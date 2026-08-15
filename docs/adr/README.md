@@ -36,3 +36,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0030](./0030-no-background-console.md)         | No background console or terminal        | Accepted   |
 | [0031](./0031-local-github-actions-mirror.md)   | Local GitHub Actions mirror              | Accepted   |
 | [0032](./0032-fresh-hiddify-start.md)           | Fresh Hiddify start                      | Accepted   |
+| [0033](./0033-windows-platform-backend.md)      | Windows platform backend                 | Accepted   |

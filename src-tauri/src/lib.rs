@@ -31,7 +31,7 @@ use uuid::Uuid;
 #[cfg(target_os = "linux")]
 use iran_split_platform_linux::{LinuxBackend as NativeBackend, LinuxPaths};
 #[cfg(target_os = "windows")]
-use iran_split_platform_win::WindowsBackend as NativeBackend;
+use iran_split_platform_win::{WindowsBackend as NativeBackend, WindowsPaths, HELPER_PIPE};
 
 #[derive(Debug)]
 struct AppServices {
@@ -57,6 +57,29 @@ struct AppPaths {
 const PRODUCTION_HELPER_SOCKET: &str = "/run/iran-split/helper.sock";
 #[cfg(target_os = "linux")]
 const PRODUCTION_SYSTEM_RUNTIME: &str = "/var/lib/iran-split";
+
+/// Written by the elevated installer in `iran-split-helper::install` (ADR 0029).
+#[cfg(target_os = "windows")]
+const WINDOWS_SYSTEM_RUNTIME: &str = r"C:\ProgramData\iran-split\runtime";
+#[cfg(target_os = "windows")]
+const WINDOWS_PROGRAMDATA_MIHOMO: &str = r"C:\ProgramData\iran-split\bin\mihomo.exe";
+
+/// The pipe and system runtime root are fixed by the SYSTEM scheduled task, so
+/// unlike Linux there is no development override to apply.
+#[cfg(target_os = "windows")]
+fn windows_helper_paths() -> (String, PathBuf) {
+    (
+        HELPER_PIPE.to_owned(),
+        PathBuf::from(WINDOWS_SYSTEM_RUNTIME),
+    )
+}
+
+/// The helper copies Mihomo next to itself, so that copy is the fallback when
+/// the user has not installed one under the app data directory.
+#[cfg(target_os = "windows")]
+fn windows_programdata_mihomo() -> PathBuf {
+    PathBuf::from(WINDOWS_PROGRAMDATA_MIHOMO)
+}
 
 #[cfg(target_os = "linux")]
 fn linux_helper_paths() -> (PathBuf, PathBuf) {
@@ -1078,29 +1101,137 @@ fn export_support_bundle(app: AppHandle) -> Result<ExportResult, String> {
     )
 }
 
+/// Reaching `releases/latest/download/latest.json` fails intermittently on a
+/// cold or congested link — DNS, TLS, or a GitHub redirect hiccup — and the
+/// same check succeeds moments later. Retry here so a transient failure never
+/// becomes a Retry button the operator has to press.
+const UPDATE_CHECK_ATTEMPTS: u32 = 4;
+const UPDATE_CHECK_FIRST_BACKOFF: Duration = Duration::from_millis(600);
+/// How long to wait after launch before the first background check, and the
+/// interval between later ones.
+const UPDATE_BACKGROUND_DELAY: Duration = Duration::from_secs(90);
+const UPDATE_BACKGROUND_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+
+async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
+    let update = app
+        .updater()
+        .map_err(|error| error.to_string())?
+        .check()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(update.map_or(
+        UpdateStatus {
+            available: false,
+            version: None,
+            notes: None,
+        },
+        |update| UpdateStatus {
+            available: true,
+            version: Some(update.version.clone()),
+            notes: update.body.clone(),
+        },
+    ))
+}
+
+/// Doubles the wait after each failed attempt. Attempt `0` is immediate.
+#[must_use]
+fn update_check_backoff(attempt: u32) -> Duration {
+    UPDATE_CHECK_FIRST_BACKOFF.saturating_mul(1 << attempt.min(4))
+}
+
+async fn check_update_with_retry(
+    app: &AppHandle,
+    initiator: &'static str,
+) -> Result<UpdateStatus, String> {
+    let mut last_error = String::new();
+    for attempt in 0..UPDATE_CHECK_ATTEMPTS {
+        match check_update_once(app).await {
+            Ok(status) => {
+                if attempt > 0 {
+                    info!(
+                        event = "update.check_recovered",
+                        section = "updates",
+                        initiator = initiator,
+                        cause = "retry_succeeded",
+                        trace_route = "updater_plugin->github_release->latest_json",
+                        attempts = attempt + 1,
+                        "update check succeeded after a transient failure"
+                    );
+                }
+                return Ok(status);
+            }
+            Err(error) => {
+                last_error = error;
+                warn!(
+                    event = "update.check_attempt_failed",
+                    section = "updates",
+                    initiator = initiator,
+                    cause = last_error.as_str(),
+                    trace_route = "updater_plugin->github_release->latest_json",
+                    attempt = attempt + 1,
+                    attempts = UPDATE_CHECK_ATTEMPTS,
+                    "update check attempt failed"
+                );
+            }
+        }
+        if attempt + 1 < UPDATE_CHECK_ATTEMPTS {
+            tokio::time::sleep(update_check_backoff(attempt)).await;
+        }
+    }
+    error!(
+        event = "update.check_failed",
+        section = "updates",
+        initiator = initiator,
+        cause = last_error.as_str(),
+        trace_route = "updater_plugin->github_release->latest_json",
+        attempts = UPDATE_CHECK_ATTEMPTS,
+        "update check failed after every retry"
+    );
+    Err(last_error)
+}
+
 #[tauri::command]
 async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     diagnostics::trace_action("updates", "tauri_command", "check_for_update", async move {
-        let update = app
-            .updater()
-            .map_err(|error| error.to_string())?
-            .check()
-            .await
-            .map_err(|error| error.to_string())?;
-        Ok(update.map_or(
-            UpdateStatus {
-                available: false,
-                version: None,
-                notes: None,
-            },
-            |update| UpdateStatus {
-                available: true,
-                version: Some(update.version.clone()),
-                notes: update.body.clone(),
-            },
-        ))
+        check_update_with_retry(&app, "tauri_command").await
     })
     .await
+}
+
+/// Keeps the About page current without anyone pressing Check. A failure stays
+/// silent: the retries already ran, and a background poll must never replace a
+/// real state with an error banner the operator did not ask for.
+fn spawn_background_update_checks(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(UPDATE_BACKGROUND_DELAY).await;
+        loop {
+            match check_update_with_retry(&app, "background_poll").await {
+                Ok(status) if status.available => {
+                    info!(
+                        event = "update.background_found",
+                        section = "updates",
+                        initiator = "background_poll",
+                        cause = "release_published",
+                        trace_route = "background_poll->updater_plugin->update_progress",
+                        update_version = status.version.as_deref().unwrap_or("unknown"),
+                        "a newer signed release is available"
+                    );
+                    emit_update_progress(
+                        &app,
+                        UpdateProgress {
+                            phase: "available".into(),
+                            percent: None,
+                            version: status.version,
+                            error: None,
+                        },
+                    );
+                }
+                Ok(_) | Err(_) => {}
+            }
+            tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
+        }
+    });
 }
 
 async fn download_and_install_signed_update(
@@ -1310,9 +1441,35 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         ))
     };
     #[cfg(target_os = "windows")]
-    let _ = config;
-    #[cfg(target_os = "windows")]
-    let backend = Arc::new(NativeBackend);
+    let backend = {
+        let (pipe_name, system_runtime_dir) = windows_helper_paths();
+        // The helper installer records this same staging root in helper.toml,
+        // so a generation staged here is the one SYSTEM is allowed to publish.
+        let mihomo_binary = deps::first_existing(&deps::mihomo_candidates(&paths.data))
+            .unwrap_or_else(windows_programdata_mihomo);
+        info!(
+            event = "helper.paths_selected",
+            section = "startup",
+            initiator = "create_services",
+            cause = "platform_configuration",
+            trace_route = "application_process->create_services->windows_backend",
+            pipe_name = pipe_name.as_str(),
+            runtime_path = %system_runtime_dir.display(),
+            mihomo_binary = %mihomo_binary.display(),
+            "Windows helper paths selected"
+        );
+        Arc::new(NativeBackend::new(
+            config,
+            WindowsPaths {
+                pipe_name,
+                user_data_dir: paths.data.clone(),
+                system_runtime_dir,
+                resources_dir: bundled_rules.clone(),
+                rules_cache_dir: rules_cache.clone(),
+                mihomo_binary,
+            },
+        ))
+    };
     let runtime = tauri::async_runtime::handle();
     let engine = Engine::new(Arc::clone(&backend), runtime.inner());
     let rules = RuleManager::load(
@@ -1691,6 +1848,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             "stack snapshot watcher stopped"
         );
     });
+    spawn_background_update_checks(app.handle());
     tauri::async_runtime::spawn(async move {
         if let Err(cause) = diagnostics::trace_action(
             "startup",
@@ -1857,10 +2015,30 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        packaged_rule_snapshot_dir, single_instance_dbus_id, update_download_percent,
-        UpdateProgress, BUNDLE_IDENTIFIER,
+        packaged_rule_snapshot_dir, single_instance_dbus_id, update_check_backoff,
+        update_download_percent, UpdateProgress, BUNDLE_IDENTIFIER, UPDATE_CHECK_ATTEMPTS,
+        UPDATE_CHECK_FIRST_BACKOFF,
     };
-    use std::fs;
+    use std::{fs, time::Duration};
+
+    #[test]
+    fn update_check_backoff_grows_and_stays_bounded() {
+        assert_eq!(update_check_backoff(0), UPDATE_CHECK_FIRST_BACKOFF);
+        assert_eq!(update_check_backoff(1), UPDATE_CHECK_FIRST_BACKOFF * 2);
+        assert_eq!(update_check_backoff(2), UPDATE_CHECK_FIRST_BACKOFF * 4);
+        // Every attempt after the last still yields a finite, capped wait.
+        assert_eq!(update_check_backoff(9), UPDATE_CHECK_FIRST_BACKOFF * 16);
+
+        let waits: Vec<Duration> = (0..UPDATE_CHECK_ATTEMPTS - 1)
+            .map(update_check_backoff)
+            .collect();
+        assert!(!waits.is_empty(), "one attempt is not a retry");
+        let total: Duration = waits.iter().sum();
+        assert!(
+            total < Duration::from_secs(10),
+            "a flaky check must not stall the About page for {total:?}"
+        );
+    }
 
     #[test]
     fn update_download_percent_is_bounded() {
