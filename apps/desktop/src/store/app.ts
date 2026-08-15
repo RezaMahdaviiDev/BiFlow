@@ -21,6 +21,9 @@ const initialUpdateProgress = (): UpdateProgress => ({
   percent: null,
   version: null,
   error: null,
+  app_available: false,
+  rules_available: false,
+  thirdparty_available: false,
 });
 
 interface AppStore {
@@ -354,6 +357,9 @@ function updateStatusToProgress(status: UpdateStatus): UpdateProgress {
       percent: null,
       version: null,
       error: null,
+      app_available: false,
+      rules_available: false,
+      thirdparty_available: false,
     };
   }
   return {
@@ -361,5 +367,8 @@ function updateStatusToProgress(status: UpdateStatus): UpdateProgress {
     percent: null,
     version: status.version,
     error: null,
+    app_available: status.app_available,
+    rules_available: status.rules_available,
+    thirdparty_available: status.thirdparty_available,
   };
 }

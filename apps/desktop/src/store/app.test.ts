@@ -197,6 +197,9 @@ describe("app store", () => {
       available: true,
       version: "1.3.0",
       notes: "Signed release",
+      app_available: true,
+      rules_available: false,
+      thirdparty_available: false,
     });
     await useAppStore.getState().checkForUpdate();
     expect(useAppStore.getState().update.phase).toBe("available");

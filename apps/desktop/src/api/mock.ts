@@ -748,9 +748,19 @@ export const mockApi = {
         available: true,
         version: "9.9.9",
         notes: "Mock signed release",
+        app_available: true,
+        rules_available: false,
+        thirdparty_available: false,
       };
     }
-    return { available: false, version: null, notes: null };
+    return {
+      available: false,
+      version: null,
+      notes: null,
+      app_available: false,
+      rules_available: false,
+      thirdparty_available: false,
+    };
   },
   async installUpdate(): Promise<OperationAccepted> {
     if (mockUpdateShouldFail()) {

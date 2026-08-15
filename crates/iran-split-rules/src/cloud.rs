@@ -296,6 +296,23 @@ impl CloudRuleStore {
         self.bundled_status()
     }
 
+    /// Returns the last published snapshot revision, if the cache has one.
+    #[must_use]
+    pub fn cached_revision(&self) -> Option<String> {
+        self.read_meta()
+            .ok()
+            .and_then(|meta| meta.snapshot_revision)
+    }
+
+    /// Fetches the `BiFlow` manifest and returns its snapshot revision.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CloudSyncError`] when the manifest cannot be downloaded or decoded.
+    pub async fn peek_remote_revision(&self) -> Result<String, CloudSyncError> {
+        Ok(self.fetch_manifest().await?.commit)
+    }
+
     /// Downloads, validates, and atomically publishes every cloud rule set.
     ///
     /// # Errors
@@ -758,7 +775,9 @@ mod tests {
         let kept = failing.status().expect("status");
         assert_eq!(kept.domain_count, 1_000);
         assert_eq!(kept.source, BIFLOW_REPOSITORY);
-        assert_eq!(kept.snapshot_revision, Some(commit));
+        assert_eq!(kept.snapshot_revision, Some(commit.clone()));
+        assert_eq!(failing.cached_revision(), Some(commit.clone()));
+        assert_eq!(store.peek_remote_revision().await.expect("peek"), commit);
     }
 
     #[tokio::test]

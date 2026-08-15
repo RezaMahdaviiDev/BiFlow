@@ -76,6 +76,14 @@ export function About() {
         <p className="mt-4 text-sm" role="status">
           {updateMessage(t, update)}
         </p>
+        {update.rules_available ? (
+          <p className="mt-2 text-sm text-muted">{t("updateRulesAvailable")}</p>
+        ) : null}
+        {update.thirdparty_available ? (
+          <p className="mt-2 text-sm text-muted">
+            {t("updateThirdpartyAvailable")}
+          </p>
+        ) : null}
 
         {update.phase === "downloading" && update.percent !== null ? (
           <div className="mt-4">

@@ -68,7 +68,10 @@ const resources = {
       aboutVersion: "Version {{version}}",
       aboutUpdatesTitle: "Updates",
       aboutUpdatesHelp:
-        "Check GitHub Releases for signed BiFlow updates when they are published.",
+        "Check GitHub Releases for signed BiFlow updates, then refresh Iran rules and the bundled Mihomo build.",
+      updateRulesAvailable: "A newer Iran rule snapshot is available.",
+      updateThirdpartyAvailable:
+        "A bundled Mihomo build is missing and will be installed.",
       updateCheck: "Check for updates",
       updateChecking: "Checking…",
       updateCurrent: "You are on the latest published version.",
@@ -203,7 +206,10 @@ const resources = {
       aboutVersion: "نسخه {{version}}",
       aboutUpdatesTitle: "به‌روزرسانی",
       aboutUpdatesHelp:
-        "وقتی منتشر شود، به‌روزرسانی‌های امضاشده BiFlow را از GitHub Releases بررسی کنید.",
+        "به‌روزرسانی امضاشده BiFlow را از GitHub Releases بررسی کنید، سپس قوانین ایران و بسته Mihomo را تازه کنید.",
+      updateRulesAvailable: "نسخه تازه‌تری از قوانین ایران آماده است.",
+      updateThirdpartyAvailable:
+        "بسته Mihomo همراه برنامه موجود نیست و نصب خواهد شد.",
       updateCheck: "بررسی به‌روزرسانی",
       updateChecking: "در حال بررسی…",
       updateCurrent: "آخرین نسخه منتشرشده را دارید.",

@@ -272,7 +272,11 @@ describe("Tauri frontend contract", () => {
     // The command must go through the retry, not call the plugin directly.
     assert.match(
       rust,
-      /async fn check_for_update\([\s\S]*?check_update_with_retry\(&app, "tauri_command"\)/,
+      /async fn check_for_update\([\s\S]*?collect_update_status\(&app, "tauri_command"\)/,
+    );
+    assert.match(
+      rust,
+      /async fn collect_update_status\([\s\S]*?check_update_with_retry\(app, initiator\)/,
     );
     assert.match(rust, /fn spawn_background_update_checks\(/);
     assert.match(rust, /spawn_background_update_checks\(app\.handle\(\)\)/);
@@ -286,6 +290,9 @@ describe("Tauri frontend contract", () => {
     // Signed self-replacement, not a browser link.
     assert.match(rust, /update\s*\.download_and_install\(/);
     assert.match(rust, /fn schedule_update_restart\(/);
+    assert.match(rust, /fn perform_complete_update_install\(/);
+    assert.match(rust, /fn apply_sidecar_updates\(/);
+    assert.match(rust, /fn merge_update_channels\(/);
   });
 
   it("never reports a previous attempt's Windows install reason", () => {

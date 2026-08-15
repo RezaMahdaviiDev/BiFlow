@@ -208,6 +208,9 @@ export interface UpdateStatus {
   available: boolean;
   version: string | null;
   notes: string | null;
+  app_available: boolean;
+  rules_available: boolean;
+  thirdparty_available: boolean;
 }
 
 export type UpdatePhase =
@@ -226,6 +229,9 @@ export interface UpdateProgress {
   percent: number | null;
   version: string | null;
   error: string | null;
+  app_available?: boolean;
+  rules_available?: boolean;
+  thirdparty_available?: boolean;
 }
 
 export interface CloudRuleSetStatus {

@@ -363,10 +363,17 @@ struct ExportResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "IPC shape matches the About page channel flags"
+)]
 struct UpdateStatus {
     available: bool,
     version: Option<String>,
     notes: Option<String>,
+    app_available: bool,
+    rules_available: bool,
+    thirdparty_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1157,13 +1164,112 @@ async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
             available: false,
             version: None,
             notes: None,
+            app_available: false,
+            rules_available: false,
+            thirdparty_available: false,
         },
         |update| UpdateStatus {
             available: true,
             version: Some(update.version.clone()),
             notes: update.body.clone(),
+            app_available: true,
+            rules_available: false,
+            thirdparty_available: false,
         },
     ))
+}
+
+fn merge_update_channels(
+    mut status: UpdateStatus,
+    rules_available: bool,
+    thirdparty_available: bool,
+) -> UpdateStatus {
+    status.rules_available = rules_available;
+    status.thirdparty_available = thirdparty_available;
+    status.available = status.app_available || rules_available || thirdparty_available;
+    status
+}
+
+async fn enrich_update_channels(app: &AppHandle, status: &mut UpdateStatus) {
+    let Ok(services) = services(app) else {
+        return;
+    };
+    match services.cloud_rules.peek_remote_revision().await {
+        Ok(remote) => {
+            status.rules_available =
+                services.cloud_rules.cached_revision().as_deref() != Some(remote.as_str());
+        }
+        Err(cause) => {
+            warn!(
+                event = "update.rules_probe_failed",
+                section = "updates",
+                initiator = "check_for_update",
+                cause = %cause,
+                trace_route = "updater->cloud_rule_store->manifest",
+                "rule snapshot revision could not be compared"
+            );
+        }
+    }
+    let thirdparty_available = deps::dependency_status(&services.paths.data)
+        .into_iter()
+        .any(|item| item.id == "mihomo" && !item.installed);
+    *status = merge_update_channels(status.clone(), status.rules_available, thirdparty_available);
+}
+
+async fn collect_update_status(
+    app: &AppHandle,
+    initiator: &'static str,
+) -> Result<UpdateStatus, String> {
+    let mut status = check_update_with_retry(app, initiator).await?;
+    enrich_update_channels(app, &mut status).await;
+    Ok(status)
+}
+
+async fn apply_sidecar_updates(app: &AppHandle, operation_id: Uuid) -> Result<(), String> {
+    let services = services(app)?;
+    info!(
+        event = "update.sidecars_started",
+        section = "updates",
+        initiator = "install_update",
+        cause = "versioned_assets",
+        trace_route = "tauri_command->cloud_rules->mihomo_install",
+        trace_id = %operation_id,
+        "applying versioned rule and third-party updates"
+    );
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "installing".into(),
+            percent: Some(10),
+            version: None,
+            error: None,
+        },
+    );
+    if let Err(cause) = services.cloud_rules.sync().await {
+        warn!(
+            event = "update.rules_sync_failed",
+            section = "updates",
+            initiator = "install_update",
+            cause = %cause,
+            trace_route = "install_update->cloud_rule_store->sync",
+            trace_id = %operation_id,
+            "cloud rule update failed; last good snapshot remains"
+        );
+    }
+    let mihomo_missing = deps::dependency_status(&services.paths.data)
+        .into_iter()
+        .any(|item| item.id == "mihomo" && !item.installed);
+    if mihomo_missing {
+        deps::install_dependency(
+            deps::DependencyId::Mihomo,
+            &services.paths.data,
+            &services.paths.dependencies,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        services.engine.refresh_health().await;
+    }
+    Ok(())
 }
 
 /// Doubles the wait after each failed attempt. Attempt `0` is immediate.
@@ -1226,7 +1332,7 @@ async fn check_update_with_retry(
 #[tauri::command]
 async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     diagnostics::trace_action("updates", "tauri_command", "check_for_update", async move {
-        check_update_with_retry(&app, "tauri_command").await
+        collect_update_status(&app, "tauri_command").await
     })
     .await
 }
@@ -1239,7 +1345,7 @@ fn spawn_background_update_checks(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(UPDATE_BACKGROUND_DELAY).await;
         loop {
-            match check_update_with_retry(&app, "background_poll").await {
+            match collect_update_status(&app, "background_poll").await {
                 Ok(status) if status.available => {
                     info!(
                         event = "update.background_found",
@@ -1350,6 +1456,34 @@ fn schedule_update_restart(app: &AppHandle, operation_id: Uuid) -> OperationAcce
     }
 }
 
+async fn perform_complete_update_install(
+    app: &AppHandle,
+    operation_id: Uuid,
+) -> Result<OperationAccepted, String> {
+    apply_sidecar_updates(app, operation_id).await?;
+    let status = collect_update_status(app, "install_update").await?;
+    if !status.app_available {
+        emit_update_progress(
+            app,
+            UpdateProgress {
+                phase: if status.available {
+                    "available".into()
+                } else {
+                    "current".into()
+                },
+                percent: Some(100),
+                version: status.version,
+                error: None,
+            },
+        );
+        return Ok(OperationAccepted {
+            operation_id,
+            already_complete: true,
+        });
+    }
+    perform_signed_update_install(app, operation_id).await
+}
+
 async fn perform_signed_update_install(
     app: &AppHandle,
     operation_id: Uuid,
@@ -1359,13 +1493,17 @@ async fn perform_signed_update_install(
     if !linux_updater_self_replace_supported() {
         return open_linux_deb_release(app, operation_id);
     }
-    let update = app
-        .updater()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or("no update is available")?;
+    let update = match check_update_with_retry(app, "install_update").await {
+        Ok(status) if status.app_available => app
+            .updater()
+            .map_err(|error| error.to_string())?
+            .check()
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or("no update is available")?,
+        Ok(_) => return Err("no update is available".into()),
+        Err(error) => return Err(error),
+    };
     let target_version = update.version.clone();
     info!(
         event = "update.download_started",
@@ -1403,7 +1541,7 @@ async fn perform_signed_update_install(
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("updates", "tauri_command", "install_update", async move {
-        perform_signed_update_install(&app, Uuid::new_v4()).await
+        perform_complete_update_install(&app, Uuid::new_v4()).await
     })
     .await
 }
@@ -2049,9 +2187,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        packaged_rule_snapshot_dir, single_instance_dbus_id, update_check_backoff,
-        update_download_percent, UpdateProgress, BUNDLE_IDENTIFIER, UPDATE_CHECK_ATTEMPTS,
-        UPDATE_CHECK_FIRST_BACKOFF,
+        merge_update_channels, packaged_rule_snapshot_dir, single_instance_dbus_id,
+        update_check_backoff, update_download_percent, UpdateProgress, UpdateStatus,
+        BUNDLE_IDENTIFIER, UPDATE_CHECK_ATTEMPTS, UPDATE_CHECK_FIRST_BACKOFF,
     };
     use std::{fs, time::Duration};
 
@@ -2105,6 +2243,56 @@ mod tests {
             packaged_rule_snapshot_dir(directory.path()),
             directory.path().join("rules")
         );
+    }
+
+    #[test]
+    fn merge_update_channels_marks_any_pending_channel() {
+        let none = merge_update_channels(
+            UpdateStatus {
+                available: false,
+                version: None,
+                notes: None,
+                app_available: false,
+                rules_available: false,
+                thirdparty_available: false,
+            },
+            false,
+            false,
+        );
+        assert!(!none.available);
+
+        let rules_only = merge_update_channels(
+            UpdateStatus {
+                available: false,
+                version: None,
+                notes: None,
+                app_available: false,
+                rules_available: false,
+                thirdparty_available: false,
+            },
+            true,
+            false,
+        );
+        assert!(rules_only.available);
+        assert!(rules_only.rules_available);
+        assert!(!rules_only.app_available);
+
+        let app = merge_update_channels(
+            UpdateStatus {
+                available: true,
+                version: Some("3.1.0".into()),
+                notes: None,
+                app_available: true,
+                rules_available: false,
+                thirdparty_available: false,
+            },
+            false,
+            true,
+        );
+        assert!(app.available);
+        assert!(app.app_available);
+        assert!(app.thirdparty_available);
+        assert_eq!(app.version.as_deref(), Some("3.1.0"));
     }
 
     #[test]
