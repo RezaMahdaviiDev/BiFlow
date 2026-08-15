@@ -135,6 +135,7 @@ fn helper_error_code(error: &HelperServiceError) -> &'static str {
         HelperServiceError::InvalidGeneration(_) => "INVALID_GENERATION",
         HelperServiceError::BinaryIntegrity => "BINARY_INTEGRITY_FAILED",
         HelperServiceError::Process(_) => "PROCESS_FAILED",
+        HelperServiceError::Install(_) => "INSTALL_FAILED",
         HelperServiceError::UnsafeConfig(_) | HelperServiceError::Toml(_) => {
             "HELPER_CONFIG_INVALID"
         }

@@ -108,7 +108,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         result?;
         return Ok(());
     }
-    iran_split_helper::run_named_pipe(&config_path(&arguments)).await?;
+    let result = iran_split_helper::run_named_pipe(&config_path(&arguments)).await;
+    if let Err(error) = &result {
+        iran_split_helper::persist_install_error(&error.to_string());
+    }
+    result?;
     Ok(())
 }
 

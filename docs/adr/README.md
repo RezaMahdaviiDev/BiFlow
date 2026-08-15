@@ -39,3 +39,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0033](./0033-windows-platform-backend.md)          | Windows platform backend                    | Accepted   |
 | [0034](./0034-bidirectional-route-pins.md)          | Bidirectional route pins                    | Accepted   |
 | [0035](./0035-windows-reveal-and-helper-install.md) | Windows debug.log reveal and helper install | Accepted   |
+| [0036](./0036-windows-helper-task-xml.md)           | Windows helper scheduled task XML           | Accepted   |

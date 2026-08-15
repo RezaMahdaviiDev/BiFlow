@@ -108,7 +108,8 @@ pub async fn install_helper(app: &AppHandle) -> Result<InstallHelperResult, Stri
 
 async fn wait_for_helper(app: &AppHandle) -> Result<(), String> {
     let services = services(app)?;
-    for _ in 0..50 {
+    let attempts = if cfg!(target_os = "windows") { 80 } else { 50 };
+    for _ in 0..attempts {
         match services.backend.helper_status().await {
             Ok(status) if status.available => {
                 services.engine.refresh_health().await;
@@ -125,6 +126,15 @@ async fn wait_for_helper(app: &AppHandle) -> Result<(), String> {
         trace_route = "ui->tauri_command->install_helper->wait",
         "installed helper did not become ready"
     );
+    #[cfg(target_os = "windows")]
+    {
+        let detail = windows_install_detail(&[]);
+        if !detail.is_empty() {
+            return Err(format!(
+                "the helper was installed but is not reachable yet: {detail}"
+            ));
+        }
+    }
     Err("the helper was installed but is not reachable yet".into())
 }
 

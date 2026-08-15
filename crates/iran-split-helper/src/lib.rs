@@ -45,6 +45,11 @@ pub enum HelperServiceError {
     BinaryIntegrity,
     #[error("Mihomo process failed: {0}")]
     Process(String),
+    /// Shown verbatim in the install dialog, so it carries no prefix of its
+    /// own: the desktop already frames it as an installation failure, and
+    /// `Process` would blame Mihomo for a Task Scheduler problem.
+    #[error("{0}")]
+    Install(String),
     #[error("IPC failed: {0}")]
     Protocol(#[from] iran_split_ipc::ProtocolError),
 }
@@ -527,6 +532,90 @@ fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// Task Scheduler XML with separate `Command` and `Arguments`.
+///
+/// `schtasks /TR "\"exe\" --config \"file\""` stores one string that `/Create`
+/// and `/Run` both accept without ever starting a process, which is what left
+/// the named pipe missing (`os error 2`) while the install reported success.
+///
+/// `ExecutionTimeLimit` is `PT0S` so the scheduler never treats the helper as
+/// an overdue job, and `AllowHardTerminate` stays `true` so `schtasks /End` can
+/// actually stop it — a reinstall has to release the running helper's own image
+/// before it can copy over it.
+#[cfg(any(windows, test))]
+#[must_use]
+pub(crate) fn scheduled_task_xml(helper: &Path, config: &Path) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n\
+         <Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n\
+           <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>\n\
+           <Principals><Principal id=\"Author\"><UserId>S-1-5-18</UserId>\
+           <RunLevel>HighestAvailable</RunLevel></Principal></Principals>\n\
+           <Settings>\n\
+             <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n\
+             <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n\
+             <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n\
+             <AllowHardTerminate>true</AllowHardTerminate>\n\
+             <StartWhenAvailable>true</StartWhenAvailable>\n\
+             <AllowStartOnDemand>true</AllowStartOnDemand>\n\
+             <Enabled>true</Enabled>\n\
+             <Hidden>true</Hidden>\n\
+             <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n\
+           </Settings>\n\
+           <Actions Context=\"Author\"><Exec>\n\
+             <Command>{}</Command>\n\
+             <Arguments>--config \"{}\"</Arguments>\n\
+           </Exec></Actions>\n\
+         </Task>\n",
+        xml_escape(&helper.to_string_lossy()),
+        xml_escape(&config.to_string_lossy()),
+    )
+}
+
+#[cfg(any(windows, test))]
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Reads back one `Exec` field from `schtasks /Query /XML`. The element names
+/// are the same on every locale, unlike the `/FO LIST` field labels.
+#[cfg(any(windows, test))]
+pub(crate) fn xml_element(xml: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let start = xml.find(&open)? + open.len();
+    let end = xml[start..].find(&close)? + start;
+    Some(xml[start..end].trim().to_owned())
+}
+
+/// `schtasks` writes UTF-16 LE when its output is a pipe rather than a console,
+/// and not always with a BOM. Interleaved NULs are the giveaway: they are valid
+/// UTF-8, so a plain lossy decode returns a string that no element name can be
+/// found in — which would read as "the task stored no action at all".
+#[cfg(any(windows, test))]
+pub(crate) fn decode_console_output(bytes: &[u8]) -> String {
+    let payload = bytes.strip_prefix(&[0xFF, 0xFE]);
+    if payload.is_none() && !bytes.contains(&0) {
+        return String::from_utf8_lossy(bytes).into_owned();
+    }
+    let units: Vec<u16> = payload
+        .unwrap_or(bytes)
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+/// `install.log` is read back one line at a time, so a message that kept its
+/// newlines would be reported as whichever fragment happened to land last.
+#[cfg(any(windows, test))]
+pub(crate) fn single_line(message: &str) -> String {
+    message.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn copy_new_file(source: &Path, destination: &Path) -> Result<(), HelperServiceError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -768,6 +857,85 @@ tun_name = "clash-iran"
         assert!(source.contains("clap_install_error_message"));
         assert!(source.contains("persist_install_error"));
         assert!(source.contains("error.exit()"));
+        assert!(source.contains("run_named_pipe"));
+    }
+
+    #[test]
+    fn scheduled_task_xml_keeps_command_and_arguments_separate() {
+        let helper = Path::new(r"C:\ProgramData\iran-split\bin\iran-split-helper.exe");
+        let config = Path::new(r"C:\ProgramData\iran-split\helper.toml");
+        let xml = scheduled_task_xml(helper, config);
+        assert!(
+            xml.contains(r"<Command>C:\ProgramData\iran-split\bin\iran-split-helper.exe</Command>")
+        );
+        assert!(xml.contains(
+            r#"<Arguments>--config "C:\ProgramData\iran-split\helper.toml"</Arguments>"#
+        ));
+        assert!(xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(xml.contains("S-1-5-18"));
+        assert!(!xml.contains("/TR"));
+        // `false` here would make `schtasks /End` a no-op, and a reinstall
+        // cannot copy over a helper that is still holding its own image.
+        assert!(xml.contains("<AllowHardTerminate>true</AllowHardTerminate>"));
+    }
+
+    #[test]
+    fn windows_install_registers_the_task_from_xml() {
+        let source = include_str!("windows.rs");
+        assert!(source.contains("/XML"));
+        assert!(source.contains("scheduled_task_xml"));
+        assert!(source.contains("wait_until_pipe_ready"));
+        assert!(!source.contains("\"/TR\""));
+    }
+
+    /// `fs::metadata` fails on an NPFS object, so an `exists` check would report
+    /// every healthy helper as missing and fail the install it just completed.
+    #[test]
+    fn pipe_readiness_opens_the_pipe_instead_of_stat_ing_it() {
+        let source = include_str!("windows.rs");
+        assert!(source.contains("fn pipe_is_serving"));
+        assert!(!source.contains("Path::new(PIPE_NAME).exists()"));
+        assert!(source.contains("ERROR_FILE_NOT_FOUND"));
+        assert!(source.contains("fn stop_previous_helper"));
+        assert!(source.contains("fn stored_task_action"));
+    }
+
+    #[test]
+    fn xml_element_reads_the_stored_exec_action() {
+        let xml = "<Actions><Exec><Command>C:\\bin\\helper.exe</Command>\
+                   <Arguments>--config \"C:\\helper.toml\"</Arguments></Exec></Actions>";
+        assert_eq!(
+            xml_element(xml, "Command").as_deref(),
+            Some(r"C:\bin\helper.exe")
+        );
+        assert_eq!(
+            xml_element(xml, "Arguments").as_deref(),
+            Some(r#"--config "C:\helper.toml""#)
+        );
+        assert_eq!(xml_element(xml, "Missing"), None);
+    }
+
+    #[test]
+    fn console_output_is_decoded_from_utf16_when_schtasks_writes_it() {
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in "ERROR: access is denied.".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert_eq!(decode_console_output(&utf16), "ERROR: access is denied.");
+        assert_eq!(
+            decode_console_output(&utf16[2..]),
+            "ERROR: access is denied."
+        );
+        assert_eq!(decode_console_output(b"ERROR: plain"), "ERROR: plain");
+    }
+
+    #[test]
+    fn install_log_messages_collapse_to_one_line() {
+        assert_eq!(
+            single_line("first\r\n  second\tthird\n"),
+            "first second third"
+        );
+        assert_eq!(single_line("  "), "");
     }
 
     #[test]

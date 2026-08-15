@@ -4,9 +4,12 @@ use iran_split_ipc::{HelloReply, HelperCommand, HelperError, HelperReply, PROTOC
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    os::windows::process::CommandExt,
     path::{Path, PathBuf},
     process::Command,
     sync::Arc,
+    thread,
+    time::{Duration, Instant},
 };
 use tokio::net::windows::named_pipe::NamedPipeServer;
 use tracing::{info, warn};
@@ -15,6 +18,16 @@ const PIPE_NAME: &str = r"\\.\pipe\iran-split-helper-v1";
 const INSTALL_ROOT: &str = r"C:\ProgramData\iran-split";
 const INSTALL_LOG: &str = r"C:\ProgramData\iran-split\install.log";
 const TASK_NAME: &str = "BiFlowHelper";
+const PIPE_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const PIPE_READY_POLL: Duration = Duration::from_millis(100);
+/// A previous helper keeps its own `.exe` locked, so a reinstall waits this
+/// long for the ended task to exit before copying over it.
+const HELPER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// `ERROR_FILE_NOT_FOUND`: the pipe object does not exist yet.
+const ERROR_FILE_NOT_FOUND: i32 = 2;
+/// `CREATE_NO_WINDOW`: the elevated installer is a GUI-subsystem binary
+/// (ADR 0030), so a console child would flash a window over the UI.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// Records why a GUI-subsystem helper install died. `Start-Process -Verb RunAs`
 /// cannot capture elevated stderr, so the desktop reads this file after a
@@ -24,7 +37,7 @@ pub fn persist_install_error(message: &str) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Err(error) = fs::write(path, format!("{message}\n")) {
+    if let Err(error) = fs::write(path, format!("{}\n", super::single_line(message))) {
         warn!(
             event = "helper.install_log_failed",
             section = "helper_install",
@@ -105,6 +118,7 @@ fn install_inner(
     fs::create_dir_all(&bin)?;
     fs::create_dir_all(root.join("runtime"))?;
     fs::create_dir_all(staging_dir)?;
+    stop_previous_helper();
     super::copy_file_unless_same(&helper_src, &helper_dest)?;
     super::copy_file_unless_same(mihomo_src, &mihomo_dest)?;
     let mihomo_sha256 = sha256_file(&mihomo_dest)?;
@@ -131,16 +145,7 @@ fn install_inner(
             settings.tun_name
         ),
     )?;
-    let tr = format!(
-        "\"{}\" --config \"{}\"",
-        helper_dest.display(),
-        config_dest.display()
-    );
-    run_schtasks(&[
-        "/Create", "/TN", TASK_NAME, "/SC", "ONSTART", "/RU", "SYSTEM", "/RL", "HIGHEST", "/F",
-        "/TR", &tr,
-    ])?;
-    run_schtasks(&["/Run", "/TN", TASK_NAME])?;
+    register_and_start_task(&helper_dest, &config_dest)?;
     info!(
         event = "helper.installed",
         section = "helper_install",
@@ -150,6 +155,93 @@ fn install_inner(
         "windows helper scheduled task installed"
     );
     Ok(())
+}
+
+fn register_and_start_task(helper: &Path, config: &Path) -> Result<(), HelperServiceError> {
+    let xml_path = PathBuf::from(INSTALL_ROOT).join("helper-task.xml");
+    write_utf16_le_bom(&xml_path, &super::scheduled_task_xml(helper, config))?;
+    let xml = xml_path.to_string_lossy();
+    run_schtasks(&["/Create", "/TN", TASK_NAME, "/XML", xml.as_ref(), "/F"])?;
+    run_schtasks(&["/Run", "/TN", TASK_NAME])?;
+    wait_until_pipe_ready()
+}
+
+fn write_utf16_le_bom(path: &Path, text: &str) -> Result<(), HelperServiceError> {
+    let mut bytes = Vec::with_capacity(2 + text.len().saturating_mul(2));
+    bytes.extend_from_slice(&[0xFF, 0xFE]);
+    for unit in text.encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    fs::write(path, bytes)?;
+    Ok(())
+}
+
+fn wait_until_pipe_ready() -> Result<(), HelperServiceError> {
+    let deadline = Instant::now() + PIPE_READY_TIMEOUT;
+    while Instant::now() < deadline {
+        if pipe_is_serving() {
+            return Ok(());
+        }
+        thread::sleep(PIPE_READY_POLL);
+    }
+    Err(HelperServiceError::Install(pipe_missing_reason()))
+}
+
+/// `Path::exists` cannot answer this. `\\.\pipe\…` is an NPFS object with no
+/// file attributes to query, so `fs::metadata` fails while the helper is
+/// serving perfectly well and every install would time out. Open the pipe the
+/// way the desktop does instead, and treat only `ERROR_FILE_NOT_FOUND` as "not
+/// created yet": a busy instance or a denied ACL still proves it exists, and
+/// failing open keeps an unexpected error from condemning a healthy install.
+fn pipe_is_serving() -> bool {
+    match fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(PIPE_NAME)
+    {
+        Ok(_) => true,
+        Err(error) => error.raw_os_error() != Some(ERROR_FILE_NOT_FOUND),
+    }
+}
+
+/// The scheduled helper records its own startup failure in `install.log`, so
+/// prefer that. When it is empty the process never ran at all, and the action
+/// Task Scheduler actually stored is the one fact that separates a malformed
+/// registration from a helper that started and died.
+fn pipe_missing_reason() -> String {
+    let logged = fs::read_to_string(INSTALL_LOG).unwrap_or_default();
+    if let Some(line) = logged.lines().map(str::trim).find(|line| !line.is_empty()) {
+        return line.to_owned();
+    }
+    format!(
+        "scheduled task ran but never opened the helper pipe; action: {}",
+        stored_task_action()
+    )
+}
+
+fn stored_task_action() -> String {
+    let Ok(output) = schtasks(&["/Query", "/TN", TASK_NAME, "/XML"]) else {
+        return "unreadable".into();
+    };
+    let xml = super::decode_console_output(&output.stdout);
+    let Some(command) = super::xml_element(&xml, "Command") else {
+        return "absent".into();
+    };
+    let arguments = super::xml_element(&xml, "Arguments").unwrap_or_default();
+    super::single_line(&format!("{command} {arguments}"))
+}
+
+/// A reinstall cannot copy over a helper that is still running — Windows
+/// answers `ERROR_SHARING_VIOLATION` for the executable's own image — so end
+/// the previous task and let it release the file first.
+fn stop_previous_helper() {
+    if run_schtasks(&["/End", "/TN", TASK_NAME]).is_err() {
+        return;
+    }
+    let deadline = Instant::now() + HELPER_STOP_TIMEOUT;
+    while Instant::now() < deadline && pipe_is_serving() {
+        thread::sleep(PIPE_READY_POLL);
+    }
 }
 
 /// Stops and removes the packaged Windows helper task.
@@ -173,15 +265,29 @@ fn uninstall_inner() -> Result<(), HelperServiceError> {
     }
 }
 
+fn schtasks(args: &[&str]) -> Result<std::process::Output, HelperServiceError> {
+    Ok(Command::new("schtasks")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?)
+}
+
 fn run_schtasks(args: &[&str]) -> Result<(), HelperServiceError> {
-    let output = Command::new("schtasks").args(args).output()?;
+    let output = schtasks(args)?;
     if output.status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(HelperServiceError::Process(
-        stderr.chars().take(512).collect(),
-    ))
+    // `schtasks` reports refusals on stderr but falls back to stdout for a few
+    // of them, so an empty stderr must not become an empty reason.
+    let mut detail = super::single_line(&super::decode_console_output(&output.stderr));
+    if detail.is_empty() {
+        detail = super::single_line(&super::decode_console_output(&output.stdout));
+    }
+    Err(HelperServiceError::Install(format!(
+        "schtasks {} failed: {}",
+        args.first().copied().unwrap_or_default(),
+        detail.chars().take(300).collect::<String>()
+    )))
 }
 
 fn sha256_file(path: &Path) -> Result<String, HelperServiceError> {
