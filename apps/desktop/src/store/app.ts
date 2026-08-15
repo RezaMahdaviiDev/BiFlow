@@ -47,6 +47,7 @@ interface AppStore {
   cancel: () => Promise<void>;
   saveSettings: (draft: AppConfig) => Promise<void>;
   addRule: (input: string) => Promise<void>;
+  pinRoute: (input: string, outbound: "direct" | "vpn") => Promise<void>;
   removeRule: (input: string) => Promise<void>;
   refreshRules: () => Promise<void>;
   syncCloudRules: () => Promise<void>;
@@ -173,6 +174,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ actionPending: true, error: null });
     try {
       const next = await desktop.addRule(input, rules.revision);
+      set({ rules: next, actionPending: false });
+    } catch (error) {
+      set({ actionPending: false, error: message(error) });
+    }
+  },
+  pinRoute: async (input, outbound) => {
+    const rules = get().rules;
+    if (!rules) return;
+    set({ actionPending: true, error: null });
+    try {
+      const next = await desktop.pinRoute(input, outbound, rules.revision);
       set({ rules: next, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });

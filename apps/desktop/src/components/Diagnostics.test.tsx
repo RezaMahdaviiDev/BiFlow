@@ -81,9 +81,9 @@ describe("Diagnostics", () => {
   });
 
   it("offers to move a VPN host to direct and re-tests it", async () => {
-    const addRule = vi.fn().mockResolvedValue(undefined);
-    const previous = useAppStore.getState().addRule;
-    useAppStore.setState({ addRule });
+    const pinRoute = vi.fn().mockResolvedValue(undefined);
+    const previous = useAppStore.getState().pinRoute;
+    useAppStore.setState({ pinRoute });
     try {
       render(<Diagnostics report={null} />);
       await userEvent.type(
@@ -98,13 +98,88 @@ describe("Diagnostics", () => {
       });
       await userEvent.click(move);
 
-      expect(addRule).toHaveBeenCalledWith("openai.com");
+      expect(pinRoute).toHaveBeenCalledWith("openai.com", "direct");
       const { desktop } = await import("../api/desktop");
       // The result is re-tested so the card reflects the new routing.
       expect(desktop.testRoute).toHaveBeenCalledTimes(2);
     } finally {
-      useAppStore.setState({ addRule: previous });
+      useAppStore.setState({ pinRoute: previous });
     }
+  });
+
+  it("offers Add to VPN for a host the bundled Iran list keeps direct", async () => {
+    const pinRoute = vi.fn().mockResolvedValue(undefined);
+    const previous = useAppStore.getState().pinRoute;
+    useAppStore.setState({ pinRoute });
+    const { desktop } = await import("../api/desktop");
+    vi.mocked(desktop.testRoute).mockResolvedValueOnce({
+      target: "iran.ir",
+      outbound: "direct",
+      reason: "iran_domain",
+      matched_rule: "ir",
+      reachable: true,
+      tested_at: new Date().toISOString(),
+    });
+    try {
+      render(<Diagnostics report={null} />);
+      await userEvent.type(
+        screen.getByLabelText("Test IP or domain"),
+        "iran.ir",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Test flow" }));
+
+      const move = await screen.findByRole("button", {
+        name: /Add iran\.ir to VPN/,
+      });
+      await userEvent.click(move);
+      expect(pinRoute).toHaveBeenCalledWith("iran.ir", "vpn");
+    } finally {
+      useAppStore.setState({ pinRoute: previous });
+    }
+  });
+
+  it("never offers to move a private or local address onto the VPN", async () => {
+    const { desktop } = await import("../api/desktop");
+    vi.mocked(desktop.testRoute).mockResolvedValueOnce({
+      target: "192.168.1.1",
+      outbound: "direct",
+      reason: "private_or_local",
+      matched_rule: "192.168.1.1",
+      reachable: true,
+      tested_at: new Date().toISOString(),
+    });
+    render(<Diagnostics report={null} />);
+    await userEvent.type(
+      screen.getByLabelText("Test IP or domain"),
+      "192.168.1.1",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Test flow" }));
+    await screen.findByText(/192\.168\.1\.1 → DIRECT/);
+
+    expect(screen.queryByRole("button", { name: /to VPN/ })).toBeNull();
+    expect(screen.getByText(/always stay direct/)).toBeVisible();
+  });
+
+  it("offers Add to VPN when a custom rule is what made it direct", async () => {
+    const { desktop } = await import("../api/desktop");
+    vi.mocked(desktop.testRoute).mockResolvedValueOnce({
+      target: "example.ir",
+      outbound: "direct",
+      reason: "custom_rule",
+      matched_rule: "example.ir",
+      reachable: true,
+      tested_at: new Date().toISOString(),
+    });
+    render(<Diagnostics report={null} />);
+    await userEvent.type(
+      screen.getByLabelText("Test IP or domain"),
+      "example.ir",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Test flow" }));
+
+    expect(
+      await screen.findByRole("button", { name: /Add example\.ir to VPN/ }),
+    ).toBeVisible();
   });
 
   it("restarts Hiddify on clean state and reports the backup", async () => {

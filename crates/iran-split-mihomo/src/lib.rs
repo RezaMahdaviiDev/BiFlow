@@ -51,6 +51,8 @@ pub struct RuntimePaths {
     pub iran_networks: PathBuf,
     pub custom_direct_domains: PathBuf,
     pub custom_direct_ips: PathBuf,
+    pub custom_vpn_domains: PathBuf,
+    pub custom_vpn_ips: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +196,11 @@ pub fn generate_config(
         "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve".into(),
         "IP-CIDR6,::1/128,DIRECT,no-resolve".into(),
         "RULE-SET,private-networks,DIRECT,no-resolve".into(),
+        // User VPN pins sit above every DIRECT source except loopback and LAN,
+        // so an exact host can be forced through the tunnel even when the
+        // bundled Iran list would keep it direct.
+        "RULE-SET,custom-vpn-domains,VPN".into(),
+        "RULE-SET,custom-vpn-ips,VPN,no-resolve".into(),
         "RULE-SET,custom-direct-domains,DIRECT".into(),
         "RULE-SET,custom-direct-ips,DIRECT,no-resolve".into(),
         "RULE-SET,iran-domains,DIRECT".into(),
@@ -321,6 +328,8 @@ fn providers() -> BTreeMap<String, RuleProvider> {
             "custom-direct-domains.txt",
         ),
         ("custom-direct-ips", "ipcidr", "custom-direct-ips.txt"),
+        ("custom-vpn-domains", "domain", "custom-vpn-domains.txt"),
+        ("custom-vpn-ips", "ipcidr", "custom-vpn-ips.txt"),
     ]
     .into_iter()
     .map(|(name, behavior, path)| {
@@ -337,7 +346,12 @@ fn providers() -> BTreeMap<String, RuleProvider> {
     .collect()
 }
 
-const OPTIONAL_RULE_PROVIDERS: [&str; 2] = ["custom-direct-domains", "custom-direct-ips"];
+const OPTIONAL_RULE_PROVIDERS: [&str; 4] = [
+    "custom-direct-domains",
+    "custom-direct-ips",
+    "custom-vpn-domains",
+    "custom-vpn-ips",
+];
 
 fn summarize_rule_providers(value: &Value) -> Result<ProviderStatus, MihomoError> {
     let providers = value
@@ -727,6 +741,8 @@ mod tests {
             iran_networks: "/runtime/iran-networks.txt".into(),
             custom_direct_domains: "/runtime/custom-direct-domains.txt".into(),
             custom_direct_ips: "/runtime/custom-direct-ips.txt".into(),
+            custom_vpn_domains: "/runtime/custom-vpn-domains.txt".into(),
+            custom_vpn_ips: "/runtime/custom-vpn-ips.txt".into(),
         }
     }
 
@@ -735,6 +751,7 @@ mod tests {
         let app = AppConfig::default();
         let custom = DirectRulesDocument {
             revision: 1,
+            vpn_rules: Vec::new(),
             rules: vec![DirectRule {
                 target: DirectTarget::Ip(Ipv4Addr::new(203, 0, 113, 1).into()),
                 resolved_ips: vec![],

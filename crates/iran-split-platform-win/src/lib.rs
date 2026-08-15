@@ -677,6 +677,8 @@ impl PlatformBackend for WindowsBackend {
             iran_networks: PathBuf::from("iran-networks.txt"),
             custom_direct_domains: PathBuf::from("custom-direct-domains.txt"),
             custom_direct_ips: PathBuf::from("custom-direct-ips.txt"),
+            custom_vpn_domains: PathBuf::from("custom-vpn-domains.txt"),
+            custom_vpn_ips: PathBuf::from("custom-vpn-ips.txt"),
         };
         let rules_path = self.paths.user_data_dir.join("direct-rules.json");
         let custom: DirectRulesDocument = if rules_path.exists() {
@@ -969,9 +971,22 @@ fn write_custom_provider_files(
     staging: &Path,
     document: &DirectRulesDocument,
 ) -> Result<(), CoreError> {
+    let (domains, ips) = split_targets(&document.rules);
+    write_lines(&staging.join("custom-direct-domains.txt"), &domains)?;
+    write_lines(&staging.join("custom-direct-ips.txt"), &ips)?;
+    // The VPN providers are always written, empty included: Mihomo fails to
+    // load a rule-set whose file is missing, and an empty one is treated as
+    // ready by OPTIONAL_RULE_PROVIDERS.
+    let (vpn_domains, vpn_ips) = split_targets(&document.vpn_rules);
+    write_lines(&staging.join("custom-vpn-domains.txt"), &vpn_domains)?;
+    write_lines(&staging.join("custom-vpn-ips.txt"), &vpn_ips)?;
+    Ok(())
+}
+
+fn split_targets(rules: &[iran_split_rules::DirectRule]) -> (Vec<String>, Vec<String>) {
     let mut domains = Vec::new();
     let mut ips = Vec::new();
-    for rule in &document.rules {
+    for rule in rules {
         match &rule.target {
             DirectTarget::Domain(domain) => domains.push(domain.clone()),
             DirectTarget::Ip(address) => ips.push(host_cidr(*address)),
@@ -984,9 +999,7 @@ fn write_custom_provider_files(
     domains.dedup();
     ips.sort();
     ips.dedup();
-    write_lines(&staging.join("custom-direct-domains.txt"), &domains)?;
-    write_lines(&staging.join("custom-direct-ips.txt"), &ips)?;
-    Ok(())
+    (domains, ips)
 }
 
 fn host_cidr(address: IpAddr) -> String {
@@ -1106,7 +1119,10 @@ mod tests {
             .map(|entry| entry.expect("entry").file_name())
             .collect::<std::collections::HashSet<_>>();
 
-        assert_eq!(names.len(), 6);
+        // config.yaml, three bundled providers, two custom-direct, two custom-vpn.
+        assert_eq!(names.len(), 8);
+        assert!(names.contains(std::ffi::OsStr::new("custom-vpn-domains.txt")));
+        assert!(names.contains(std::ffi::OsStr::new("custom-vpn-ips.txt")));
         assert!(names.contains(std::ffi::OsStr::new("config.yaml")));
         let config = fs::read_to_string(root.join("config.yaml")).expect("config");
         assert!(config.contains("path: private.txt"));

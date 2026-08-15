@@ -18,6 +18,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   const { t } = useTranslation();
   const {
     addRule,
+    pinRoute,
     removeRule,
     refreshRules,
     syncCloudRules,
@@ -28,13 +29,13 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   const [search, setSearch] = useState("");
   const [route, setRoute] = useState<RouteTestResult | null>(null);
   const [testing, setTesting] = useState(false);
-  const filtered = useMemo(
-    () =>
-      rules.rules.filter((rule) =>
-        rule.target.value.includes(search.trim().toLowerCase()),
-      ),
-    [rules.rules, search],
-  );
+  const filtered = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return [
+      ...rules.rules.map((rule) => ({ rule, outbound: "direct" as const })),
+      ...rules.vpn_rules.map((rule) => ({ rule, outbound: "vpn" as const })),
+    ].filter(({ rule }) => rule.target.value.includes(needle));
+  }, [rules.rules, rules.vpn_rules, search]);
   const synced = cloudRules?.last_synced_at
     ? new Date(cloudRules.last_synced_at).toLocaleString()
     : t("neverSynced");
@@ -157,19 +158,52 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
           </p>
         ) : (
           <ul className="divide-y divide-ink/10">
-            {filtered.map((rule) => (
+            {filtered.map(({ rule, outbound }) => (
               <li
-                key={`${rule.target.kind}:${rule.target.value}`}
+                key={`${outbound}:${rule.target.kind}:${rule.target.value}`}
                 className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
-                  <p className="truncate font-semibold">{rule.target.value}</p>
+                  <p className="flex items-center gap-2 truncate font-semibold">
+                    <span className="truncate">{rule.target.value}</span>
+                    <span
+                      className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold ${
+                        outbound === "vpn"
+                          ? "bg-brand/10 text-brand"
+                          : "bg-success/10 text-success"
+                      }`}
+                    >
+                      {outbound === "vpn" ? t("vpn") : t("direct")}
+                    </span>
+                  </p>
                   <p className="mt-1 truncate text-sm text-muted">
                     {rule.target.kind.toUpperCase()} ·{" "}
                     {rule.resolved_ips.join(", ") || "No resolved IP"}
                   </p>
                 </div>
                 <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={actionPending}
+                    onClick={() =>
+                      void pinRoute(
+                        rule.target.value,
+                        outbound === "vpn" ? "direct" : "vpn",
+                      )
+                    }
+                    className="rounded-lg border border-ink/15 p-2 text-muted hover:text-brand"
+                    aria-label={
+                      outbound === "vpn"
+                        ? t("moveToDirect", { target: rule.target.value })
+                        : t("moveToVpn", { target: rule.target.value })
+                    }
+                  >
+                    {outbound === "vpn" ? (
+                      <Minus size={18} aria-hidden />
+                    ) : (
+                      <Plus size={18} aria-hidden />
+                    )}
+                  </button>
                   <button
                     type="button"
                     disabled={testing}
@@ -224,6 +258,10 @@ export function FlowResult({
   const { t } = useTranslation();
   const vpn = route.outbound === "vpn";
   const destination = vpn ? "direct" : "vpn";
+  // Both directions are real pins now, so the only host that cannot move is a
+  // loopback/LAN/CGNAT address: forcing those through the tunnel would cut the
+  // machine off from its own network.
+  const actionable = route.reason !== "private_or_local";
   return (
     <div
       className={`rounded-2xl border p-4 ${vpn ? "border-brand/20 bg-brand/5" : "border-success/20 bg-success/5"}`}
@@ -233,7 +271,7 @@ export function FlowResult({
         <p className="min-w-0 break-all font-semibold">
           {route.target} → {route.outbound.toUpperCase()}
         </p>
-        {onMove ? (
+        {onMove && actionable ? (
           <button
             type="button"
             disabled={moving}
@@ -257,6 +295,9 @@ export function FlowResult({
         {route.reason.replaceAll("_", " ")} · matched{" "}
         {route.matched_rule ?? "none"}
       </p>
+      {onMove && !actionable ? (
+        <p className="mt-2 text-sm text-muted">{t("moveLocalUnavailable")}</p>
+      ) : null}
     </div>
   );
 }

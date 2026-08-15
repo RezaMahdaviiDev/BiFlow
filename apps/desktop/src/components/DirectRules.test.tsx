@@ -28,6 +28,14 @@ const rules: DirectRulesDocument = {
       refreshed_at: new Date().toISOString(),
     },
   ],
+  vpn_rules: [
+    {
+      target: { kind: "domain", value: "pinned.ir" },
+      resolved_ips: ["203.0.113.20"],
+      created_at: new Date().toISOString(),
+      refreshed_at: new Date().toISOString(),
+    },
+  ],
 };
 
 describe("DirectRules", () => {

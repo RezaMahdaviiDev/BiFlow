@@ -11,6 +11,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
@@ -121,6 +122,10 @@ pub struct DirectRule {
 pub struct DirectRulesDocument {
     pub revision: u64,
     pub rules: Vec<DirectRule>,
+    /// Hosts forced onto the VPN even when the Iran list would keep them
+    /// direct. `default` so documents written before exclusions still load.
+    #[serde(default)]
+    pub vpn_rules: Vec<DirectRule>,
 }
 
 #[async_trait]
@@ -205,6 +210,19 @@ fn unique_addresses(values: impl IntoIterator<Item = IpAddr>) -> Vec<IpAddr> {
     values
 }
 
+/// A pin is a UI action, and `DohResolver` needs two HTTPS round trips to
+/// Cloudflare. Those stall for seconds while the tunnel is coming up or the
+/// upstream is unreachable, so the pin is applied on a budget: the rule always
+/// matches by name, and `refresh()` fills the addresses in later.
+const RESOLVE_BUDGET: Duration = Duration::from_secs(3);
+
+async fn resolve_within_budget(resolver: &dyn Resolver, domain: &str) -> Vec<IpAddr> {
+    match tokio::time::timeout(RESOLVE_BUDGET, resolver.resolve(domain)).await {
+        Ok(Ok(addresses)) => addresses,
+        Ok(Err(_)) | Err(_) => Vec::new(),
+    }
+}
+
 #[derive(Clone)]
 pub struct RuleManager {
     path: PathBuf,
@@ -245,7 +263,7 @@ impl RuleManager {
         self.document.lock().await.clone()
     }
 
-    /// Adds an exact domain or IP rule at the expected document revision.
+    /// Adds an exact domain or IP rule to the DIRECT list.
     ///
     /// # Errors
     ///
@@ -256,32 +274,82 @@ impl RuleManager {
         input: &str,
         expected_revision: u64,
     ) -> Result<DirectRulesDocument, RuleError> {
+        self.pin(input, Outbound::Direct, expected_revision).await
+    }
+
+    /// Pins an exact domain or IP to one outbound.
+    ///
+    /// A host belongs to at most one user list, so pinning it to an outbound
+    /// drops any pin it had on the other one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError`] for invalid input, a private or local address
+    /// pinned to the VPN, DNS resolution failure, a revision conflict, or an
+    /// atomic persistence failure.
+    pub async fn pin(
+        &self,
+        input: &str,
+        outbound: Outbound,
+        expected_revision: u64,
+    ) -> Result<DirectRulesDocument, RuleError> {
         let target = DirectTarget::parse(input)?;
+        if outbound == Outbound::Vpn {
+            // Loopback, LAN, and CGNAT have to stay direct or the machine
+            // loses its own network while the tunnel is up.
+            if let DirectTarget::Ip(address) = &target {
+                if is_private_or_local(*address) {
+                    return Err(RuleError::InvalidRule(
+                        "private, loopback, and carrier-grade NAT addresses cannot be sent through the VPN".into(),
+                    ));
+                }
+            }
+        }
         let resolved_ips = match &target {
-            DirectTarget::Domain(domain) => self.resolver.resolve(domain).await?,
+            DirectTarget::Domain(domain) => {
+                resolve_within_budget(self.resolver.as_ref(), domain).await
+            }
             DirectTarget::Ip(address) => vec![*address],
         };
         let mut document = self.document.lock().await;
         ensure_revision(&document, expected_revision)?;
-        if document.rules.iter().any(|rule| rule.target == target) {
+
+        let already_pinned = match outbound {
+            Outbound::Direct => &document.rules,
+            Outbound::Vpn => &document.vpn_rules,
+        }
+        .iter()
+        .any(|rule| rule.target == target);
+        let other = match outbound {
+            Outbound::Direct => &mut document.vpn_rules,
+            Outbound::Vpn => &mut document.rules,
+        };
+        let dropped = other.len();
+        other.retain(|rule| rule.target != target);
+        let moved = other.len() != dropped;
+        if already_pinned && !moved {
             return Ok(document.clone());
         }
-        let now = Utc::now();
-        document.rules.push(DirectRule {
-            target,
-            resolved_ips,
-            created_at: now,
-            refreshed_at: Some(now),
-        });
-        document
-            .rules
-            .sort_by_key(|rule| rule.target.display_value());
+        if !already_pinned {
+            let now = Utc::now();
+            let list = match outbound {
+                Outbound::Direct => &mut document.rules,
+                Outbound::Vpn => &mut document.vpn_rules,
+            };
+            list.push(DirectRule {
+                target,
+                resolved_ips,
+                created_at: now,
+                refreshed_at: Some(now),
+            });
+            list.sort_by_key(|rule| rule.target.display_value());
+        }
         document.revision = document.revision.saturating_add(1);
         publish(&self.path, &document)?;
         Ok(document.clone())
     }
 
-    /// Removes an exact domain or IP rule at the expected document revision.
+    /// Removes an exact domain or IP pin from whichever list holds it.
     ///
     /// # Errors
     ///
@@ -295,9 +363,10 @@ impl RuleManager {
         let target = DirectTarget::parse(input)?;
         let mut document = self.document.lock().await;
         ensure_revision(&document, expected_revision)?;
-        let original_length = document.rules.len();
+        let before = document.rules.len() + document.vpn_rules.len();
         document.rules.retain(|rule| rule.target != target);
-        if document.rules.len() != original_length {
+        document.vpn_rules.retain(|rule| rule.target != target);
+        if document.rules.len() + document.vpn_rules.len() != before {
             document.revision = document.revision.saturating_add(1);
             publish(&self.path, &document)?;
         }
@@ -315,6 +384,7 @@ impl RuleManager {
             document
                 .rules
                 .iter()
+                .chain(document.vpn_rules.iter())
                 .filter_map(|rule| match &rule.target {
                     DirectTarget::Domain(domain) => Some(domain.clone()),
                     DirectTarget::Ip(_) => None,
@@ -327,7 +397,10 @@ impl RuleManager {
         }
         let now = Utc::now();
         let mut document = self.document.lock().await;
-        for rule in &mut document.rules {
+        let DirectRulesDocument {
+            rules, vpn_rules, ..
+        } = &mut *document;
+        for rule in rules.iter_mut().chain(vpn_rules.iter_mut()) {
             if let DirectTarget::Domain(domain) = &rule.target {
                 if let Some((_, addresses)) = resolved.iter().find(|(name, _)| name == domain) {
                     rule.resolved_ips.clone_from(addresses);
@@ -374,6 +447,7 @@ pub enum Outbound {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionReason {
+    VpnRule,
     CustomRule,
     PrivateOrLocal,
     IranDomain,
@@ -390,6 +464,8 @@ pub struct RouteDecision {
 
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet {
+    vpn_domains: HashSet<String>,
+    vpn_ips: HashSet<IpAddr>,
     custom_domains: HashSet<String>,
     custom_ips: HashSet<IpAddr>,
     iran_domains: HashSet<String>,
@@ -418,6 +494,17 @@ impl RuleSet {
             }
             set.custom_ips.extend(rule.resolved_ips.iter().copied());
         }
+        for rule in &custom.vpn_rules {
+            match &rule.target {
+                DirectTarget::Domain(domain) => {
+                    set.vpn_domains.insert(domain.clone());
+                }
+                DirectTarget::Ip(address) => {
+                    set.vpn_ips.insert(*address);
+                }
+            }
+            set.vpn_ips.extend(rule.resolved_ips.iter().copied());
+        }
         set
     }
 
@@ -432,6 +519,13 @@ impl RuleSet {
             return Ok(self.decide_ip(address));
         }
         let domain = normalize_domain(target)?;
+        if self.vpn_domains.contains(&domain) {
+            return Ok(RouteDecision {
+                outbound: Outbound::Vpn,
+                reason: DecisionReason::VpnRule,
+                matched_rule: Some(domain),
+            });
+        }
         if self.custom_domains.contains(&domain) {
             return Ok(direct(DecisionReason::CustomRule, Some(domain)));
         }
@@ -450,11 +544,20 @@ impl RuleSet {
     }
 
     fn decide_ip(&self, address: IpAddr) -> RouteDecision {
-        if self.custom_ips.contains(&address) {
-            return direct(DecisionReason::CustomRule, Some(address.to_string()));
-        }
+        // Loopback and LAN stay direct even under an exclusion; the generated
+        // config keeps private-networks ahead of the VPN rule sets too.
         if is_private_or_local(address) {
             return direct(DecisionReason::PrivateOrLocal, Some(address.to_string()));
+        }
+        if self.vpn_ips.contains(&address) {
+            return RouteDecision {
+                outbound: Outbound::Vpn,
+                reason: DecisionReason::VpnRule,
+                matched_rule: Some(address.to_string()),
+            };
+        }
+        if self.custom_ips.contains(&address) {
+            return direct(DecisionReason::CustomRule, Some(address.to_string()));
         }
         if let Some(network) = self
             .iran_cidrs
@@ -522,6 +625,137 @@ mod tests {
         assert!(normalize_domain("*.example.com").is_err());
     }
 
+    fn iran_rule_set(custom: &DirectRulesDocument) -> RuleSet {
+        RuleSet::from_sources(custom, ["ir".to_owned()], [])
+    }
+
+    #[tokio::test]
+    async fn a_vpn_pin_overrides_the_bundled_iran_list_and_survives_removal() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+
+        // iran.ir is DIRECT only because the bundled list carries `ir`.
+        let decision = iran_rule_set(&manager.list().await)
+            .decide("iran.ir")
+            .expect("decide");
+        assert_eq!(decision.outbound, Outbound::Direct);
+        assert_eq!(decision.reason, DecisionReason::IranDomain);
+
+        let pinned = manager
+            .pin("iran.ir", Outbound::Vpn, 0)
+            .await
+            .expect("pin vpn");
+        assert_eq!(pinned.vpn_rules.len(), 1);
+        let decision = iran_rule_set(&pinned).decide("iran.ir").expect("decide");
+        assert_eq!(decision.outbound, Outbound::Vpn);
+        assert_eq!(decision.reason, DecisionReason::VpnRule);
+
+        // Removing the pin must restore the bundled decision, not delete `ir`.
+        let cleared = manager
+            .remove("iran.ir", pinned.revision)
+            .await
+            .expect("remove");
+        assert!(cleared.vpn_rules.is_empty());
+        assert_eq!(
+            iran_rule_set(&cleared)
+                .decide("iran.ir")
+                .expect("decide")
+                .reason,
+            DecisionReason::IranDomain
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_lives_in_exactly_one_user_list() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+
+        let direct = manager.add("example.com", 0).await.expect("direct");
+        assert_eq!(direct.rules.len(), 1);
+        assert_eq!(
+            iran_rule_set(&direct)
+                .decide("example.com")
+                .expect("decide")
+                .reason,
+            DecisionReason::CustomRule
+        );
+
+        let moved = manager
+            .pin("example.com", Outbound::Vpn, direct.revision)
+            .await
+            .expect("vpn");
+        assert!(moved.rules.is_empty(), "the direct pin must be dropped");
+        assert_eq!(moved.vpn_rules.len(), 1);
+
+        let back = manager
+            .pin("example.com", Outbound::Direct, moved.revision)
+            .await
+            .expect("direct again");
+        assert_eq!(back.rules.len(), 1);
+        assert!(back.vpn_rules.is_empty());
+    }
+
+    #[tokio::test]
+    async fn private_and_loopback_addresses_cannot_be_pinned_to_the_vpn() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+
+        // The rejection happens before the revision check, so revision 0 holds
+        // for every address here.
+        for address in ["192.168.1.1", "127.0.0.1", "100.64.0.1", "::1"] {
+            let error = manager
+                .pin(address, Outbound::Vpn, 0)
+                .await
+                .expect_err(address);
+            assert!(matches!(error, RuleError::InvalidRule(_)), "{address}");
+        }
+        // The same address is still allowed on the direct list.
+        let pinned = manager
+            .pin("192.168.1.1", Outbound::Direct, 0)
+            .await
+            .expect("direct");
+        assert_eq!(pinned.rules.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_resolves_domains_on_both_lists() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+        let direct = manager.add("direct.example", 0).await.expect("direct");
+        let pinned = manager
+            .pin("vpn.example", Outbound::Vpn, direct.revision)
+            .await
+            .expect("vpn");
+
+        let refreshed = manager.refresh().await.expect("refresh");
+        assert_eq!(refreshed.rules.len(), 1);
+        assert_eq!(refreshed.vpn_rules.len(), 1);
+        for rule in refreshed.rules.iter().chain(refreshed.vpn_rules.iter()) {
+            assert!(rule.refreshed_at.is_some());
+            assert_eq!(
+                rule.resolved_ips,
+                vec!["203.0.113.9".parse::<IpAddr>().expect("ip")]
+            );
+        }
+        let _ = pinned;
+    }
+
     #[tokio::test]
     async fn mutations_are_revisioned_and_atomic() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -542,6 +776,7 @@ mod tests {
     fn precedence_is_custom_then_private_then_iran_then_proxy() {
         let custom = DirectRulesDocument {
             revision: 1,
+            vpn_rules: Vec::new(),
             rules: vec![DirectRule {
                 target: DirectTarget::Domain("example.com".into()),
                 resolved_ips: vec![],

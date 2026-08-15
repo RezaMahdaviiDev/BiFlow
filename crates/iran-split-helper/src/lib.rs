@@ -20,13 +20,15 @@ use uuid::Uuid;
 
 const PROCESS_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_LOG_ENTRIES: usize = 2_000;
-const GENERATION_FILES: [&str; 6] = [
+const GENERATION_FILES: [&str; 8] = [
     "config.yaml",
     "private.txt",
     "iran-domains.txt",
     "iran-networks.txt",
     "custom-direct-domains.txt",
     "custom-direct-ips.txt",
+    "custom-vpn-domains.txt",
+    "custom-vpn-ips.txt",
 ];
 
 #[derive(Debug, Error)]
@@ -187,8 +189,24 @@ impl Supervisor {
             ));
         }
         let source_root = self.settings.staging_dir.join(generation_id.to_string());
-        let source_root_canonical = source_root.canonicalize()?;
-        let staging_canonical = self.settings.staging_dir.canonicalize()?;
+        // A bare `?` here reports only "cannot find the file specified", which
+        // hides the one fact that matters: which staging root the helper was
+        // configured with. That path is recorded in helper.toml at install
+        // time, so it is wrong for every later run whenever the installing
+        // process saw a different profile than the app does now.
+        let source_root_canonical = source_root.canonicalize().map_err(|error| {
+            HelperServiceError::InvalidGeneration(format!(
+                "staged generation {} is unreadable at {}: {error}",
+                generation_id,
+                source_root.display()
+            ))
+        })?;
+        let staging_canonical = self.settings.staging_dir.canonicalize().map_err(|error| {
+            HelperServiceError::InvalidGeneration(format!(
+                "configured staging directory {} is unreadable: {error}",
+                self.settings.staging_dir.display()
+            ))
+        })?;
         if !source_root_canonical.starts_with(&staging_canonical) {
             return Err(HelperServiceError::InvalidGeneration(
                 "generation escaped staging directory".into(),

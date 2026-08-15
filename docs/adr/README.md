@@ -37,3 +37,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0031](./0031-local-github-actions-mirror.md)   | Local GitHub Actions mirror              | Accepted   |
 | [0032](./0032-fresh-hiddify-start.md)           | Fresh Hiddify start                      | Accepted   |
 | [0033](./0033-windows-platform-backend.md)      | Windows platform backend                 | Accepted   |
+| [0034](./0034-bidirectional-route-pins.md)      | Bidirectional route pins                 | Accepted   |

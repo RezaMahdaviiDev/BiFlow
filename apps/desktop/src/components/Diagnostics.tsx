@@ -28,7 +28,7 @@ import { FlowResult } from "./DirectRules";
 
 export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
   const { t } = useTranslation();
-  const { runDiagnostics, actionPending, addRule, removeRule } = useAppStore();
+  const { runDiagnostics, actionPending, pinRoute } = useAppStore();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [level, setLevel] = useState("all");
   const [exported, setExported] = useState<ExportResult | null>(null);
@@ -155,9 +155,9 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
               onMove={(host, destination) => {
                 setMoving(true);
                 setMoveError(null);
-                const applied =
-                  destination === "direct" ? addRule(host) : removeRule(host);
-                void applied
+                // pinRoute moves the host between the two user lists; the
+                // re-test then shows the outbound it actually resolves to.
+                void pinRoute(host, destination)
                   .then(() => desktop.testRoute(host))
                   .then(setRoute)
                   .catch((error: unknown) =>

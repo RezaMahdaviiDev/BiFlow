@@ -167,6 +167,36 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByText(/Included:.*debug\.log/)).toBeVisible();
   });
 
+  test("pins an Iran host onto the VPN and back to direct", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    await page.getByLabel("Test IP or domain").fill("https://www.rade.ir/");
+    await page.getByRole("button", { name: "Test flow" }).click();
+    // The bundled Iran list keeps every .ir host direct until it is pinned.
+    await expect(page.getByText("www.rade.ir → DIRECT")).toBeVisible();
+
+    await page
+      .getByRole("button", { name: /Add www\.rade\.ir to VPN/ })
+      .click();
+    await expect(page.getByText("www.rade.ir → VPN")).toBeVisible();
+
+    // The pin shows on the rules page with a VPN badge.
+    await page.getByRole("button", { name: "Direct rules" }).click();
+    const pinned = page
+      .getByRole("listitem")
+      .filter({ hasText: "www.rade.ir" });
+    await expect(pinned).toContainText("VPN");
+
+    // Moving it back leaves the bundled list to decide again.
+    await pinned.getByRole("button", { name: /to direct/ }).click();
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    await page.getByLabel("Test IP or domain").fill("www.rade.ir");
+    await page.getByRole("button", { name: "Test flow" }).click();
+    await expect(page.getByText("www.rade.ir → DIRECT")).toBeVisible();
+  });
+
   test("restarts Hiddify on clean state from diagnostics", async ({ page }) => {
     await openFresh(page);
     await page.getByRole("button", { name: "Diagnostics" }).click();

@@ -102,6 +102,10 @@ const resources = {
       testFlowButton: "Test flow",
       moveToDirect: "Add {{target}} to direct",
       moveToVpn: "Add {{target}} to VPN",
+      moveLocalUnavailable:
+        "Loopback, LAN, and carrier-grade NAT addresses always stay direct. Sending them through the tunnel would cut this machine off from its own network.",
+      pinnedDirect: "Pinned direct",
+      pinnedVpn: "Pinned to VPN",
       freshHiddify: "Fresh Hiddify start",
       freshHiddifyHelp:
         "Use this when Hiddify opens on a blank window. It closes Hiddify, moves the generated configs, runtime folder, and logs into a backup, then starts Hiddify again. Your subscriptions and settings are kept.",
@@ -234,6 +238,10 @@ const resources = {
       testFlowButton: "آزمایش مسیر",
       moveToDirect: "افزودن {{target}} به مستقیم",
       moveToVpn: "افزودن {{target}} به وی‌پی‌ان",
+      moveLocalUnavailable:
+        "نشانی‌های لوپ‌بک، شبکهٔ محلی و NAT اپراتور همیشه مستقیم می‌مانند. عبور دادن آن‌ها از تونل، این دستگاه را از شبکهٔ خودش جدا می‌کند.",
+      pinnedDirect: "سنجاق‌شده به مستقیم",
+      pinnedVpn: "سنجاق‌شده به وی‌پی‌ان",
       freshHiddify: "شروع تازهٔ هیدیفای",
       freshHiddifyHelp:
         "وقتی هیدیفای با صفحهٔ سفید باز می‌شود از این استفاده کنید. هیدیفای بسته می‌شود، پیکربندی‌های ساخته‌شده، پوشهٔ اجرا و لاگ‌ها به پشتیبان منتقل می‌شوند و هیدیفای دوباره اجرا می‌شود. اشتراک‌ها و تنظیمات شما حفظ می‌شود.",

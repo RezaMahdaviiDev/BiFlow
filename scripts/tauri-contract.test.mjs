@@ -193,6 +193,8 @@ describe("Tauri frontend contract", () => {
       "iran-networks.txt",
       "custom-direct-domains.txt",
       "custom-direct-ips.txt",
+      "custom-vpn-domains.txt",
+      "custom-vpn-ips.txt",
       "config.yaml",
     ];
     for (const name of providers) {

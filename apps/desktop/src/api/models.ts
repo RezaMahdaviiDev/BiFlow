@@ -127,6 +127,8 @@ export interface DirectRule {
 export interface DirectRulesDocument {
   revision: number;
   rules: DirectRule[];
+  /** Hosts forced onto the VPN ahead of the bundled Iran list. */
+  vpn_rules: DirectRule[];
 }
 
 export interface RouteTestResult {

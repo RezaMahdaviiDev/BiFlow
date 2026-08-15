@@ -85,6 +85,15 @@ export const desktop = {
       ? invoke("remove_direct_rule", { input, expectedRevision })
       : mockApi.removeRule(input, expectedRevision);
   },
+  pinRoute(
+    input: string,
+    outbound: "direct" | "vpn",
+    expectedRevision: number,
+  ): Promise<DirectRulesDocument> {
+    return native
+      ? invoke("pin_route", { input, outbound, expectedRevision })
+      : mockApi.pinRoute(input, outbound, expectedRevision);
+  },
   refreshRules(): Promise<DirectRulesDocument> {
     return native ? invoke("refresh_direct_rules") : mockApi.refreshRules();
   },

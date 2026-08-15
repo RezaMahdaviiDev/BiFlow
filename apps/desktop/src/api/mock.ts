@@ -105,6 +105,7 @@ function initialDirectRules(): DirectRulesDocument {
         refreshed_at: now(),
       },
     ],
+    vpn_rules: [],
   };
 }
 
@@ -231,6 +232,32 @@ let settings = initialSettings();
 let directRules = initialDirectRules();
 let cloudRules = initialCloudRules();
 let dependencies = initialDependencies();
+
+function isPrivateHost(value: string): boolean {
+  return (
+    /^127\./.test(value) ||
+    /^10\./.test(value) ||
+    /^192\.168\./.test(value) ||
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(value) ||
+    value === "::1"
+  );
+}
+
+function route(
+  target: string,
+  outbound: "direct" | "vpn",
+  reason: string,
+  matched: string,
+): RouteTestResult {
+  return {
+    target,
+    outbound,
+    reason,
+    matched_rule: matched,
+    reachable: true,
+    tested_at: now(),
+  };
+}
 
 function mockNetworkStatus(): NetworkStatus {
   return {
@@ -525,22 +552,42 @@ export const mockApi = {
     return structuredClone(directRules);
   },
   async addRule(input: string, expectedRevision: number) {
+    return mockApi.pinRoute(input, "direct", expectedRevision);
+  },
+  async pinRoute(
+    input: string,
+    outbound: "direct" | "vpn",
+    expectedRevision: number,
+  ) {
     if (expectedRevision !== directRules.revision)
       throw new Error("Rules changed in another window");
     const value = input.trim().toLowerCase();
     const kind = /^\d{1,3}(\.\d{1,3}){3}$/.test(value) ? "ip" : "domain";
+    if (outbound === "vpn" && isPrivateHost(value)) {
+      throw new Error(
+        "private, loopback, and carrier-grade NAT addresses cannot be sent through the VPN",
+      );
+    }
     const rule: DirectRule = {
       target: { kind, value },
       resolved_ips: kind === "ip" ? [value] : ["203.0.113.9"],
       created_at: now(),
       refreshed_at: now(),
     };
-    if (!directRules.rules.some((item) => item.target.value === value)) {
-      directRules = {
-        revision: directRules.revision + 1,
-        rules: [...directRules.rules, rule],
-      };
-    }
+    // A host lives in exactly one user list, matching RuleManager::pin.
+    const rules = directRules.rules.filter(
+      (item) => item.target.value !== value,
+    );
+    const vpnRules = directRules.vpn_rules.filter(
+      (item) => item.target.value !== value,
+    );
+    if (outbound === "direct") rules.push(rule);
+    else vpnRules.push(rule);
+    directRules = {
+      revision: directRules.revision + 1,
+      rules,
+      vpn_rules: vpnRules,
+    };
     return structuredClone(directRules);
   },
   async removeRule(input: string, expectedRevision: number) {
@@ -549,16 +596,18 @@ export const mockApi = {
     directRules = {
       revision: directRules.revision + 1,
       rules: directRules.rules.filter((item) => item.target.value !== input),
+      vpn_rules: directRules.vpn_rules.filter(
+        (item) => item.target.value !== input,
+      ),
     };
     return structuredClone(directRules);
   },
   async refreshRules() {
+    const touch = (item: DirectRule) => ({ ...item, refreshed_at: now() });
     directRules = {
       revision: directRules.revision + 1,
-      rules: directRules.rules.map((item) => ({
-        ...item,
-        refreshed_at: now(),
-      })),
+      rules: directRules.rules.map(touch),
+      vpn_rules: directRules.vpn_rules.map(touch),
     };
     return structuredClone(directRules);
   },
@@ -628,17 +677,21 @@ export const mockApi = {
     return undefined;
   },
   async testRoute(target: string): Promise<RouteTestResult> {
-    const direct =
-      target.endsWith(".ir") ||
-      directRules.rules.some((item) => item.target.value === target);
-    return {
-      target,
-      outbound: direct ? "direct" : "vpn",
-      reason: direct ? "custom_or_iran_rule" : "default_proxy",
-      matched_rule: direct ? target : "MATCH",
-      reachable: true,
-      tested_at: now(),
-    };
+    // Mirrors RuleSet::decide: private, then VPN pins, then direct pins, then
+    // the bundled Iran list, then MATCH.
+    if (isPrivateHost(target)) {
+      return route(target, "direct", "private_or_local", target);
+    }
+    if (directRules.vpn_rules.some((item) => item.target.value === target)) {
+      return route(target, "vpn", "vpn_rule", target);
+    }
+    if (directRules.rules.some((item) => item.target.value === target)) {
+      return route(target, "direct", "custom_rule", target);
+    }
+    if (target.endsWith(".ir")) {
+      return route(target, "direct", "iran_domain", "ir");
+    }
+    return route(target, "vpn", "default_proxy", "MATCH");
   },
   async diagnostics(): Promise<DiagnosticsReport> {
     const steps: DiagnosticStep[] = [

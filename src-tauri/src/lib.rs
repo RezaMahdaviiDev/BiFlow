@@ -671,6 +671,38 @@ async fn list_direct_rules(app: AppHandle) -> Result<DirectRulesDocument, String
 }
 
 #[tauri::command]
+async fn pin_route(
+    input: String,
+    outbound: String,
+    expected_revision: u64,
+    app: AppHandle,
+) -> Result<DirectRulesDocument, String> {
+    diagnostics::trace_action("rules", "tauri_command", "pin_route", async move {
+        let outbound = match outbound.as_str() {
+            "direct" => iran_split_rules::Outbound::Direct,
+            "vpn" => iran_split_rules::Outbound::Vpn,
+            other => return Err(format!("unknown outbound: {other}")),
+        };
+        info!(
+            expected_revision,
+            outbound = ?outbound,
+            input_kind = if input.parse::<std::net::IpAddr>().is_ok() {
+                "ip"
+            } else {
+                "domain"
+            },
+            "pinning a host to one outbound without logging its value"
+        );
+        services(&app)?
+            .rules
+            .pin(&input, outbound, expected_revision)
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+#[tauri::command]
 async fn add_direct_rule(
     input: String,
     expected_revision: u64,
@@ -1981,6 +2013,7 @@ pub fn run() {
             save_settings,
             list_direct_rules,
             add_direct_rule,
+            pin_route,
             remove_direct_rule,
             refresh_direct_rules,
             get_cloud_rules_status,

@@ -19,6 +19,12 @@ const BIFLOW_REPOSITORY: &str = "devlifeX/BiFlow";
 const BIFLOW_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/devlifeX/BiFlow/main/resources/rules/manifest.json";
 const BIFLOW_RAW_PREFIX: &str = "https://raw.githubusercontent.com/devlifeX/BiFlow/";
+/// `manifest.commit` records the **upstream** `Chocolate4U` revision the rules
+/// were taken from, not a `BiFlow` commit, so it cannot address a file in this
+/// repository — using it here 404s. The snapshot files sit beside the manifest
+/// on the same branch, and every file is still pinned by the `SHA-256` recorded
+/// in the manifest, so integrity does not depend on the ref.
+const BIFLOW_SNAPSHOT_REF: &str = "main";
 const META_FILE: &str = "sync-meta.json";
 const MAX_BYTES: usize = 20 * 1024 * 1024;
 
@@ -87,8 +93,8 @@ fn manifest_fetch_url() -> &'static str {
     BIFLOW_MANIFEST_URL
 }
 
-fn snapshot_file_url(commit: &str, file: &str) -> String {
-    format!("{BIFLOW_RAW_PREFIX}{commit}/resources/rules/{file}")
+fn snapshot_file_url(_commit: &str, file: &str) -> String {
+    format!("{BIFLOW_RAW_PREFIX}{BIFLOW_SNAPSHOT_REF}/resources/rules/{file}")
 }
 
 #[must_use]
