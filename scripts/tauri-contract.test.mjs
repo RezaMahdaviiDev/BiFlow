@@ -54,18 +54,21 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /emit\("update-progress"/);
   });
 
-  it("fixes the main window at 1120x760 without resize", () => {
+  it("keeps a resizable main window with a 390x640 minimum", () => {
     const config = JSON.parse(
       readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
     );
     const window = config.app.windows[0];
     assert.equal(window.width, 1120);
     assert.equal(window.height, 760);
-    assert.equal(window.minWidth, 1120);
-    assert.equal(window.minHeight, 760);
-    assert.equal(window.maxWidth, 1120);
-    assert.equal(window.maxHeight, 760);
-    assert.equal(window.resizable, false);
+    assert.equal(window.minWidth, 390);
+    assert.equal(window.minHeight, 640);
+    assert.equal(window.maxWidth, undefined);
+    assert.equal(window.maxHeight, undefined);
+    assert.equal(window.resizable, true);
+    const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    assert.match(rust, /restore_main_window_size/);
+    assert.match(rust, /persist_main_window_size/);
   });
 
   it("assigns the default application icon to the tray builder", () => {

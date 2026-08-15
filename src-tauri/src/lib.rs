@@ -6,6 +6,7 @@ mod hiddify_reset;
 mod network;
 mod traffic;
 mod version;
+mod window_state;
 
 use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
@@ -28,7 +29,7 @@ use std::{
 use tauri::{
     menu::{Menu, MenuEvent, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, Runtime, Window, WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, Runtime, Size, Window, WindowEvent,
 };
 use tauri_plugin_updater::UpdaterExt;
 use tracing::{error, info, warn};
@@ -2217,6 +2218,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     let mut snapshots = services.engine.subscribe();
     let engine = Arc::clone(&services.engine);
     let health_engine = Arc::clone(&services.engine);
+    let data_dir = services.paths.data.clone();
     let handle = app.handle().clone();
     app.manage(services);
     tauri::async_runtime::spawn(async move {
@@ -2276,6 +2278,9 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             }
         }
     });
+    if let Some(window) = app.get_webview_window("main") {
+        restore_main_window_size(&window, &data_dir);
+    }
     setup_tray(app).map_err(|cause| {
         error!(
             event = "startup.tray_failed",
@@ -2298,7 +2303,103 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+fn restore_main_window_size<R: Runtime>(window: &tauri::WebviewWindow<R>, data: &Path) {
+    let saved = window_state::load(&data.join("window-size.json"));
+    let (work_width, work_height) = monitor_work_area_logical(window)
+        .unwrap_or((window_state::DEFAULT_WIDTH, window_state::DEFAULT_HEIGHT));
+    let size = window_state::clamp_logical(saved.width, saved.height, work_width, work_height);
+    if let Err(cause) = window.set_min_size(Some(Size::Logical(LogicalSize::new(
+        window_state::MIN_WIDTH,
+        window_state::MIN_HEIGHT,
+    )))) {
+        warn!(
+            event = "window.min_size_failed",
+            section = "window",
+            initiator = "restore_main_window_size",
+            cause = %cause,
+            trace_route = "tauri_setup->window.set_min_size",
+            "minimum window size could not be applied"
+        );
+    }
+    if let Err(cause) = window.set_size(Size::Logical(LogicalSize::new(size.width, size.height))) {
+        warn!(
+            event = "window.size_restore_failed",
+            section = "window",
+            initiator = "restore_main_window_size",
+            cause = %cause,
+            trace_route = "tauri_setup->window.set_size",
+            "saved window size could not be applied"
+        );
+    } else {
+        info!(
+            event = "window.size_restored",
+            section = "window",
+            initiator = "restore_main_window_size",
+            cause = "persisted_size",
+            trace_route = "tauri_setup->window.set_size",
+            "main window size restored within the current work area"
+        );
+    }
+}
+
+fn monitor_work_area_logical<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Option<(f64, f64)> {
+    let monitor = window.current_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    if scale <= 0.0 {
+        return None;
+    }
+    let work = monitor.work_area();
+    Some((
+        f64::from(work.size.width) / scale,
+        f64::from(work.size.height) / scale,
+    ))
+}
+
+fn persist_main_window_size<R: Runtime>(window: &Window<R>) {
+    let Ok(services) = services(window.app_handle()) else {
+        return;
+    };
+    let Ok(physical) = window.inner_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if scale <= 0.0 {
+        return;
+    }
+    let logical = physical.to_logical::<f64>(scale);
+    let (work_width, work_height) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| {
+            let scale = monitor.scale_factor();
+            if scale <= 0.0 {
+                return None;
+            }
+            let work = monitor.work_area();
+            Some((
+                f64::from(work.size.width) / scale,
+                f64::from(work.size.height) / scale,
+            ))
+        })
+        .unwrap_or((window_state::DEFAULT_WIDTH, window_state::DEFAULT_HEIGHT));
+    let size = window_state::clamp_logical(logical.width, logical.height, work_width, work_height);
+    if let Err(cause) = window_state::save(&services.paths.data.join("window-size.json"), size) {
+        warn!(
+            event = "window.size_persist_failed",
+            section = "window",
+            initiator = "persist_main_window_size",
+            cause = %cause,
+            trace_route = "window_control->window_size_file",
+            "window size could not be written"
+        );
+    }
+}
+
 fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    if let WindowEvent::Resized(_) = event {
+        persist_main_window_size(window);
+    }
     if let WindowEvent::CloseRequested { api, .. } = event {
         info!(
             event = "window.close_requested",

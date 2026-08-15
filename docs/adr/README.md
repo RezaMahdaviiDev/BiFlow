@@ -49,3 +49,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0043](./0043-persistent-traffic-totals.md)              | Persistent traffic totals                   | Accepted   |
 | [0044](./0044-connect-installs-dependencies.md)          | Connect installs required services          | Accepted   |
 | [0045](./0045-square-connection-glow.md)                 | Square connection glow                      | Accepted   |
+| [0046](./0046-persist-window-size.md)                    | Persist window size                         | Accepted   |
