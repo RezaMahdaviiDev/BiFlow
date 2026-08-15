@@ -10,6 +10,7 @@ import type {
   DirectRule,
   DirectRulesDocument,
   ExportResult,
+  FreshStartReport,
   InstallGuide,
   InstallResult,
   LogEntry,
@@ -591,6 +592,18 @@ export const mockApi = {
       installed: true,
       path: `/tmp/biflow/${id}`,
       guide: guideFor(id),
+    };
+  },
+  async freshHiddifyStart(): Promise<FreshStartReport> {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return {
+      data_dir: "/home/user/.local/share/hiddify",
+      backup_dir:
+        "/home/user/.local/share/biflow/backups/hiddify-20260815-120000",
+      cleared: ["configs", "data", "app.log"],
+      preserved: ["db.sqlite", "shared_preferences.json"],
+      stopped: true,
+      started: true,
     };
   },
   async installHelper(): Promise<{ installed: boolean }> {

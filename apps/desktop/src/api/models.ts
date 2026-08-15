@@ -193,6 +193,15 @@ export interface DebugLogStatus {
   size_bytes: number;
 }
 
+export interface FreshStartReport {
+  data_dir: string;
+  backup_dir: string;
+  cleared: string[];
+  preserved: string[];
+  stopped: boolean;
+  started: boolean;
+}
+
 export interface UpdateStatus {
   available: boolean;
   version: string | null;

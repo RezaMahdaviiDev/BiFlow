@@ -100,6 +100,19 @@ const resources = {
       testFlowHelp: "See whether a host would go DIRECT or through the VPN.",
       testFlowPlaceholder: "digikala.com or 5.22.12.1",
       testFlowButton: "Test flow",
+      freshHiddify: "Fresh Hiddify start",
+      freshHiddifyHelp:
+        "Use this when Hiddify opens on a blank window. It closes Hiddify, moves the generated configs, runtime folder, and logs into a backup, then starts Hiddify again. Your subscriptions and settings are kept.",
+      freshHiddifyButton: "Fresh Hiddify start",
+      freshHiddifyConfirm:
+        "Close Hiddify, back up its generated configs and runtime files, and start it again? Your subscriptions and settings are kept.",
+      freshHiddifyDone: "Hiddify restarted on clean runtime state.",
+      freshHiddifyNotStarted:
+        "Hiddify state was cleared but the app did not start.",
+      freshHiddifyCleared: "Moved to backup",
+      freshHiddifyKept: "Kept",
+      freshHiddifyNothing: "nothing to clear",
+      freshHiddifyBackup: "Backup",
       flowResult: "Flow",
       errors: {
         helperUnavailable: "The privileged helper is unavailable.",
@@ -217,6 +230,18 @@ const resources = {
       testFlowHelp: "ببینید میزبان مستقیم می‌رود یا از وی‌پی‌ان.",
       testFlowPlaceholder: "digikala.com یا 5.22.12.1",
       testFlowButton: "آزمایش مسیر",
+      freshHiddify: "شروع تازهٔ هیدیفای",
+      freshHiddifyHelp:
+        "وقتی هیدیفای با صفحهٔ سفید باز می‌شود از این استفاده کنید. هیدیفای بسته می‌شود، پیکربندی‌های ساخته‌شده، پوشهٔ اجرا و لاگ‌ها به پشتیبان منتقل می‌شوند و هیدیفای دوباره اجرا می‌شود. اشتراک‌ها و تنظیمات شما حفظ می‌شود.",
+      freshHiddifyButton: "شروع تازهٔ هیدیفای",
+      freshHiddifyConfirm:
+        "هیدیفای بسته شود، پیکربندی‌های ساخته‌شده و فایل‌های اجرا پشتیبان‌گیری و دوباره اجرا شود؟ اشتراک‌ها و تنظیمات شما حفظ می‌شود.",
+      freshHiddifyDone: "هیدیفای با وضعیت اجرای تمیز دوباره اجرا شد.",
+      freshHiddifyNotStarted: "وضعیت هیدیفای پاک شد اما برنامه اجرا نشد.",
+      freshHiddifyCleared: "منتقل‌شده به پشتیبان",
+      freshHiddifyKept: "نگه‌داشته‌شده",
+      freshHiddifyNothing: "چیزی برای پاک‌کردن نبود",
+      freshHiddifyBackup: "پشتیبان",
       flowResult: "مسیر",
       errors: {
         helperUnavailable: "سرویس کمکی در دسترس نیست.",

@@ -167,6 +167,28 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByText(/Included:.*debug\.log/)).toBeVisible();
   });
 
+  test("restarts Hiddify on clean state from diagnostics", async ({ page }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Fresh Hiddify start", exact: true }),
+    ).toBeVisible();
+
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.getByRole("button", { name: "Fresh Hiddify start" }).click();
+    await expect(
+      page.getByText(/Hiddify restarted on clean runtime state/),
+    ).toHaveCount(0);
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Fresh Hiddify start" }).click();
+    await expect(
+      page.getByText(/Hiddify restarted on clean runtime state/),
+    ).toBeVisible();
+    await expect(page.getByText(/Kept: db\.sqlite/)).toBeVisible();
+    await expect(page.getByText(/Backup: .*hiddify-/)).toBeVisible();
+  });
+
   test("keeps the fixed viewport free of document overflow in English and Persian", async ({
     page,
   }) => {

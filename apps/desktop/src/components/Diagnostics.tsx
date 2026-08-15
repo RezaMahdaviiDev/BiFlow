@@ -8,6 +8,7 @@ import {
   Play,
   RefreshCw,
   Route,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -17,6 +18,7 @@ import type {
   DiagnosticsReport,
   DebugLogStatus,
   ExportResult,
+  FreshStartReport,
   LogEntry,
   RouteTestResult,
 } from "../api/models";
@@ -37,6 +39,9 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
     "refresh" | "reveal" | "delete" | null
   >(null);
   const [logMessage, setLogMessage] = useState<string | null>(null);
+  const [freshStarting, setFreshStarting] = useState(false);
+  const [freshStart, setFreshStart] = useState<FreshStartReport | null>(null);
+  const [freshStartError, setFreshStartError] = useState<string | null>(null);
 
   const refreshDebugLog = () => {
     setLogAction("refresh");
@@ -181,6 +186,78 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
             ))}
           </ol>
         )}
+      </div>
+
+      <div className="rounded-2xl border border-ink/10 bg-surface p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="font-semibold">{t("freshHiddify")}</h2>
+            <p className="mt-1 max-w-prose text-sm text-muted">
+              {t("freshHiddifyHelp")}
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={freshStarting}
+            onClick={() => {
+              if (!window.confirm(t("freshHiddifyConfirm"))) return;
+              setFreshStarting(true);
+              setFreshStart(null);
+              setFreshStartError(null);
+              void desktop
+                .freshHiddifyStart()
+                .then(setFreshStart)
+                .catch((error: unknown) =>
+                  setFreshStartError(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                )
+                .finally(() => setFreshStarting(false));
+            }}
+            className="inline-flex items-center gap-2 rounded-xl border border-ink/15 px-4 py-2.5 font-semibold disabled:opacity-50"
+          >
+            {freshStarting ? (
+              <LoaderCircle className="animate-spin" size={18} aria-hidden />
+            ) : (
+              <Sparkles size={18} aria-hidden />
+            )}
+            {t("freshHiddifyButton")}
+          </button>
+        </div>
+        {freshStart ? (
+          <div
+            className="mt-4 space-y-1 rounded-xl bg-canvas p-3 text-sm"
+            role="status"
+          >
+            <p className="font-medium">
+              {freshStart.started
+                ? t("freshHiddifyDone")
+                : t("freshHiddifyNotStarted")}
+            </p>
+            <p className="text-muted">
+              {t("freshHiddifyCleared")}:{" "}
+              {freshStart.cleared.length > 0
+                ? freshStart.cleared.join(", ")
+                : t("freshHiddifyNothing")}
+            </p>
+            <p className="text-muted">
+              {t("freshHiddifyKept")}: {freshStart.preserved.join(", ")}
+            </p>
+            {freshStart.cleared.length > 0 ? (
+              <p className="min-w-0 break-all font-mono text-xs text-muted">
+                {t("freshHiddifyBackup")}: {freshStart.backup_dir}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {freshStartError ? (
+          <p
+            className="mt-4 rounded-xl bg-canvas p-3 text-sm text-danger"
+            role="alert"
+          >
+            {freshStartError}
+          </p>
+        ) : null}
       </div>
 
       <div className="rounded-2xl border border-ink/10 bg-surface p-4">

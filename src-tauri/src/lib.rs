@@ -1,6 +1,7 @@
 mod deps;
 mod diagnostics;
 mod helper_install;
+mod hiddify_reset;
 mod network;
 mod version;
 
@@ -749,6 +750,17 @@ async fn install_helper(app: AppHandle) -> Result<helper_install::InstallHelperR
     diagnostics::trace_action("helper", "tauri_command", "install_helper", async move {
         helper_install::install_helper(&app).await
     })
+    .await
+}
+
+#[tauri::command]
+async fn fresh_hiddify_start(app: AppHandle) -> Result<hiddify_reset::FreshStartReport, String> {
+    diagnostics::trace_action(
+        "hiddify_reset",
+        "tauri_command",
+        "fresh_hiddify_start",
+        async move { hiddify_reset::fresh_start(&app).await },
+    )
     .await
 }
 
@@ -1827,6 +1839,7 @@ pub fn run() {
             reveal_debug_log,
             delete_debug_log,
             export_support_bundle,
+            fresh_hiddify_start,
             check_for_update,
             install_update,
         ]);

@@ -29,9 +29,10 @@ const MAX_DETAIL_CHARS: usize = 200;
 /// `ERROR_CANCELLED`: the operator refused the UAC prompt.
 #[cfg(target_os = "windows")]
 const UAC_CANCELLED: i32 = 1223;
-/// `CREATE_NO_WINDOW`: keeps the elevation shell from flashing a console.
+/// `CREATE_NO_WINDOW`: keeps a spawned console program from flashing a window
+/// over the GUI (ADR 0030).
 #[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(target_os = "windows")]
 const WINDOWS_PROGRAMDATA_HELPER: &str = r"C:\ProgramData\iran-split\bin\iran-split-helper.exe";
 

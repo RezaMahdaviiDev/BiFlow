@@ -10,6 +10,7 @@ import type {
   DiagnosticsReport,
   DirectRulesDocument,
   ExportResult,
+  FreshStartReport,
   InstallGuide,
   InstallResult,
   LogEntry,
@@ -103,6 +104,9 @@ export const desktop = {
   },
   installHelper(): Promise<{ installed: boolean }> {
     return native ? invoke("install_helper") : mockApi.installHelper();
+  },
+  freshHiddifyStart(): Promise<FreshStartReport> {
+    return native ? invoke("fresh_hiddify_start") : mockApi.freshHiddifyStart();
   },
   getInstallGuide(id: string): Promise<InstallGuide> {
     return native
