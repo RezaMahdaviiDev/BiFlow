@@ -52,7 +52,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   return (
     <section
       aria-labelledby="dashboard-title"
-      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
+      className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto"
     >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>

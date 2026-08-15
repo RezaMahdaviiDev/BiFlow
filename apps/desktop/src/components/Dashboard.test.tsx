@@ -226,4 +226,11 @@ describe("Dashboard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Resume" }));
     expect(useAppStore.getState().actionPending).toBe(true);
   });
+
+  it("scrolls the dashboard section vertically when content overflows", () => {
+    const { container } = render(<Dashboard snapshot={stopped} />);
+    expect(container.querySelector("section")?.className).toMatch(
+      /overflow-y-auto/,
+    );
+  });
 });
