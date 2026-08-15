@@ -150,3 +150,51 @@ select:focus-visible,
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Connection glow: the window border breathes while the stack is live, so the
+   state is readable from across the room without reading the dashboard. The
+   ring is drawn on an inset overlay rather than the shell's own border so it
+   never shifts the fixed 1120x760 layout. */
+.connection-glow::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  border-radius: 0.5rem;
+  border: 2px solid rgb(var(--glow) / 0.85);
+  box-shadow:
+    inset 0 0 12px rgb(var(--glow) / 0.45),
+    0 0 10px rgb(var(--glow) / 0.35);
+  animation: connection-glow-pulse 2.4s ease-in-out infinite;
+}
+
+.connection-glow-active {
+  --glow: var(--success);
+}
+
+.connection-glow-paused {
+  --glow: 217 164 6;
+}
+
+:root[data-theme="dark"] .connection-glow-paused,
+.dark .connection-glow-paused {
+  --glow: 250 204 21;
+}
+
+@keyframes connection-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-glow::after {
+    animation: none;
+    opacity: 0.9;
+  }
+}

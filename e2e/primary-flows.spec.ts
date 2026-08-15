@@ -167,6 +167,39 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByText(/Included:.*debug\.log/)).toBeVisible();
   });
 
+  test("rings the window green while connected and amber while paused", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    const shell = page.locator("[data-connection-glow]");
+    await expect(shell).toHaveAttribute("data-connection-glow", "none");
+
+    const installButtons = page.getByRole("button", {
+      name: "Install",
+      exact: true,
+    });
+    await expect(installButtons).toHaveCount(2);
+    await installButtons.nth(0).click();
+    await expect(installButtons).toHaveCount(1);
+    await installButtons.first().click();
+    await expect(installButtons).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Connect" }).click();
+    await expect(shell).toHaveAttribute("data-connection-glow", "active");
+    await expect(shell).toHaveClass(/connection-glow-active/);
+
+    await page.getByRole("button", { name: "Pause" }).click();
+    await expect(shell).toHaveAttribute("data-connection-glow", "paused");
+    await expect(shell).toHaveClass(/connection-glow-paused/);
+
+    await page.getByRole("button", { name: "Resume" }).click();
+    await expect(shell).toHaveAttribute("data-connection-glow", "active");
+
+    await page.getByRole("button", { name: "Disconnect" }).click();
+    await expect(shell).toHaveAttribute("data-connection-glow", "none");
+    await expect(shell).not.toHaveClass(/connection-glow\b/);
+  });
+
   test("pins an Iran host onto the VPN and back to direct", async ({
     page,
   }) => {

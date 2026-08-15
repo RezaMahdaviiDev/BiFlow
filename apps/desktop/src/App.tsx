@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import logo from "./assets/logo.png";
 import { desktop } from "./api/desktop";
+import type { StackPhase } from "./api/models";
 import { About } from "./components/About";
 import { BasicDashboard } from "./components/BasicDashboard";
 import { Dashboard } from "./components/Dashboard";
@@ -24,6 +25,16 @@ import { Settings } from "./components/Settings";
 import { UiModeSwitch } from "./components/UiModeSwitch";
 import { readUiMode, type UiMode } from "./lib/uiMode";
 import { useAppStore } from "./store/app";
+
+/** Only a live stack lights the border: running is green, paused is amber, and
+ * every stopped or transitional phase leaves the window unringed. */
+function connectionGlow(
+  phase: StackPhase | undefined,
+): "active" | "paused" | null {
+  if (phase === "running") return "active";
+  if (phase === "paused") return "paused";
+  return null;
+}
 
 export function App() {
   const { i18n, t } = useTranslation();
@@ -95,11 +106,14 @@ export function App() {
       ? "mihomo"
       : "hiddify";
 
+  const glow = connectionGlow(store.snapshot?.phase);
+
   return (
     <div
+      data-connection-glow={glow ?? "none"}
       className={`grid h-full overflow-hidden ${
         advanced ? "grid-cols-[15rem_1fr]" : "grid-cols-1"
-      }`}
+      } ${glow ? `connection-glow connection-glow-${glow}` : ""}`}
     >
       {advanced ? (
         <aside className="flex h-full min-h-0 flex-col border-r border-ink/10 bg-surface/85 p-4 backdrop-blur">
