@@ -1,3 +1,4 @@
+mod connect_prep;
 mod deps;
 mod diagnostics;
 mod helper_install;
@@ -653,13 +654,81 @@ fn get_stack_snapshot(app: AppHandle) -> Result<StackSnapshot, String> {
 #[tauri::command]
 async fn start_stack(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("stack", "tauri_command", "start_stack", async move {
-        services(&app)?
-            .engine
-            .start_stack()
-            .await
-            .map_err(|error| error.to_string())
+        start_stack_inner(&app).await
     })
     .await
+}
+
+async fn start_stack_inner<R: Runtime>(app: &AppHandle<R>) -> Result<OperationAccepted, String> {
+    prepare_stack_start(app).await?;
+    services(app)?
+        .engine
+        .start_stack()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn prepare_stack_start<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let services = services(app)?;
+    let helper_ready = connect_prep::helper_is_ready(services.engine.snapshot().helper.phase);
+    let statuses = deps::dependency_status(&services.paths.data);
+    let hiddify = statuses
+        .iter()
+        .any(|item| item.id == "hiddify" && item.installed);
+    let mihomo = statuses
+        .iter()
+        .any(|item| item.id == "mihomo" && item.installed);
+    for requirement in connect_prep::missing_requirements(helper_ready, hiddify, mihomo) {
+        info!(
+            event = "connect.install_required",
+            section = "stack",
+            initiator = "prepare_stack_start",
+            cause = "missing_dependency",
+            trace_route = "start_stack->prepare_stack_start",
+            requirement = requirement.as_str(),
+            "installing a required service before connect"
+        );
+        match requirement {
+            connect_prep::ConnectRequirement::Helper => {
+                helper_install::install_helper(app).await?;
+                services.engine.refresh_health().await;
+                if !connect_prep::helper_is_ready(services.engine.snapshot().helper.phase) {
+                    return Err("privileged helper is still unavailable after installation".into());
+                }
+            }
+            connect_prep::ConnectRequirement::Hiddify => {
+                install_required_dependency(services, deps::DependencyId::Hiddify).await?;
+            }
+            connect_prep::ConnectRequirement::Mihomo => {
+                install_required_dependency(services, deps::DependencyId::Mihomo).await?;
+            }
+        }
+    }
+    services.engine.refresh_health().await;
+    Ok(())
+}
+
+async fn install_required_dependency(
+    services: &AppServices,
+    id: deps::DependencyId,
+) -> Result<(), String> {
+    let result = deps::install_dependency(id, &services.paths.data, &services.paths.dependencies)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !result.installed {
+        return Err(format!("{} installation did not complete", id.as_str()));
+    }
+    let statuses = deps::dependency_status(&services.paths.data);
+    if !statuses
+        .iter()
+        .any(|item| item.id == id.as_str() && item.installed)
+    {
+        return Err(format!(
+            "{} is still missing after installation",
+            id.as_str()
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1868,11 +1937,7 @@ fn connect_from_tray<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = diagnostics::trace_action("stack", "tray_menu", "start_stack", async move {
-            services(&app)?
-                .engine
-                .start_stack()
-                .await
-                .map_err(|error| error.to_string())
+            start_stack_inner(&app).await
         })
         .await;
         if let Err(cause) = result {

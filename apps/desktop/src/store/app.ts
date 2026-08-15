@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { desktop } from "../api/desktop";
+import { missingConnectRequirements } from "../lib/connectRequirements";
 import type {
   AppConfig,
   BootstrapResult,
@@ -78,6 +79,44 @@ function message(error: unknown): string {
   return "An unexpected error occurred";
 }
 
+async function ensureRequiredServices(
+  get: () => AppStore,
+  set: (partial: Partial<AppStore>) => void,
+): Promise<void> {
+  const missing = missingConnectRequirements(
+    get().snapshot,
+    get().dependencies,
+  );
+  for (const id of missing) {
+    if (id === "helper") {
+      set({ installingId: "helper" });
+      await desktop.installHelper();
+      const snapshot = await desktop.getSnapshot();
+      set({ snapshot });
+      if (
+        snapshot.helper.phase === "unavailable" ||
+        snapshot.helper.phase === "error"
+      ) {
+        throw new Error(
+          "privileged helper is still unavailable after installation",
+        );
+      }
+      continue;
+    }
+    set({ installingId: id });
+    const result = await desktop.installDependency(id);
+    const dependencies = await desktop.listDependencies();
+    set({
+      dependencies,
+      installGuide: result.installed ? null : result.guide,
+    });
+    if (!result.installed) {
+      throw new Error(`${id} installation did not complete`);
+    }
+  }
+  set({ installingId: null });
+}
+
 export const useAppStore = create<AppStore>((set, get) => ({
   loading: true,
   actionPending: false,
@@ -135,7 +174,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   toggleConnection: async () => {
     const snapshot = get().snapshot;
     if (!snapshot) return;
-    set({ actionPending: true, error: null });
+    set({ actionPending: true, error: null, installGuide: null });
     try {
       if (
         snapshot.phase === "running" ||
@@ -144,10 +183,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ) {
         await desktop.stop();
       } else {
+        await ensureRequiredServices(get, set);
         await desktop.start();
       }
     } catch (error) {
-      set({ actionPending: false, error: message(error) });
+      set({
+        actionPending: false,
+        installingId: null,
+        error: message(error),
+      });
     }
   },
   pauseConnection: async () => {

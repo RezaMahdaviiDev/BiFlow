@@ -20,6 +20,10 @@ vi.mock("../api/desktop", () => ({
       .fn()
       .mockResolvedValue({ operation_id: "op", already_complete: false }),
     cancel: vi.fn().mockResolvedValue(true),
+    installHelper: vi.fn().mockResolvedValue({ installed: true }),
+    installDependency: vi.fn(),
+    listDependencies: vi.fn(),
+    getSnapshot: vi.fn(),
   },
 }));
 

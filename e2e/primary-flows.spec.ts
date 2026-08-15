@@ -89,6 +89,22 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.locator(".traffic-flow-route")).toHaveCount(0);
   });
 
+  test("connect installs missing apps before starting the stack", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await expect(
+      page.getByRole("button", { name: "Install", exact: true }),
+    ).toHaveCount(2);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Install", exact: true }),
+    ).toHaveCount(0);
+  });
+
   test("installs a missing helper from the advanced dashboard", async ({
     page,
   }) => {

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use tokio::process::Command;
 #[cfg(target_os = "windows")]
 use tracing::warn;
@@ -49,7 +49,7 @@ pub struct InstallHelperResult {
 ///
 /// Returns an error when bundled files are missing, elevation fails, or the
 /// helper does not become reachable.
-pub async fn install_helper(app: &AppHandle) -> Result<InstallHelperResult, String> {
+pub async fn install_helper<R: Runtime>(app: &AppHandle<R>) -> Result<InstallHelperResult, String> {
     let services = services(app)?;
     let resource_root = app
         .path()
@@ -106,7 +106,7 @@ pub async fn install_helper(app: &AppHandle) -> Result<InstallHelperResult, Stri
     Ok(InstallHelperResult { installed: true })
 }
 
-async fn wait_for_helper(app: &AppHandle) -> Result<(), String> {
+async fn wait_for_helper<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let services = services(app)?;
     let attempts = if cfg!(target_os = "windows") { 80 } else { 50 };
     for _ in 0..attempts {

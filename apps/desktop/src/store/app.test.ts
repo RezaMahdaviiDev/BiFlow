@@ -154,10 +154,129 @@ describe("app store", () => {
       operation_id: "op",
       already_complete: false,
     });
-    useAppStore.setState({ snapshot: boot.snapshot, actionPending: false });
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      actionPending: false,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: null,
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: null,
+          path: "/tmp/mihomo",
+        },
+      ],
+    });
     await useAppStore.getState().toggleConnection();
     expect(desktop.start).toHaveBeenCalledOnce();
+    expect(desktop.installHelper).not.toHaveBeenCalled();
+    expect(desktop.installDependency).not.toHaveBeenCalled();
     expect(useAppStore.getState().actionPending).toBe(true);
+  });
+
+  it("installs helper then apps before connecting", async () => {
+    const order: string[] = [];
+    vi.mocked(desktop.installHelper).mockImplementation(async () => {
+      order.push("helper");
+      return { installed: true };
+    });
+    vi.mocked(desktop.getSnapshot).mockResolvedValue({
+      ...boot.snapshot,
+      helper: { phase: "running", message: "ready", since: "now" },
+    });
+    vi.mocked(desktop.installDependency).mockImplementation(async (id) => {
+      order.push(id);
+      return {
+        id,
+        installed: true,
+        path: `/tmp/${id}`,
+        guide: {
+          id,
+          title: id,
+          download_url: "https://example.invalid",
+          steps: [],
+        },
+      };
+    });
+    vi.mocked(desktop.listDependencies).mockResolvedValue([
+      {
+        id: "hiddify",
+        name: "Hiddify",
+        installed: true,
+        version: null,
+        path: "/tmp/hiddify",
+      },
+      {
+        id: "mihomo",
+        name: "Mihomo",
+        installed: true,
+        version: null,
+        path: "/tmp/mihomo",
+      },
+    ]);
+    vi.mocked(desktop.start).mockResolvedValue({
+      operation_id: "op",
+      already_complete: false,
+    });
+    useAppStore.setState({
+      snapshot: {
+        ...boot.snapshot,
+        helper: { phase: "unavailable", message: "missing", since: "now" },
+      },
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: false,
+          version: null,
+          path: null,
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: false,
+          version: null,
+          path: null,
+        },
+      ],
+      actionPending: false,
+    });
+    await useAppStore.getState().toggleConnection();
+    expect(order).toEqual(["helper", "hiddify", "mihomo"]);
+    expect(desktop.start).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().installingId).toBeNull();
+  });
+
+  it("stops before start when a required install fails", async () => {
+    vi.mocked(desktop.installDependency).mockResolvedValue({
+      id: "hiddify",
+      installed: false,
+      path: null,
+      guide: {
+        id: "hiddify",
+        title: "Install Hiddify",
+        download_url: "https://example.invalid",
+        steps: ["Download"],
+      },
+    });
+    vi.mocked(desktop.listDependencies).mockResolvedValue(boot.dependencies);
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      dependencies: boot.dependencies,
+      actionPending: false,
+    });
+    await useAppStore.getState().toggleConnection();
+    expect(desktop.start).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toMatch(/hiddify installation/);
+    expect(useAppStore.getState().installGuide?.id).toBe("hiddify");
+    expect(useAppStore.getState().actionPending).toBe(false);
   });
 
   it("pauses and resumes from a running snapshot", async () => {
