@@ -42,6 +42,8 @@ test.describe("primary BiFlow flows", () => {
     await expect(statusBar).toContainText("Internet connected");
     await expect(statusBar).toContainText("198.51.100.24");
     await expect(statusBar).toContainText("🇮🇷");
+    await expect(statusBar).toContainText("Sent: 1.00 MiB");
+    await expect(statusBar).toContainText("Received: 2.00 MiB");
     await expect(page.getByText("unknown", { exact: true })).toHaveCount(0);
 
     const installButtons = page.getByRole("button", {

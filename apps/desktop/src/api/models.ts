@@ -176,6 +176,11 @@ export interface BootstrapResult {
 
 export type InternetState = "checking" | "online" | "offline";
 
+export interface TrafficTotals {
+  sent: number;
+  received: number;
+}
+
 export interface NetworkStatus {
   state: InternetState;
   public_ip: string | null;

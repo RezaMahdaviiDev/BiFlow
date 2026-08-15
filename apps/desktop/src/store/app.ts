@@ -10,6 +10,7 @@ import type {
   InstallGuide,
   NetworkStatus,
   StackSnapshot,
+  TrafficTotals,
   UpdateProgress,
   UpdateStatus,
 } from "../api/models";
@@ -39,6 +40,8 @@ interface AppStore {
   dependencies: DependencyStatus[];
   networkStatus: NetworkStatus | null;
   networkRefreshing: boolean;
+  trafficTotals: TrafficTotals;
+  trafficRefreshing: boolean;
   diagnostics: DiagnosticsReport | null;
   error: string | null;
   installGuide: InstallGuide | null;
@@ -56,6 +59,7 @@ interface AppStore {
   refreshRules: () => Promise<void>;
   syncCloudRules: () => Promise<void>;
   refreshNetworkStatus: () => Promise<void>;
+  refreshTrafficTotals: () => Promise<void>;
   installDependency: (id: string) => Promise<void>;
   installHelper: () => Promise<void>;
   runDiagnostics: () => Promise<void>;
@@ -87,6 +91,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
   dependencies: [],
   networkStatus: null,
   networkRefreshing: false,
+  trafficTotals: { sent: 0, received: 0 },
+  trafficRefreshing: false,
   diagnostics: null,
   error: null,
   installGuide: null,
@@ -107,9 +113,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
         update: initialUpdateProgress(),
       });
       void get().refreshNetworkStatus();
-      const unsubscribeSnapshot = await desktop.subscribe((snapshot) =>
-        set({ snapshot, actionPending: false }),
-      );
+      void get().refreshTrafficTotals();
+      const unsubscribeSnapshot = await desktop.subscribe((snapshot) => {
+        set({ snapshot, actionPending: false });
+        void get().refreshTrafficTotals();
+      });
       const unsubscribeUpdate = await desktop.subscribeUpdateProgress(
         (progress) => {
           get().applyUpdateProgress(progress);
@@ -225,6 +233,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ cloudRules, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });
+    }
+  },
+  refreshTrafficTotals: async () => {
+    if (get().trafficRefreshing) {
+      return;
+    }
+    set({ trafficRefreshing: true });
+    try {
+      const trafficTotals = await desktop.getTrafficTotals();
+      set({ trafficTotals, trafficRefreshing: false });
+    } catch {
+      set({ trafficRefreshing: false });
     }
   },
   refreshNetworkStatus: async () => {

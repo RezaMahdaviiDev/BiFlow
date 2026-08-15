@@ -91,6 +91,13 @@ export function App() {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void useAppStore.getState().refreshTrafficTotals();
+    }, 2_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   if (store.loading) {
     return (
       <main className="grid h-full place-items-center" aria-busy="true">

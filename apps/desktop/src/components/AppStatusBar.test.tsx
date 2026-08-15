@@ -8,6 +8,7 @@ import { countryFlag } from "./country";
 describe("AppStatusBar", () => {
   it("shows internet, public IP, location, and country flag", () => {
     useAppStore.setState({
+      trafficTotals: { sent: 12_345_678, received: 1_099_511_627_776 },
       networkStatus: {
         state: "online",
         public_ip: "203.0.113.8",
@@ -24,6 +25,8 @@ describe("AppStatusBar", () => {
     expect(screen.getByRole("status")).toHaveTextContent("203.0.113.8");
     expect(screen.getByRole("status")).toHaveTextContent("Tehran");
     expect(screen.getByRole("status")).toHaveTextContent("🇮🇷");
+    expect(screen.getByRole("status")).toHaveTextContent("Sent: 11.77 MiB");
+    expect(screen.getByRole("status")).toHaveTextContent("Received: 1.00 TiB");
     expect(screen.getByRole("status").className).toMatch(/sticky/);
   });
 
@@ -42,11 +45,13 @@ describe("AppStatusBar", () => {
       },
     });
     render(<AppStatusBar />);
-    await userEvent.click(
-      screen.getAllByRole("button", {
-        name: "Refresh connection and IP status",
-      })[0],
-    );
+    const [internet] = screen.getAllByRole("button", {
+      name: "Refresh connection and IP status",
+    });
+    if (!internet) {
+      throw new Error("internet refresh control is missing");
+    }
+    await userEvent.click(internet);
     expect(refreshNetworkStatus).toHaveBeenCalledOnce();
   });
 

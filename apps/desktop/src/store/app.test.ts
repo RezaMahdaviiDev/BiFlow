@@ -19,6 +19,7 @@ vi.mock("../api/desktop", () => ({
     getSnapshot: vi.fn(),
     syncCloudRules: vi.fn(),
     getNetworkStatus: vi.fn(),
+    getTrafficTotals: vi.fn(),
     checkUpdate: vi.fn(),
     installUpdate: vi.fn(),
     openUrl: vi.fn(),
@@ -88,6 +89,8 @@ describe("app store", () => {
       cloudRules: null,
       dependencies: [],
       networkStatus: null,
+      trafficTotals: { sent: 0, received: 0 },
+      trafficRefreshing: false,
       diagnostics: null,
       error: null,
       installGuide: null,
@@ -110,12 +113,40 @@ describe("app store", () => {
       checked_at: "now",
       detail: null,
     });
+    vi.mocked(desktop.getTrafficTotals).mockResolvedValue({
+      sent: 2048,
+      received: 4096,
+    });
     await useAppStore.getState().initialize();
     const state = useAppStore.getState();
     expect(state.loading).toBe(false);
     expect(state.cloudRules?.domain_count).toBe(10);
     expect(state.dependencies[0]?.id).toBe("hiddify");
     expect(desktop.getNetworkStatus).toHaveBeenCalledOnce();
+    expect(desktop.getTrafficTotals).toHaveBeenCalledOnce();
+    expect(state.trafficTotals).toEqual({ sent: 2048, received: 4096 });
+  });
+
+  it("keeps lifetime traffic totals when a later probe fails", async () => {
+    useAppStore.setState({
+      trafficTotals: { sent: 9_000, received: 8_000 },
+      trafficRefreshing: false,
+    });
+    vi.mocked(desktop.getTrafficTotals).mockRejectedValue(
+      new Error("controller offline"),
+    );
+    await useAppStore.getState().refreshTrafficTotals();
+    expect(useAppStore.getState().trafficTotals).toEqual({
+      sent: 9_000,
+      received: 8_000,
+    });
+    expect(useAppStore.getState().trafficRefreshing).toBe(false);
+  });
+
+  it("ignores a second traffic refresh while one is in flight", async () => {
+    useAppStore.setState({ trafficRefreshing: true });
+    await useAppStore.getState().refreshTrafficTotals();
+    expect(desktop.getTrafficTotals).not.toHaveBeenCalled();
   });
 
   it("starts the stack from a stopped snapshot", async () => {

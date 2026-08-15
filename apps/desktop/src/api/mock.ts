@@ -20,6 +20,7 @@ import type {
   StackPhase,
   StackSnapshot,
   UpdateProgress,
+  TrafficTotals,
   UpdateStatus,
   ValidationIssue,
 } from "./models";
@@ -228,6 +229,7 @@ function detectedDependencies(): DependencyStatus[] {
 }
 
 let snapshot = initialSnapshot();
+let trafficTotals: TrafficTotals = { sent: 1_048_576, received: 2_097_152 };
 let settings = initialSettings();
 let directRules = initialDirectRules();
 let cloudRules = initialCloudRules();
@@ -445,6 +447,15 @@ export const mockApi = {
   },
   async getNetworkStatus() {
     return mockNetworkStatus();
+  },
+  async getTrafficTotals(): Promise<TrafficTotals> {
+    if (snapshot.phase === "running" || snapshot.phase === "degraded") {
+      trafficTotals = {
+        sent: trafficTotals.sent + 4_096,
+        received: trafficTotals.received + 8_192,
+      };
+    }
+    return { ...trafficTotals };
   },
   async start(): Promise<OperationAccepted> {
     if (snapshot.phase === "running") {
@@ -797,6 +808,7 @@ export function resetMockState() {
     // jsdom and Playwright always provide web storage.
   }
   snapshot = initialSnapshot();
+  trafficTotals = { sent: 1_048_576, received: 2_097_152 };
   settings = initialSettings();
   directRules = initialDirectRules();
   cloudRules = initialCloudRules();

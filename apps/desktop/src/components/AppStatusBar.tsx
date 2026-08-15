@@ -1,6 +1,14 @@
-import { LoaderCircle, MapPin, Wifi, WifiOff } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  LoaderCircle,
+  MapPin,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { NetworkStatus } from "../api/models";
+import { formatTrafficBytes } from "../lib/formatTraffic";
 import { useAppStore } from "../store/app";
 import { countryFlag } from "./country";
 
@@ -27,6 +35,7 @@ export function AppStatusBar() {
   const refreshNetworkStatus = useAppStore(
     (state) => state.refreshNetworkStatus,
   );
+  const traffic = useAppStore((state) => state.trafficTotals);
   const current: NetworkStatus = status ?? {
     state: "checking",
     public_ip: null,
@@ -86,6 +95,30 @@ export function AppStatusBar() {
             <span>{location}</span>
           </span>
         ) : null}
+        <span
+          className="inline-flex items-center gap-3 font-mono text-ink"
+          data-testid="traffic-totals"
+          title={`${traffic.sent} / ${traffic.received}`}
+        >
+          <span
+            className="inline-flex items-center gap-1"
+            title={t("trafficSent")}
+          >
+            <ArrowUp size={14} aria-hidden />
+            <span>
+              {t("trafficSent")}: {formatTrafficBytes(traffic.sent)}
+            </span>
+          </span>
+          <span
+            className="inline-flex items-center gap-1"
+            title={t("trafficReceived")}
+          >
+            <ArrowDown size={14} aria-hidden />
+            <span>
+              {t("trafficReceived")}: {formatTrafficBytes(traffic.received)}
+            </span>
+          </span>
+        </span>
       </div>
     </footer>
   );

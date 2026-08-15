@@ -41,6 +41,8 @@ const resources = {
       lastUpdated: "Last updated",
       currentIp: "Current IP",
       refreshNetwork: "Refresh connection and IP status",
+      trafficSent: "Sent",
+      trafficReceived: "Received",
       internet: {
         checking: "Checking internet",
         online: "Internet connected",
@@ -181,6 +183,8 @@ const resources = {
       lastUpdated: "آخرین بروزرسانی",
       currentIp: "آی‌پی فعلی",
       refreshNetwork: "تازه‌سازی وضعیت اتصال و آی‌پی",
+      trafficSent: "ارسال",
+      trafficReceived: "دریافت",
       internet: {
         checking: "در حال بررسی اینترنت",
         online: "اینترنت متصل است",

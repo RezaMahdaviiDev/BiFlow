@@ -533,6 +533,22 @@ impl ControllerClient {
             .await?)
     }
 
+    /// Reads session upload and download totals from the controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the controller request or response decoding fails.
+    pub async fn connection_totals(&self) -> Result<(u64, u64), MihomoError> {
+        let snapshot: ConnectionsSnapshot = self
+            .get("/connections")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok((snapshot.upload_total, snapshot.download_total))
+    }
+
     /// Reads the active Mihomo configuration from the controller.
     ///
     /// # Errors
@@ -711,6 +727,14 @@ pub struct ExitIpResponse {
     pub ip: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ConnectionsSnapshot {
+    #[serde(rename = "uploadTotal", default)]
+    upload_total: u64,
+    #[serde(rename = "downloadTotal", default)]
+    download_total: u64,
+}
+
 /// Resolves the public egress IP through the configured Hiddify SOCKS proxy.
 ///
 /// # Errors
@@ -840,6 +864,17 @@ mod tests {
             constructor.contains(".no_proxy()"),
             "loopback controller requests must ignore HTTP_PROXY"
         );
+    }
+
+    #[test]
+    fn connection_totals_read_clash_field_names() {
+        let parsed: ConnectionsSnapshot = serde_json::from_value(serde_json::json!({
+            "uploadTotal": 11,
+            "downloadTotal": 29
+        }))
+        .expect("connections snapshot");
+        assert_eq!(parsed.upload_total, 11);
+        assert_eq!(parsed.download_total, 29);
     }
 
     #[test]

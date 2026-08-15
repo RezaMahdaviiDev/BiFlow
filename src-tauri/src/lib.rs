@@ -3,11 +3,13 @@ mod diagnostics;
 mod helper_install;
 mod hiddify_reset;
 mod network;
+mod traffic;
 mod version;
 
 use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
 use iran_split_core::{Engine, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot};
+use iran_split_mihomo::ControllerClient;
 use iran_split_rules::{
     bundled_snapshot_is_complete, ensure_bundled_snapshot, CloudRuleStore, CloudRulesStatus,
     DirectRulesDocument, DohResolver, Outbound, RuleManager, RuleSet,
@@ -46,6 +48,7 @@ struct AppServices {
     network: network::NetworkMonitor,
     paths: AppPaths,
     updates: Arc<UpdateCoordinator>,
+    traffic_lock: tokio::sync::Mutex<()>,
 }
 
 struct UpdateCoordinator {
@@ -564,6 +567,76 @@ async fn get_network_status(app: AppHandle) -> Result<network::NetworkStatus, St
         async move { Ok(services(&app)?.network.check().await) },
     )
     .await
+}
+
+const TRAFFIC_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[tauri::command]
+async fn get_traffic_totals(app: AppHandle) -> Result<traffic::TrafficTotals, String> {
+    diagnostics::trace_action(
+        "traffic",
+        "tauri_command",
+        "get_traffic_totals",
+        async move {
+            let services = services(&app)?;
+            let _guard = services.traffic_lock.lock().await;
+            let path = services.paths.data.join("traffic-totals.json");
+            let mut store = traffic::load(&path);
+            let connected = matches!(
+                services.engine.snapshot().phase,
+                StackPhase::Running | StackPhase::Degraded
+            );
+            let (session_sent, session_received) = if connected {
+                match session_connection_totals(services).await {
+                    Ok(totals) => totals,
+                    Err(cause) => {
+                        warn!(
+                            event = "traffic.session_probe_failed",
+                            section = "traffic",
+                            initiator = "get_traffic_totals",
+                            cause = %cause,
+                            trace_route = "tauri_command->mihomo_controller",
+                            "session traffic totals were unavailable; using last known session"
+                        );
+                        (store.last_session_sent, store.last_session_received)
+                    }
+                }
+            } else {
+                (0, 0)
+            };
+            let totals = traffic::accumulate(&mut store, session_sent, session_received, connected);
+            if let Err(cause) = traffic::save(&path, &store) {
+                warn!(
+                    event = "traffic.persist_failed",
+                    section = "traffic",
+                    initiator = "get_traffic_totals",
+                    cause = %cause,
+                    trace_route = "tauri_command->traffic_totals_file",
+                    "lifetime traffic totals could not be written"
+                );
+            }
+            Ok(totals)
+        },
+    )
+    .await
+}
+
+async fn session_connection_totals(services: &AppServices) -> Result<(u64, u64), String> {
+    let config = services
+        .config_store
+        .load()
+        .or_else(|_| services.config_store.load_or_create())
+        .map_err(|error| error.to_string())?;
+    let client = ControllerClient::new(
+        &config.mihomo.controller_host,
+        config.mihomo.controller_port,
+        &config.mihomo.controller_secret,
+    )
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(TRAFFIC_PROBE_TIMEOUT, client.connection_totals())
+        .await
+        .map_err(|_| "traffic probe timed out".to_owned())?
+        .map_err(|error| error.to_string())
 }
 
 #[expect(
@@ -1749,6 +1822,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         network,
         paths,
         updates: Arc::new(UpdateCoordinator::new()),
+        traffic_lock: tokio::sync::Mutex::new(()),
     })
 }
 
@@ -2224,6 +2298,7 @@ pub fn run() {
             bootstrap_app,
             get_stack_snapshot,
             get_network_status,
+            get_traffic_totals,
             start_stack,
             stop_stack,
             pause_stack,

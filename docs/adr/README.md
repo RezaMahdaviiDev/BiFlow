@@ -46,3 +46,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0040](./0040-reliable-update-check.md)                  | Reliable update check                       | Accepted   |
 | [0041](./0041-reliable-cloud-rule-sync.md)               | Reliable cloud rule sync                    | Accepted   |
 | [0042](./0042-responsive-bottom-nav.md)                  | Responsive bottom navigation                | Accepted   |
+| [0043](./0043-persistent-traffic-totals.md)              | Persistent traffic totals                   | Accepted   |
