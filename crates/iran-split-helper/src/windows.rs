@@ -13,7 +13,28 @@ use tracing::{info, warn};
 
 const PIPE_NAME: &str = r"\\.\pipe\iran-split-helper-v1";
 const INSTALL_ROOT: &str = r"C:\ProgramData\iran-split";
+const INSTALL_LOG: &str = r"C:\ProgramData\iran-split\install.log";
 const TASK_NAME: &str = "BiFlowHelper";
+
+/// Records why a GUI-subsystem helper install died. `Start-Process -Verb RunAs`
+/// cannot capture elevated stderr, so the desktop reads this file after a
+/// non-zero exit.
+pub fn persist_install_error(message: &str) {
+    let path = Path::new(INSTALL_LOG);
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(error) = fs::write(path, format!("{message}\n")) {
+        warn!(
+            event = "helper.install_log_failed",
+            section = "helper_install",
+            initiator = "elevated_installer",
+            cause = %error,
+            trace_route = "elevated_helper->install_log",
+            "could not persist the helper install error"
+        );
+    }
+}
 
 /// Serves helper IPC on the versioned local named pipe.
 ///
@@ -65,6 +86,16 @@ pub fn install(
     staging_dir: &Path,
     tun_name: &str,
 ) -> Result<(), HelperServiceError> {
+    install_inner(mihomo_src, staging_dir, tun_name).inspect_err(|error| {
+        persist_install_error(&error.to_string());
+    })
+}
+
+fn install_inner(
+    mihomo_src: &Path,
+    staging_dir: &Path,
+    tun_name: &str,
+) -> Result<(), HelperServiceError> {
     let helper_src = std::env::current_exe()?;
     let root = PathBuf::from(INSTALL_ROOT);
     let bin = root.join("bin");
@@ -74,8 +105,8 @@ pub fn install(
     fs::create_dir_all(&bin)?;
     fs::create_dir_all(root.join("runtime"))?;
     fs::create_dir_all(staging_dir)?;
-    fs::copy(&helper_src, &helper_dest)?;
-    fs::copy(mihomo_src, &mihomo_dest)?;
+    super::copy_file_unless_same(&helper_src, &helper_dest)?;
+    super::copy_file_unless_same(mihomo_src, &mihomo_dest)?;
     let mihomo_sha256 = sha256_file(&mihomo_dest)?;
     let settings = HelperSettings {
         authorized_uid: 0,
@@ -128,6 +159,12 @@ pub fn install(
 /// Returns an error when `schtasks` fails for a reason other than a missing
 /// task.
 pub fn uninstall() -> Result<(), HelperServiceError> {
+    uninstall_inner().inspect_err(|error| {
+        persist_install_error(&error.to_string());
+    })
+}
+
+fn uninstall_inner() -> Result<(), HelperServiceError> {
     let _ = run_schtasks(&["/End", "/TN", TASK_NAME]);
     match run_schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]) {
         Ok(()) => Ok(()),

@@ -61,6 +61,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(windows)]
+fn install_from_args(arguments: &Arguments) -> Result<(), Box<dyn std::error::Error>> {
+    let mihomo = arguments
+        .mihomo
+        .as_ref()
+        .ok_or("Windows helper install requires --mihomo")?;
+    let staging_dir = arguments
+        .staging_dir
+        .as_ref()
+        .ok_or("Windows helper install requires --staging-dir")?;
+    let tun_name = arguments
+        .tun_name
+        .as_ref()
+        .ok_or("Windows helper install requires --tun-name")?;
+    iran_split_helper::install(mihomo, staging_dir, tun_name)?;
+    Ok(())
+}
+
+#[cfg(windows)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
@@ -70,16 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if arguments.install {
-        let mihomo = arguments
-            .mihomo
-            .ok_or("Windows helper install requires --mihomo")?;
-        let staging_dir = arguments
-            .staging_dir
-            .ok_or("Windows helper install requires --staging-dir")?;
-        let tun_name = arguments
-            .tun_name
-            .ok_or("Windows helper install requires --tun-name")?;
-        iran_split_helper::install(&mihomo, &staging_dir, &tun_name)?;
+        let result = install_from_args(&arguments);
+        if let Err(error) = &result {
+            iran_split_helper::persist_install_error(&error.to_string());
+        }
+        result?;
         return Ok(());
     }
     iran_split_helper::run_named_pipe(&config_path(&arguments)).await?;

@@ -282,6 +282,25 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /fn schedule_update_restart\(/);
   });
 
+  it("never reports a previous attempt's Windows install reason", () => {
+    const source = readFileSync(
+      join(root, "src-tauri/src/helper_install.rs"),
+      "utf8",
+    );
+    // The elevated helper writes install.log only when it reaches its own
+    // error path, so a stale file must be cleared before each elevation.
+    const install = source.match(/async fn install_windows\([\s\S]*?\n\}\n/);
+    assert.ok(install, "install_windows is missing");
+    const cleared = install[0].indexOf("discard_stale_install_log()");
+    const elevated = install[0].indexOf('Command::new("powershell")');
+    assert.ok(cleared >= 0, "the stale install log is never cleared");
+    assert.ok(
+      elevated > cleared,
+      "install.log must be cleared before the elevation runs",
+    );
+    assert.match(source, /fn discard_stale_install_log\(/);
+  });
+
   it("gates Linux helper-install paths so Windows dead_code stays clean", () => {
     const source = readFileSync(
       join(root, "src-tauri/src/helper_install.rs"),

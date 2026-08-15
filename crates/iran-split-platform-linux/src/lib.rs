@@ -591,7 +591,8 @@ impl PlatformBackend for LinuxBackend {
         let staging_root = self
             .paths
             .user_data_dir
-            .join("runtime/generations")
+            .join("runtime")
+            .join("generations")
             .join(generation_id.to_string());
         fs::create_dir_all(&staging_root).map_err(|error| platform_error(&error))?;
         let runtime_paths = RuntimePaths {
@@ -986,7 +987,8 @@ mod tests {
         let generation = backend.prepare_runtime().await.expect("prepare");
         let root = paths
             .user_data_dir
-            .join("runtime/generations")
+            .join("runtime")
+            .join("generations")
             .join(generation.generation_id.to_string());
         let names = fs::read_dir(&root)
             .expect("generation")

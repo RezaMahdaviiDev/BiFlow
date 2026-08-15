@@ -504,6 +504,29 @@ fn sha256_file(path: &Path) -> Result<String, HelperServiceError> {
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
+/// Copies `source` onto `destination` unless they already resolve to the same
+/// file. Windows `fs::copy` onto self fails; a leftover `ProgramData` helper
+/// used as the elevate source hits that path.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn copy_file_unless_same(
+    source: &Path,
+    destination: &Path,
+) -> Result<(), HelperServiceError> {
+    if paths_refer_to_same_file(source, destination) {
+        return Ok(());
+    }
+    fs::copy(source, destination)?;
+    Ok(())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 fn copy_new_file(source: &Path, destination: &Path) -> Result<(), HelperServiceError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -627,7 +650,7 @@ pub use linux::run_linux;
 mod windows;
 
 #[cfg(windows)]
-pub use windows::{install, run_named_pipe, uninstall};
+pub use windows::{install, persist_install_error, run_named_pipe, uninstall};
 
 #[cfg(test)]
 mod tests {
@@ -696,6 +719,19 @@ tun_name = "clash-iran"
         assert!(Path::new("/run/iran-split/helper.sock").is_absolute());
         assert!(Path::new("/var/lib/iran-split").is_absolute());
         assert!(Path::new("/usr/lib/biflow/iran-split-helper").is_absolute());
+    }
+
+    #[test]
+    fn copy_file_unless_same_is_a_noop_for_identical_paths() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("helper.bin");
+        fs::write(&path, b"payload").expect("write");
+        copy_file_unless_same(&path, &path).expect("same-file copy");
+        assert_eq!(fs::read(&path).expect("read"), b"payload");
+
+        let other = directory.path().join("other.bin");
+        copy_file_unless_same(&path, &other).expect("distinct copy");
+        assert_eq!(fs::read(&other).expect("copied"), b"payload");
     }
 
     // A Windows counterpart belongs here, but every assertion about Windows

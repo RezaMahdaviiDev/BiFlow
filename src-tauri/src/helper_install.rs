@@ -8,6 +8,8 @@ use std::{
 };
 use tauri::{AppHandle, Manager};
 use tokio::process::Command;
+#[cfg(target_os = "windows")]
+use tracing::warn;
 use tracing::{error, info};
 
 #[cfg(target_os = "linux")]
@@ -34,7 +36,7 @@ const UAC_CANCELLED: i32 = 1223;
 #[cfg(target_os = "windows")]
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(target_os = "windows")]
-const WINDOWS_PROGRAMDATA_HELPER: &str = r"C:\ProgramData\iran-split\bin\iran-split-helper.exe";
+const WINDOWS_INSTALL_LOG: &str = r"C:\ProgramData\iran-split\install.log";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallHelperResult {
@@ -64,10 +66,10 @@ pub async fn install_helper(app: &AppHandle) -> Result<InstallHelperResult, Stri
         .map_err(|error| error.to_string())?
         .mihomo
         .tun_name;
-    let staging_dir = services.paths.data.join("runtime/generations");
+    let staging_dir = services.paths.data.join("runtime").join("generations");
     fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
     #[cfg(target_os = "linux")]
-    let payload_dir = services.paths.data.join("runtime/helper-install");
+    let payload_dir = services.paths.data.join("runtime").join("helper-install");
     info!(
         event = "helper.install_started",
         section = "helper_install",
@@ -378,15 +380,26 @@ async fn install_windows(
         .ok_or_else(|| "packaged helper binary is missing".to_owned())?;
     let mihomo_src = first_existing_file(&windows_mihomo_candidates(resource_root, exe_dir))
         .ok_or_else(|| "packaged Mihomo binary is missing".to_owned())?;
+    let helper = helper_src.to_string_lossy().into_owned();
+    let mihomo = mihomo_src.to_string_lossy().into_owned();
+    let staging = staging_dir.to_string_lossy().into_owned();
     let script = elevate_script(
-        &helper_src.to_string_lossy(),
-        &format!(
-            "--install --mihomo {} --staging-dir {} --tun-name {}",
-            helper_src_arg(&mihomo_src),
-            helper_src_arg(staging_dir),
-            tun_name
-        ),
+        &helper,
+        &[
+            "--install",
+            "--mihomo",
+            &mihomo,
+            "--staging-dir",
+            &staging,
+            "--tun-name",
+            tun_name,
+        ],
     );
+    // The elevated helper overwrites install.log only when it reaches its own
+    // error path. If it dies before that — a blocked or missing exe — a stale
+    // file would report the *previous* attempt's reason, which sends the
+    // operator after the wrong problem. Clear it so whatever remains is ours.
+    discard_stale_install_log();
     // The desktop app is a `windows` subsystem binary (ADR 0030); without this
     // flag the elevation helper flashes a console window over the UI.
     let output = Command::new("powershell")
@@ -402,7 +415,7 @@ async fn install_windows(
     if code == UAC_CANCELLED {
         return Err("helper installation was cancelled".into());
     }
-    let detail = last_error_line(&output.stderr);
+    let detail = windows_install_detail(&output.stderr);
     error!(
         event = "helper.install_failed",
         section = "helper_install",
@@ -428,14 +441,18 @@ async fn install_windows(
 /// elevated process's exit code, and map a refused prompt to `ERROR_CANCELLED`.
 #[cfg(target_os = "windows")]
 #[must_use]
-pub(crate) fn elevate_script(program: &str, arguments: &str) -> String {
+pub(crate) fn elevate_script(program: &str, arguments: &[&str]) -> String {
+    let argument_list = arguments
+        .iter()
+        .map(|argument| powershell_quote(argument))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "$ErrorActionPreference = 'Stop'; \
-         try {{ $process = Start-Process -FilePath {} -ArgumentList {} -Verb RunAs -Wait -PassThru }} \
+         try {{ $process = Start-Process -FilePath {} -ArgumentList @({argument_list}) -Verb RunAs -Wait -PassThru }} \
          catch {{ Write-Error $_.Exception.Message; exit {UAC_CANCELLED} }}; \
          exit $process.ExitCode",
         powershell_quote(program),
-        powershell_quote(arguments),
     )
 }
 
@@ -482,9 +499,8 @@ fn unit_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBuf> {
 #[cfg(target_os = "windows")]
 fn windows_helper_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBuf> {
     vec![
-        PathBuf::from(WINDOWS_PROGRAMDATA_HELPER),
-        resource_root.join("helper/iran-split-helper.exe"),
-        exe_dir.join("helper/iran-split-helper.exe"),
+        resource_root.join("helper").join("iran-split-helper.exe"),
+        exe_dir.join("helper").join("iran-split-helper.exe"),
         exe_dir.join("iran-split-helper.exe"),
     ]
 }
@@ -492,9 +508,8 @@ fn windows_helper_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBu
 #[cfg(target_os = "windows")]
 fn windows_mihomo_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBuf> {
     vec![
-        PathBuf::from(r"C:\ProgramData\iran-split\bin\mihomo.exe"),
-        resource_root.join("dependencies/mihomo.exe"),
-        exe_dir.join("dependencies/mihomo.exe"),
+        resource_root.join("dependencies").join("mihomo.exe"),
+        exe_dir.join("dependencies").join("mihomo.exe"),
     ]
 }
 
@@ -536,9 +551,37 @@ fn powershell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
+/// GUI-subsystem helpers leave stderr empty. Prefer the last line of
+/// Removes a previous attempt's install log so a stale line is never reported
+/// as the reason for this one.
 #[cfg(target_os = "windows")]
-fn helper_src_arg(path: &Path) -> String {
-    format!("\"{}\"", path.display())
+fn discard_stale_install_log() {
+    match fs::remove_file(WINDOWS_INSTALL_LOG) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => warn!(
+            event = "helper.install_log_stale",
+            section = "helper_install",
+            initiator = "tauri_command",
+            cause = %error,
+            trace_route = "ui->tauri_command->install_helper->install_windows",
+            "could not clear the previous install log; a stale reason may be reported"
+        ),
+    }
+}
+
+/// `install.log` written by the elevated process.
+#[cfg(target_os = "windows")]
+fn windows_install_detail(stderr: &[u8]) -> String {
+    let from_log = fs::read_to_string(WINDOWS_INSTALL_LOG)
+        .ok()
+        .map(|text| last_error_line(text.as_bytes()))
+        .unwrap_or_default();
+    if from_log.is_empty() {
+        last_error_line(stderr)
+    } else {
+        from_log
+    }
 }
 
 #[cfg(test)]
@@ -666,19 +709,52 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn elevation_reraises_the_child_exit_code_and_maps_a_refused_prompt() {
-        let script = elevate_script(r"C:\Program Files\BiFlow\helper.exe", "--install --tun x");
+        let script = elevate_script(
+            r"C:\Program Files\BiFlow\helper.exe",
+            &["--install", "--tun-name", "x"],
+        );
         assert!(script.contains("-PassThru"));
         assert!(script.contains("exit $process.ExitCode"));
         assert!(script.contains(&format!("exit {UAC_CANCELLED}")));
         assert!(script.contains("$ErrorActionPreference = 'Stop'"));
+        assert!(script.contains("-ArgumentList @("));
         assert!(script.contains(r"'C:\Program Files\BiFlow\helper.exe'"));
+        assert!(script.contains("'--install'"));
+        assert!(script.contains("'--tun-name'"));
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn elevation_escapes_single_quotes_in_paths() {
-        let script = elevate_script(r"C:\Users\o'brien\helper.exe", "--install");
+        let script = elevate_script(r"C:\Users\o'brien\helper.exe", &["--install"]);
         assert!(script.contains(r"'C:\Users\o''brien\helper.exe'"));
+    }
+
+    #[test]
+    fn windows_elevation_sources_are_packaged_not_programdata() {
+        let source = include_str!("helper_install.rs");
+        let helper_start = source
+            .find("fn windows_helper_candidates")
+            .expect("helper candidates");
+        let mihomo_start = source
+            .find("fn windows_mihomo_candidates")
+            .expect("mihomo candidates");
+        let first_existing = source
+            .find("pub(crate) fn first_existing_file")
+            .expect("first_existing_file");
+        let helpers = &source[helper_start..mihomo_start];
+        let mihomo = &source[mihomo_start..first_existing];
+        assert!(!helpers.contains("WINDOWS_PROGRAMDATA_HELPER"));
+        assert!(!helpers.contains(r"C:\\ProgramData"));
+        assert!(!mihomo.contains(r"C:\\ProgramData"));
+        assert!(source.contains("-ArgumentList @("));
+    }
+
+    #[test]
+    fn nsis_hook_uses_programdata_variable() {
+        let hook = include_str!("../../packaging/windows/installer-hooks.nsh");
+        assert!(hook.contains("$PROGRAMDATA"));
+        assert!(!hook.contains("$COMMONPROGRAMDATA"));
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]

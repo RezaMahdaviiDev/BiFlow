@@ -279,7 +279,8 @@ impl AppPaths {
     fn discover(app: &AppHandle) -> Result<Self, String> {
         let config = dirs::config_dir()
             .ok_or("configuration directory is unavailable")?
-            .join("biflow/config.toml");
+            .join("biflow")
+            .join("config.toml");
         let data = dirs::data_local_dir()
             .ok_or("local data directory is unavailable")?
             .join("biflow");

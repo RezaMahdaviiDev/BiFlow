@@ -328,7 +328,7 @@ fn subscriber(log: DebugLog) -> impl Subscriber + Send + Sync {
 
 pub fn default_log_path() -> Result<PathBuf, String> {
     dirs::data_local_dir()
-        .map(|path| path.join("biflow/debug.log"))
+        .map(|path| path.join("biflow").join("debug.log"))
         .ok_or_else(|| "local data directory is unavailable for debug.log".into())
 }
 
@@ -599,11 +599,7 @@ pub fn clear() -> Result<DebugLogStatus, String> {
 pub fn reveal() -> Result<DebugLogStatus, String> {
     let status = status()?;
     let path = Path::new(&status.path);
-    let (program, arguments) = reveal_command(path);
-    Command::new(program)
-        .args(arguments)
-        .spawn()
-        .map_err(|error| format!("cannot show debug.log: {error}"))?;
+    spawn_reveal(path)?;
     Ok(status)
 }
 
@@ -622,6 +618,26 @@ fn log_file(state: &mut LogState) -> io::Result<&mut File> {
         .ok_or_else(|| io::Error::other("debug log is closed"))
 }
 
+fn spawn_reveal(path: &Path) -> Result<(), String> {
+    let (program, arguments) = reveal_command(path);
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        for argument in arguments {
+            command.raw_arg(argument);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        command.args(arguments);
+    }
+    command
+        .spawn()
+        .map_err(|error| format!("cannot show debug.log: {error}"))?;
+    Ok(())
+}
+
 fn reveal_command(path: &Path) -> (&'static str, Vec<String>) {
     #[cfg(target_os = "linux")]
     {
@@ -633,11 +649,15 @@ fn reveal_command(path: &Path) -> (&'static str, Vec<String>) {
     }
     #[cfg(target_os = "windows")]
     {
-        (
-            "explorer.exe",
-            vec![format!("/select,{}", path.to_string_lossy())],
-        )
+        ("explorer.exe", vec![windows_reveal_select(path)])
     }
+}
+
+/// Explorer treats `/select,C:\dir/file` as a single unknown switch and opens
+/// This PC. Normalize separators and keep `/select,` unquoted via `raw_arg`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_reveal_select(path: &Path) -> String {
+    format!("/select,{}", path.to_string_lossy().replace('/', "\\"))
 }
 
 #[cfg(test)]
@@ -733,10 +753,34 @@ mod tests {
         #[cfg(target_os = "windows")]
         {
             assert_eq!(program, "explorer.exe");
-            assert_eq!(
-                arguments,
-                vec![format!("/select,{}", path.to_string_lossy())]
+            assert_eq!(arguments, vec![windows_reveal_select(path)]);
+        }
+    }
+
+    #[test]
+    fn default_log_path_uses_native_separators() {
+        let path = default_log_path().expect("local data directory");
+        let display = path.to_string_lossy();
+        assert!(display.ends_with("debug.log"));
+        if display.as_bytes().get(1) == Some(&b':') {
+            assert!(
+                !display[2..].contains('/'),
+                "mixed separators after drive: {display}"
             );
         }
+    }
+
+    #[test]
+    fn windows_reveal_select_normalizes_mixed_separators() {
+        let path = Path::new(r"C:\Users\name\AppData\Local\biflow/debug.log");
+        let select = windows_reveal_select(path);
+        assert!(select.starts_with("/select,"));
+        let selected = select.strip_prefix("/select,").expect("select prefix");
+        assert!(
+            !selected.get(2..).is_some_and(|rest| rest.contains('/')),
+            "Explorer /select path still mixed: {select}"
+        );
+        assert!(selected.contains('\\'));
+        assert!(selected.ends_with("debug.log"));
     }
 }
