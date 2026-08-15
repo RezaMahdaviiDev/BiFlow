@@ -470,10 +470,40 @@ impl WindowsBackend {
         let Some(controller) = Self::controller(config) else {
             return false;
         };
-        let Ok(configs) = controller.configs().await else {
-            return false;
-        };
-        tun_enabled(&configs, &config.mihomo.tun_name)
+        match controller.configs().await {
+            Ok(configs) => {
+                let active = tun_enabled(&configs, &config.mihomo.tun_name);
+                if !active {
+                    warn!(
+                        event = "mihomo.tun_inactive",
+                        section = "runtime_health",
+                        initiator = "windows_platform_backend",
+                        cause = "controller_configs",
+                        tun_enable = ?configs.get("tun").and_then(|tun| tun.get("enable")),
+                        tun_device = configs
+                            .get("tun")
+                            .and_then(|tun| tun.get("device"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
+                        expected_device = %config.mihomo.tun_name,
+                        trace_route = "desktop_engine->windows_platform_backend->mihomo_controller",
+                        "Mihomo /configs did not report an enabled TUN"
+                    );
+                }
+                active
+            }
+            Err(error) => {
+                warn!(
+                    event = "mihomo.tun_configs_failed",
+                    section = "runtime_health",
+                    initiator = "windows_platform_backend",
+                    cause = %error,
+                    trace_route = "desktop_engine->windows_platform_backend->mihomo_controller",
+                    "could not read Mihomo /configs for TUN state"
+                );
+                false
+            }
+        }
     }
 
     fn tun_component(tun_name: &str, active: bool) -> ComponentStatus {
@@ -934,17 +964,37 @@ impl PlatformBackend for WindowsBackend {
 }
 
 /// Mihomo reports its live configuration, including the Wintun device it owns.
+///
+/// Windows builds often echo `device: Meta`, an empty name, or a Wintun path
+/// instead of the configured `clash-iran`. `enable: true` is the authority
+/// that Mihomo owns a tunnel; the name is only logged.
 #[must_use]
-pub fn tun_enabled(configs: &serde_json::Value, tun_name: &str) -> bool {
-    let Some(tun) = configs.get("tun") else {
+pub fn tun_enabled(configs: &serde_json::Value, _tun_name: &str) -> bool {
+    let Some(tun) = tun_section(configs) else {
         return false;
     };
-    if tun.get("enable").and_then(serde_json::Value::as_bool) != Some(true) {
-        return false;
+    json_flag_enabled(tun.get("enable"))
+}
+
+fn tun_section(configs: &serde_json::Value) -> Option<&serde_json::Value> {
+    configs
+        .get("tun")
+        .or_else(|| configs.get("config").and_then(|config| config.get("tun")))
+}
+
+fn json_flag_enabled(value: Option<&serde_json::Value>) -> bool {
+    match value {
+        Some(serde_json::Value::Bool(enabled)) => *enabled,
+        Some(serde_json::Value::Number(number)) => {
+            number.as_u64().is_some_and(|value| value != 0)
+                || number.as_i64().is_some_and(|value| value != 0)
+        }
+        Some(serde_json::Value::String(text)) => {
+            let text = text.trim();
+            text.eq_ignore_ascii_case("true") || text == "1"
+        }
+        _ => false,
     }
-    tun.get("device")
-        .and_then(serde_json::Value::as_str)
-        .is_none_or(|device| device.eq_ignore_ascii_case(tun_name))
 }
 
 fn platform_error(error: &io::Error) -> CoreError {
@@ -1095,21 +1145,33 @@ mod tests {
     }
 
     #[test]
-    fn tun_is_active_only_when_mihomo_owns_the_named_device() {
+    fn tun_is_active_when_mihomo_reports_enable() {
         let active = json!({"tun": {"enable": true, "device": "clash-iran"}});
         assert!(tun_enabled(&active, "clash-iran"));
         assert!(tun_enabled(&active, "CLASH-IRAN"));
+        // Windows Mihomo commonly echoes Meta or a Wintun path, not clash-iran.
+        assert!(tun_enabled(
+            &json!({"tun": {"enable": true, "device": "Meta"}}),
+            "clash-iran"
+        ));
+        assert!(tun_enabled(
+            &json!({"tun": {"enable": true, "device": ""}}),
+            "clash-iran"
+        ));
+        assert!(tun_enabled(
+            &json!({"tun": {"enable": 1, "device": "Meta"}}),
+            "clash-iran"
+        ));
+        assert!(tun_enabled(
+            &json!({"config": {"tun": {"enable": "true"}}}),
+            "clash-iran"
+        ));
 
         assert!(!tun_enabled(
             &json!({"tun": {"enable": false, "device": "clash-iran"}}),
             "clash-iran"
         ));
-        assert!(!tun_enabled(
-            &json!({"tun": {"enable": true, "device": "other"}}),
-            "clash-iran"
-        ));
         assert!(!tun_enabled(&json!({}), "clash-iran"));
-        // Older Mihomo builds omit the device; enable alone still counts.
         assert!(tun_enabled(&json!({"tun": {"enable": true}}), "clash-iran"));
     }
 
@@ -1140,6 +1202,10 @@ mod tests {
         assert!(!config.contains(r"C:\ProgramData"));
         // strict_route is the Windows-only half of the shared generator.
         assert!(config.contains("strict-route: true"));
+        assert!(config.contains("find-process-mode: always"));
+        assert!(config.contains("auto-redirect: false"));
+        assert!(config.contains("ipv6: false"));
+        assert!(config.contains("dns-query#VPN"));
     }
 
     #[tokio::test]

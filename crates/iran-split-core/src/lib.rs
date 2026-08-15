@@ -851,13 +851,7 @@ impl<B: PlatformBackend> Engine<B> {
         {
             return Err(CoreError::ProviderNotReady);
         }
-        let process = self.backend.core_process().await?;
-        let tun = self.backend.tun_status().await?;
-        if !process.running || !tun.active {
-            return Err(CoreError::MihomoStartFailed(
-                "process or TUN disappeared during readiness checks".into(),
-            ));
-        }
+        let tun = self.confirm_core_and_tun(cancel).await?;
         self.update(|snapshot| {
             snapshot.phase = StackPhase::Running;
             snapshot.operation_id = Some(operation_id);
@@ -869,6 +863,42 @@ impl<B: PlatformBackend> Engine<B> {
             snapshot.last_error = None;
         });
         Ok(())
+    }
+
+    async fn confirm_core_and_tun(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<TunStatus, CoreError> {
+        const BUDGET: Duration = Duration::from_secs(5);
+        const INTERVAL: Duration = Duration::from_millis(200);
+        let deadline = tokio::time::Instant::now() + BUDGET;
+        loop {
+            check_cancelled(cancel)?;
+            let process = self.backend.core_process().await?;
+            let tun = self.backend.tun_status().await?;
+            if process.running && tun.active {
+                return Ok(tun);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                error!(
+                    event = "mihomo.tun_or_process_missing",
+                    section = "engine",
+                    initiator = "operation_worker",
+                    cause = "readiness_postcondition",
+                    process_running = process.running,
+                    tun_active = tun.active,
+                    trace_route = "operation_queue->worker->platform_backend",
+                    "Mihomo process or TUN was not active after readiness"
+                );
+                return Err(CoreError::MihomoStartFailed(core_tun_missing_message(
+                    &process, &tun,
+                )));
+            }
+            tokio::select! {
+                () = cancel.cancelled() => return Err(CoreError::Cancelled),
+                () = tokio::time::sleep(INTERVAL) => {}
+            }
+        }
     }
 
     async fn rollback(&self, operation_id: Uuid) -> Result<(), CoreError> {
@@ -1090,6 +1120,18 @@ fn apply_health(snapshot: &mut StackSnapshot, health: RuntimeHealth) {
     snapshot.tun = health.tun;
     snapshot.dns = health.dns;
     snapshot.providers = health.providers;
+}
+
+#[must_use]
+fn core_tun_missing_message(process: &ProcessStatus, tun: &TunStatus) -> String {
+    if process.running {
+        format!(
+            "TUN {} was not active after the controller was ready",
+            tun.name.as_deref().unwrap_or("unknown")
+        )
+    } else {
+        "Mihomo process disappeared during readiness checks".into()
+    }
 }
 
 fn check_cancelled(cancel: &CancellationToken) -> Result<(), CoreError> {
@@ -1492,6 +1534,36 @@ mod tests {
         let mihomo = CoreError::MihomoNotFound.to_app_error(Uuid::nil());
         assert_eq!(mihomo.code, ErrorCode::MihomoNotFound);
         assert_eq!(mihomo.remediation, Some(Remediation::InstallDependency));
+    }
+
+    #[test]
+    fn readiness_postcondition_names_process_versus_tun() {
+        assert_eq!(
+            core_tun_missing_message(
+                &ProcessStatus {
+                    running: false,
+                    pid: None
+                },
+                &TunStatus {
+                    active: false,
+                    name: Some("clash-iran".into())
+                }
+            ),
+            "Mihomo process disappeared during readiness checks"
+        );
+        assert_eq!(
+            core_tun_missing_message(
+                &ProcessStatus {
+                    running: true,
+                    pid: Some(7)
+                },
+                &TunStatus {
+                    active: false,
+                    name: Some("clash-iran".into())
+                }
+            ),
+            "TUN clash-iran was not active after the controller was ready"
+        );
     }
 
     #[test]

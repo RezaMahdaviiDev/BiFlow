@@ -72,6 +72,7 @@ struct MihomoConfigDocument {
     external_controller: String,
     secret: String,
     ipv6: bool,
+    find_process_mode: String,
     tun: TunConfig,
     dns: DnsConfig,
     sniffer: SnifferConfig,
@@ -92,6 +93,7 @@ struct TunConfig {
     stack: String,
     device: String,
     auto_route: bool,
+    auto_redirect: bool,
     auto_detect_interface: bool,
     strict_route: bool,
     dns_hijack: Vec<String>,
@@ -219,12 +221,14 @@ pub fn generate_config(
             app.mihomo.controller_host, app.mihomo.controller_port
         ),
         secret: app.mihomo.controller_secret.clone(),
-        ipv6: true,
+        ipv6: platform != Platform::Windows,
+        find_process_mode: "always".into(),
         tun: TunConfig {
             enable: true,
             stack: "mixed".into(),
             device: app.mihomo.tun_name.clone(),
             auto_route: true,
+            auto_redirect: false,
             auto_detect_interface: true,
             strict_route: platform == Platform::Windows,
             dns_hijack: vec!["any:53".into(), "tcp://any:53".into()],
@@ -232,7 +236,7 @@ pub fn generate_config(
         dns: DnsConfig {
             enable: true,
             listen: format!("127.0.0.1:{}", app.mihomo.dns_port),
-            ipv6: true,
+            ipv6: platform != Platform::Windows,
             enhanced_mode: "fake-ip".into(),
             fake_ip_range: "198.18.0.1/16".into(),
             fake_ip_filter: vec![
@@ -241,10 +245,7 @@ pub fn generate_config(
                 "localhost.ptlogin2.qq.com".into(),
             ],
             default_nameserver: vec!["1.1.1.1".into(), "8.8.8.8".into()],
-            nameserver: vec![
-                "https://1.1.1.1/dns-query".into(),
-                "https://8.8.8.8/dns-query".into(),
-            ],
+            nameserver: nameservers(platform),
             proxy_server_nameserver: vec!["8.8.8.8".into(), "1.1.1.1".into()],
             direct_nameserver: vec!["178.22.122.100".into(), "185.51.200.2".into()],
         },
@@ -293,6 +294,22 @@ pub fn generate_config(
     let yaml = serde_yaml::to_string(&document)?;
     let sha256 = hex::encode(Sha256::digest(yaml.as_bytes()));
     Ok(GeneratedConfig { yaml, sha256 })
+}
+
+fn nameservers(platform: Platform) -> Vec<String> {
+    match platform {
+        // Windows Wintun + strict-route blackholes bootstrap DoH unless the
+        // query is pinned to the Hiddify proxy group, matching the proven
+        // clash-master stack (`#VPN`).
+        Platform::Windows => vec![
+            "https://1.1.1.1/dns-query#VPN".into(),
+            "https://8.8.8.8/dns-query#VPN".into(),
+        ],
+        Platform::Linux => vec![
+            "https://1.1.1.1/dns-query".into(),
+            "https://8.8.8.8/dns-query".into(),
+        ],
+    }
 }
 
 fn process_bypass_rules(platform: Platform) -> Vec<String> {
@@ -776,6 +793,9 @@ mod tests {
             .yaml
             .contains("PROCESS-NAME,iran-split-desk,DIRECT"));
         assert!(generated.yaml.contains("MATCH,VPN"));
+        assert!(generated.yaml.contains("find-process-mode: always"));
+        assert!(generated.yaml.contains("ipv6: true"));
+        assert!(!generated.yaml.contains("dns-query#VPN"));
         assert!(generated.yaml.contains("path: private.txt"));
         assert!(!generated.yaml.contains("/runtime/"));
         assert_eq!(generated.sha256.len(), 64);
@@ -791,6 +811,10 @@ mod tests {
         )
         .expect("config");
         assert!(generated.yaml.contains("strict-route: true"));
+        assert!(generated.yaml.contains("find-process-mode: always"));
+        assert!(generated.yaml.contains("auto-redirect: false"));
+        assert!(generated.yaml.contains("ipv6: false"));
+        assert!(generated.yaml.contains("dns-query#VPN"));
         assert!(generated.yaml.contains("PROCESS-NAME,Hiddify.exe,DIRECT"));
         assert!(generated
             .yaml

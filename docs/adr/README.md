@@ -41,3 +41,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0035](./0035-windows-reveal-and-helper-install.md)      | Windows debug.log reveal and helper install | Accepted   |
 | [0036](./0036-windows-helper-task-xml.md)                | Windows helper scheduled task XML           | Accepted   |
 | [0037](./0037-windows-mihomo-controller-reachability.md) | Windows Mihomo controller reachability      | Accepted   |
+| [0038](./0038-windows-tun-readiness.md)                  | Windows TUN readiness and clash alignment   | Accepted   |
