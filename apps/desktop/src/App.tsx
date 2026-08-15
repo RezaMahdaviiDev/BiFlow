@@ -22,7 +22,9 @@ import { AppStatusBar } from "./components/AppStatusBar";
 import { Diagnostics } from "./components/Diagnostics";
 import { DirectRules } from "./components/DirectRules";
 import { Settings } from "./components/Settings";
+import { BottomNav } from "./components/BottomNav";
 import { UiModeSwitch } from "./components/UiModeSwitch";
+import { isMobileViewport, subscribeMobileViewport } from "./lib/viewport";
 import { readUiMode, type UiMode } from "./lib/uiMode";
 import { useAppStore } from "./store/app";
 
@@ -40,11 +42,14 @@ export function App() {
   const { i18n, t } = useTranslation();
   const store = useAppStore();
   const [uiMode, setUiMode] = useState<UiMode>(() => readUiMode());
+  const [mobile, setMobile] = useState(isMobileViewport);
   const [dark, setDark] = useState(
     () =>
       (localStorage.getItem("biflow-theme") ??
         localStorage.getItem("iran-split-theme")) === "dark",
   );
+
+  useEffect(() => subscribeMobileViewport(setMobile), []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -111,12 +116,15 @@ export function App() {
   return (
     <div
       data-connection-glow={glow ?? "none"}
-      className={`grid h-full overflow-hidden ${
-        advanced ? "grid-cols-[15rem_1fr]" : "grid-cols-1"
+      className={`app-shell grid h-full overflow-hidden ${
+        advanced ? "app-shell-advanced md:grid-cols-[15rem_1fr]" : "grid-cols-1"
       } ${glow ? `connection-glow connection-glow-${glow}` : ""}`}
     >
-      {advanced ? (
-        <aside className="flex h-full min-h-0 flex-col border-r border-ink/10 bg-surface/85 p-4 backdrop-blur">
+      {advanced && !mobile ? (
+        <aside
+          data-testid="sidebar-nav"
+          className="app-sidebar hidden h-full min-h-0 flex-col border-r border-ink/10 bg-surface/85 p-4 backdrop-blur md:flex"
+        >
           <div className="flex items-center gap-3 px-2 py-2">
             <img
               src={logo}
@@ -184,6 +192,7 @@ export function App() {
             {store.page === "about" ? <About /> : null}
           </div>
         </main>
+        {advanced && mobile ? <BottomNav /> : null}
         {advanced ? <AppStatusBar /> : null}
       </div>
 
