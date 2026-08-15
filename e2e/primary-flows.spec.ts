@@ -1,11 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 
-async function openFresh(page: Page) {
+async function openFresh(page: Page, mode: "basic" | "advanced" = "advanced") {
   await page.goto("/");
   await page.waitForFunction(
     "typeof window.__BIFLOW_RESET_MOCK === 'function'",
   );
-  await page.evaluate("window.__BIFLOW_RESET_MOCK()");
+  await page.evaluate(
+    ([nextMode]) => {
+      window.__BIFLOW_RESET_MOCK?.();
+      localStorage.setItem("biflow-ui-mode-v1", nextMode);
+    },
+    [mode],
+  );
   await page.reload();
   await expect(page.getByText("BiFlow")).toBeVisible();
 }
@@ -294,6 +300,31 @@ test.describe("primary BiFlow flows", () => {
       "تنظیمات",
       "درباره",
     ]);
+  });
+
+  test("starts in Basic mode on first launch and can return to Advanced", async ({
+    page,
+  }) => {
+    await openFresh(page, "basic");
+    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Direct rules" }),
+    ).toHaveCount(0);
+    await expectNoDocumentOverflow(page);
+
+    await page.getByRole("button", { name: "Connect" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Disconnect" }).click();
+
+    await page.getByRole("radio", { name: "Advanced" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Direct rules" }),
+    ).toBeVisible();
   });
 
   test("hides advanced chrome in Basic mode and can return to Advanced", async ({

@@ -9,7 +9,7 @@ import { APP_VERSION } from "./version";
 
 beforeEach(() => {
   resetMockState();
-  localStorage.removeItem(UI_MODE_STORAGE_KEY);
+  localStorage.setItem(UI_MODE_STORAGE_KEY, "advanced");
   useAppStore.setState({
     loading: true,
     actionPending: false,
@@ -61,6 +61,18 @@ describe("App", () => {
     expect(screen.getByRole("heading", { name: "About" })).toBeVisible();
     expect(screen.getByText(APP_VERSION)).toBeVisible();
     expect(screen.getByText("Dariush Vesal")).toBeVisible();
+  });
+
+  it("opens Basic mode on a first launch with no stored preference", async () => {
+    localStorage.removeItem(UI_MODE_STORAGE_KEY);
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Direct rules" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 
   it("hides advanced chrome in Basic mode", async () => {
