@@ -13,7 +13,8 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
-use tracing::info;
+use tokio::sync::Mutex;
+use tracing::{info, warn};
 
 const BIFLOW_REPOSITORY: &str = "devlifeX/BiFlow";
 const BIFLOW_MANIFEST_URL: &str =
@@ -26,7 +27,10 @@ const BIFLOW_RAW_PREFIX: &str = "https://raw.githubusercontent.com/devlifeX/BiFl
 /// in the manifest, so integrity does not depend on the ref.
 const BIFLOW_SNAPSHOT_REF: &str = "main";
 const META_FILE: &str = "sync-meta.json";
+const STAGING_DIR: &str = ".staging";
 const MAX_BYTES: usize = 20 * 1024 * 1024;
+const FETCH_ATTEMPTS: u32 = 3;
+const FETCH_BACKOFF: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Error)]
 pub enum CloudSyncError {
@@ -165,33 +169,31 @@ pub trait RuleFetcher: Send + Sync {
 #[derive(Debug)]
 pub struct ReqwestFetcher {
     client: reqwest::Client,
+    direct: reqwest::Client,
 }
 
 impl ReqwestFetcher {
     fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent("BiFlow/0.1.0")
-                .connect_timeout(Duration::from_secs(15))
-                .timeout(Duration::from_secs(60))
-                .redirect(reqwest::redirect::Policy::limited(8))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            client: Self::build_client(false),
+            direct: Self::build_client(true),
         }
     }
-}
 
-impl Default for ReqwestFetcher {
-    fn default() -> Self {
-        Self::new()
+    fn build_client(no_proxy: bool) -> reqwest::Client {
+        let mut builder = reqwest::Client::builder()
+            .user_agent("BiFlow/0.1.0")
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(60))
+            .redirect(reqwest::redirect::Policy::limited(8));
+        if no_proxy {
+            builder = builder.no_proxy();
+        }
+        builder.build().unwrap_or_else(|_| reqwest::Client::new())
     }
-}
 
-#[async_trait]
-impl RuleFetcher for ReqwestFetcher {
-    async fn fetch(&self, url: &str) -> Result<Vec<u8>, CloudSyncError> {
-        let response = self
-            .client
+    async fn fetch_with(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, CloudSyncError> {
+        let response = client
             .get(url)
             .send()
             .await
@@ -207,6 +209,25 @@ impl RuleFetcher for ReqwestFetcher {
             )));
         }
         Ok(bytes.to_vec())
+    }
+}
+
+impl Default for ReqwestFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl RuleFetcher for ReqwestFetcher {
+    async fn fetch(&self, url: &str) -> Result<Vec<u8>, CloudSyncError> {
+        match Self::fetch_with(&self.client, url).await {
+            Ok(bytes) => Ok(bytes),
+            Err(proxy_error) => match Self::fetch_with(&self.direct, url).await {
+                Ok(bytes) => Ok(bytes),
+                Err(_) => Err(proxy_error),
+            },
+        }
     }
 }
 
@@ -242,6 +263,7 @@ pub struct CloudRuleStore {
     bundled_dir: PathBuf,
     cache_dir: PathBuf,
     fetcher: Arc<dyn RuleFetcher>,
+    sync_lock: Arc<Mutex<()>>,
 }
 
 impl std::fmt::Debug for CloudRuleStore {
@@ -270,6 +292,7 @@ impl CloudRuleStore {
             bundled_dir: bundled_dir.into(),
             cache_dir: cache_dir.into(),
             fetcher,
+            sync_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -321,6 +344,7 @@ impl CloudRuleStore {
     /// or atomic persistence failures. Existing cached rules remain available
     /// when a replacement cannot be published.
     pub async fn sync(&self) -> Result<CloudRulesStatus, CloudSyncError> {
+        let _guard = self.sync_lock.lock().await;
         info!(
             event = "cloud_rules.sync_started",
             section = "cloud_rules",
@@ -334,19 +358,13 @@ impl CloudRuleStore {
         let manifest = self.fetch_manifest().await?;
         validate_manifest(&manifest)?;
         let (pending, sets) = self.download_manifest_generation(&manifest).await?;
-        for (name, bytes) in pending {
-            write_atomic(&self.cache_dir.join(name), &bytes)?;
-        }
         let meta = SyncMeta {
             last_synced_at: Some(Utc::now()),
             source: BIFLOW_REPOSITORY.into(),
             snapshot_revision: Some(manifest.commit),
             sets,
         };
-        write_atomic(
-            &self.cache_dir.join(META_FILE),
-            &serde_json::to_vec_pretty(&meta)?,
-        )?;
+        self.publish_generation(&pending, &meta)?;
         let status = status_from_meta(&meta).unwrap_or(CloudRulesStatus {
             domain_count: 0,
             ip_count: 0,
@@ -367,6 +385,68 @@ impl CloudRuleStore {
             "cloud rule synchronization completed"
         );
         Ok(status)
+    }
+
+    fn publish_generation(
+        &self,
+        pending: &[(&'static str, Vec<u8>)],
+        meta: &SyncMeta,
+    ) -> Result<(), CloudSyncError> {
+        let staging = self.cache_dir.join(STAGING_DIR);
+        if staging.exists() {
+            fs::remove_dir_all(&staging)?;
+        }
+        fs::create_dir_all(&staging)?;
+        let publish = (|| -> Result<(), CloudSyncError> {
+            for (name, bytes) in pending {
+                write_atomic(&staging.join(name), bytes)?;
+            }
+            write_atomic(&staging.join(META_FILE), &serde_json::to_vec_pretty(meta)?)?;
+            for (name, _) in pending {
+                write_atomic(&self.cache_dir.join(name), &fs::read(staging.join(name))?)?;
+            }
+            write_atomic(
+                &self.cache_dir.join(META_FILE),
+                &fs::read(staging.join(META_FILE))?,
+            )?;
+            Ok(())
+        })();
+        if let Err(cause) = fs::remove_dir_all(&staging) {
+            warn!(
+                event = "cloud_rules.staging_cleanup_failed",
+                section = "cloud_rules",
+                initiator = "cloud_rule_store",
+                cause = %cause,
+                trace_route = "cloud_rule_store->staging_dir",
+                "cloud rule staging directory could not be removed"
+            );
+        }
+        publish
+    }
+
+    async fn fetch_bytes(&self, url: &str) -> Result<Vec<u8>, CloudSyncError> {
+        let mut last_error = CloudSyncError::Fetch("cloud fetch failed".into());
+        for attempt in 0..FETCH_ATTEMPTS {
+            match self.fetcher.fetch(url).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => {
+                    last_error = error;
+                    warn!(
+                        event = "cloud_rules.fetch_attempt_failed",
+                        section = "cloud_rules",
+                        initiator = "cloud_rule_store",
+                        cause = %last_error,
+                        attempt = attempt + 1,
+                        attempts = FETCH_ATTEMPTS,
+                        "cloud rule fetch attempt failed"
+                    );
+                }
+            }
+            if attempt + 1 < FETCH_ATTEMPTS {
+                tokio::time::sleep(FETCH_BACKOFF.saturating_mul(1 << attempt.min(3))).await;
+            }
+        }
+        Err(last_error)
     }
 
     async fn download_manifest_generation(
@@ -399,7 +479,7 @@ impl CloudRuleStore {
                 )));
             }
             let url = snapshot_file_url(&manifest.commit, &rule.file);
-            let bytes = self.fetcher.fetch(&url).await?;
+            let bytes = self.fetch_bytes(&url).await?;
             if bytes.len() > MAX_BYTES {
                 return Err(CloudSyncError::Fetch(format!(
                     "response exceeded {MAX_BYTES} bytes"
@@ -431,7 +511,7 @@ impl CloudRuleStore {
     }
 
     async fn fetch_manifest(&self) -> Result<RemoteManifest, CloudSyncError> {
-        let bytes = self.fetcher.fetch(manifest_fetch_url()).await?;
+        let bytes = self.fetch_bytes(manifest_fetch_url()).await?;
         serde_json::from_slice(&bytes).map_err(CloudSyncError::from)
     }
 
@@ -825,5 +905,90 @@ mod tests {
         assert!(store.sync().await.is_err());
         assert!(!cache.join("iran-domains.txt").is_file());
         assert!(!cache.join(META_FILE).is_file());
+    }
+
+    struct FlakyFetcher {
+        inner: MapFetcher,
+        remaining: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait]
+    impl RuleFetcher for FlakyFetcher {
+        async fn fetch(&self, url: &str) -> Result<Vec<u8>, CloudSyncError> {
+            let previous = self
+                .remaining
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if previous > 0 {
+                return Err(CloudSyncError::Fetch("flaky".into()));
+            }
+            self.remaining
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.inner.fetch(url).await
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_retries_transient_fetches_and_clears_staging() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let bundled = directory.path().join("bundled");
+        let cache = directory.path().join("cache");
+        seed_bundled(&bundled);
+        fs::create_dir_all(cache.join(STAGING_DIR)).expect("stale staging");
+        fs::write(cache.join(STAGING_DIR).join("junk.txt"), b"stale").expect("junk");
+
+        let commit = "c".repeat(40);
+        let domain_bytes = domain_payload(1_000);
+        let network_bytes = cidr_payload(100);
+        let private_bytes = cidr_payload(8);
+        let manifest = manifest_for(
+            &commit,
+            &[
+                (
+                    "iran-domains.txt",
+                    ProviderKind::Domain,
+                    1_000,
+                    &sha256_hex(&domain_bytes),
+                ),
+                (
+                    "iran-networks.txt",
+                    ProviderKind::IpCidr,
+                    100,
+                    &sha256_hex(&network_bytes),
+                ),
+                (
+                    "private.txt",
+                    ProviderKind::IpCidr,
+                    8,
+                    &sha256_hex(&private_bytes),
+                ),
+            ],
+        );
+        let mut responses = HashMap::new();
+        responses.insert(
+            manifest_fetch_url().to_owned(),
+            Ok(serde_json::to_vec(&manifest).expect("manifest json")),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-domains.txt"),
+            Ok(domain_bytes),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-networks.txt"),
+            Ok(network_bytes),
+        );
+        responses.insert(snapshot_file_url(&commit, "private.txt"), Ok(private_bytes));
+
+        let store = CloudRuleStore::with_fetcher(
+            bundled,
+            cache.clone(),
+            Arc::new(FlakyFetcher {
+                inner: MapFetcher { responses },
+                remaining: std::sync::atomic::AtomicU32::new(2),
+            }),
+        );
+        let status = store.sync().await.expect("sync after retries");
+        assert_eq!(status.snapshot_revision, Some(commit));
+        assert!(!cache.join(STAGING_DIR).exists());
+        assert!(cache.join("iran-domains.txt").is_file());
     }
 }

@@ -44,3 +44,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0038](./0038-windows-tun-readiness.md)                  | Windows TUN readiness and clash alignment   | Accepted   |
 | [0039](./0039-complete-update-channels.md)               | Complete update channels                    | Accepted   |
 | [0040](./0040-reliable-update-check.md)                  | Reliable update check                       | Accepted   |
+| [0041](./0041-reliable-cloud-rule-sync.md)               | Reliable cloud rule sync                    | Accepted   |

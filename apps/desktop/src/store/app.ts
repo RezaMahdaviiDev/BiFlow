@@ -214,6 +214,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   syncCloudRules: async () => {
+    if (get().actionPending) {
+      return;
+    }
     set({ actionPending: true, error: null });
     try {
       const cloudRules = await desktop.syncCloudRules();

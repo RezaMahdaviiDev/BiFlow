@@ -192,6 +192,12 @@ describe("app store", () => {
     expect(useAppStore.getState().actionPending).toBe(false);
   });
 
+  it("does not start a second cloud rule sync while one is pending", async () => {
+    useAppStore.setState({ actionPending: true });
+    await useAppStore.getState().syncCloudRules();
+    expect(desktop.syncCloudRules).not.toHaveBeenCalled();
+  });
+
   it("tracks available and failed update states", async () => {
     vi.mocked(desktop.checkUpdate).mockResolvedValue({
       available: true,
