@@ -31,6 +31,16 @@ describe("fixed desktop shell", () => {
     );
   });
 
+  it("draws a square 3px connection glow that sits on the window edges", () => {
+    expect(css).toMatch(
+      /\.connection-glow::after[\s\S]*border-radius:\s*0[\s\S]*border:\s*3px solid/,
+    );
+    expect(css).toMatch(/inset 0 0 18px/);
+    expect(css).not.toMatch(
+      /\.connection-glow::after[\s\S]*border-radius:\s*0\.5rem/,
+    );
+  });
+
   it("prevents contextmenu events at runtime", () => {
     installContextMenuGuard();
     const event = new MouseEvent("contextmenu", {
