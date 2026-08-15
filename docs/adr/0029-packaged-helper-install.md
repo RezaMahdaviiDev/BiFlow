@@ -39,6 +39,21 @@ blocks the unelevated desktop process (UIPI).
   only ever fail the script's `authorized-uid must not be root` check. Script
   failures carry the last stderr line into the returned error and the debug log
   so the dialog states which check stopped the install.
+- An AppImage FUSE-mounts itself as the calling user. Without `allow_other` that
+  mount denies every other uid including root, so `pkexec` cannot even stat a
+  program under `/tmp/.mount_*`. `install_linux` copies the script, helper,
+  Mihomo, and unit into `<data>/runtime/helper-install` (mode 0700, a normal
+  exec-capable filesystem) and elevates those paths, then deletes the copies.
+  SHA-256 digests are taken from the packaged originals and re-verified by the
+  elevated script, so a substituted copy is rejected. A `.deb` install keeps
+  running `/usr/lib/biflow/install-helper.sh` in place so the polkit action's
+  `exec.path` annotation still matches. pkexec exit 126 means the operator
+  dismissed the dialog; 127 is a real execution failure and is reported as one.
+- Windows elevation runs `Start-Process -Verb RunAs -Wait -PassThru` under
+  `$ErrorActionPreference = 'Stop'` and exits with `$process.ExitCode`. Without
+  `-PassThru` the status is PowerShell's own, so a failed install or a refused
+  UAC prompt looked like success and only surfaced as the unreachable-helper
+  timeout. A refused prompt maps to `ERROR_CANCELLED` (1223).
 
 ## Consequences
 

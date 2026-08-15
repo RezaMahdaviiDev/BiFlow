@@ -195,8 +195,56 @@ describe("Tauri frontend contract", () => {
     );
     assert.match(
       source,
-      /#\[cfg\(target_os = "linux"\)\]\s*use std::path::PathBuf;/,
+      /#\[cfg\(target_os = "linux"\)\]\s*use std::path::\{Path, PathBuf\};/,
     );
+    assert.match(
+      source,
+      /#\[cfg\(target_os = "linux"\)\]\s*let payload_dir = /,
+    );
+    assert.match(
+      source,
+      /#\[cfg\(target_os = "linux"\)\]\s*use std::os::unix::fs::PermissionsExt;/,
+    );
+  });
+
+  it("stages the helper payload out of the AppImage FUSE mount for pkexec", () => {
+    const source = readFileSync(
+      join(root, "src-tauri/src/helper_install.rs"),
+      "utf8",
+    );
+    // root cannot read /tmp/.mount_* without allow_other, so pkexec must be
+    // handed copies rather than the paths inside the mount.
+    assert.match(source, /\.arg\(&payload\.script\)/);
+    assert.match(source, /\.arg\(&payload\.helper\)/);
+    assert.match(source, /\.arg\(&payload\.mihomo\)/);
+    assert.doesNotMatch(source, /\.arg\(&script\)/);
+    assert.doesNotMatch(source, /\.arg\(&helper_src\)/);
+    assert.doesNotMatch(source, /\.arg\(&mihomo_src\)/);
+    // 126 is a dismissed polkit dialog; 127 is a real failure to execute.
+    assert.match(source, /output\.status\.code\(\) == Some\(126\)/);
+    assert.doesNotMatch(
+      source,
+      /Some\(126\)\s*\|\|\s*output\.status\.code\(\) == Some\(127\)/,
+    );
+    assert.match(source, /fs::Permissions::from_mode\(0o700\)/);
+  });
+
+  it("re-raises the elevated Windows exit code instead of PowerShell's", () => {
+    const source = readFileSync(
+      join(root, "src-tauri/src/helper_install.rs"),
+      "utf8",
+    );
+    assert.match(source, /-Verb RunAs -Wait -PassThru/);
+    assert.match(source, /exit \$process\.ExitCode/);
+    assert.match(source, /\$ErrorActionPreference = 'Stop'/);
+    assert.match(source, /const UAC_CANCELLED: i32 = 1223;/);
+    // ADR 0030: the GUI is a windows-subsystem binary, so the elevation shell
+    // must not flash a console over the UI.
+    assert.match(source, /\.creation_flags\(CREATE_NO_WINDOW\)/);
+    assert.match(source, /const CREATE_NO_WINDOW: u32 = 0x0800_0000;/);
+    // Start-Process -Wait without -PassThru reports PowerShell's own status, so
+    // a failed helper and a refused UAC prompt both looked like success.
+    assert.doesNotMatch(source, /-Verb RunAs -Wait"/);
   });
 
   it("uses tail expressions in cfg blocks so host Clippy needless_return stays clean", () => {
