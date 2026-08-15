@@ -277,6 +277,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ update: progress });
   },
   checkForUpdate: async () => {
+    const phase = get().update.phase;
+    if (
+      phase === "checking" ||
+      phase === "downloading" ||
+      phase === "installing" ||
+      phase === "restarting"
+    ) {
+      return;
+    }
     set({
       update: {
         phase: "checking",
@@ -302,6 +311,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   installUpdate: async () => {
+    const phase = get().update.phase;
+    if (
+      phase === "checking" ||
+      phase === "downloading" ||
+      phase === "installing" ||
+      phase === "restarting"
+    ) {
+      return;
+    }
     const current = get().update;
     set({
       update: {

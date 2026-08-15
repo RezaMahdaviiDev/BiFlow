@@ -16,7 +16,10 @@ use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tauri::{
@@ -42,6 +45,57 @@ struct AppServices {
     cloud_rules: CloudRuleStore,
     network: network::NetworkMonitor,
     paths: AppPaths,
+    updates: Arc<UpdateCoordinator>,
+}
+
+struct UpdateCoordinator {
+    lock: tokio::sync::Mutex<()>,
+    cancel: AtomicBool,
+}
+
+impl std::fmt::Debug for UpdateCoordinator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UpdateCoordinator")
+            .field("cancel", &self.cancel.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl UpdateCoordinator {
+    fn new() -> Self {
+        Self {
+            lock: tokio::sync::Mutex::new(()),
+            cancel: AtomicBool::new(false),
+        }
+    }
+
+    fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    fn begin(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        let guard = self
+            .lock
+            .try_lock()
+            .map_err(|_| update_in_progress_message())?;
+        self.cancel.store(false, Ordering::SeqCst);
+        Ok(guard)
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+}
+
+fn update_in_progress_message() -> String {
+    "an update is already in progress".into()
+}
+
+fn update_check_cancelled(app: &AppHandle) -> bool {
+    services(app)
+        .ok()
+        .is_some_and(|services| services.updates.is_cancelled())
 }
 
 #[derive(Debug, Clone)]
@@ -598,7 +652,9 @@ async fn restart_stack(app: AppHandle) -> Result<OperationAccepted, String> {
 async fn cancel_operation(app: AppHandle, operation_id: Uuid) -> Result<bool, String> {
     diagnostics::trace_action("stack", "tauri_command", "cancel_operation", async move {
         info!(operation_id = %operation_id, "operation cancellation requested");
-        Ok(services(&app)?.engine.cancel_operation(operation_id).await)
+        let services = services(&app)?;
+        services.updates.request_cancel();
+        Ok(services.engine.cancel_operation(operation_id).await)
     })
     .await
 }
@@ -1147,18 +1203,23 @@ fn export_support_bundle(app: AppHandle) -> Result<ExportResult, String> {
 /// becomes a Retry button the operator has to press.
 const UPDATE_CHECK_ATTEMPTS: u32 = 4;
 const UPDATE_CHECK_FIRST_BACKOFF: Duration = Duration::from_millis(600);
+const UPDATE_CHECK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(8);
+const UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// How long to wait after launch before the first background check, and the
 /// interval between later ones.
 const UPDATE_BACKGROUND_DELAY: Duration = Duration::from_secs(90);
 const UPDATE_BACKGROUND_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
-    let update = app
-        .updater()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?;
+    let update = tokio::time::timeout(UPDATE_CHECK_ATTEMPT_TIMEOUT, async {
+        app.updater()
+            .map_err(|error| error.to_string())?
+            .check()
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "update check timed out".to_owned())??;
     Ok(update.map_or(
         UpdateStatus {
             available: false,
@@ -1284,6 +1345,9 @@ async fn check_update_with_retry(
 ) -> Result<UpdateStatus, String> {
     let mut last_error = String::new();
     for attempt in 0..UPDATE_CHECK_ATTEMPTS {
+        if update_check_cancelled(app) {
+            return Err("update check cancelled".into());
+        }
         match check_update_once(app).await {
             Ok(status) => {
                 if attempt > 0 {
@@ -1314,6 +1378,9 @@ async fn check_update_with_retry(
             }
         }
         if attempt + 1 < UPDATE_CHECK_ATTEMPTS {
+            if update_check_cancelled(app) {
+                return Err("update check cancelled".into());
+            }
             tokio::time::sleep(update_check_backoff(attempt)).await;
         }
     }
@@ -1332,6 +1399,7 @@ async fn check_update_with_retry(
 #[tauri::command]
 async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     diagnostics::trace_action("updates", "tauri_command", "check_for_update", async move {
+        let _guard = services(&app)?.updates.begin()?;
         collect_update_status(&app, "tauri_command").await
     })
     .await
@@ -1345,6 +1413,14 @@ fn spawn_background_update_checks(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(UPDATE_BACKGROUND_DELAY).await;
         loop {
+            let Ok(services) = services(&app) else {
+                tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
+                continue;
+            };
+            let Ok(_guard) = services.updates.begin() else {
+                tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
+                continue;
+            };
             match collect_update_status(&app, "background_poll").await {
                 Ok(status) if status.available => {
                     info!(
@@ -1391,33 +1467,34 @@ async fn download_and_install_signed_update(
     let mut downloaded = 0usize;
     let app_for_progress = app.clone();
     let version_for_progress = target_version.to_owned();
-    update
-        .download_and_install(
-            move |chunk_length, content_length| {
-                downloaded = downloaded.saturating_add(chunk_length);
-                emit_update_progress(
-                    &app_for_progress,
-                    UpdateProgress {
-                        phase: "downloading".into(),
-                        percent: update_download_percent(downloaded, content_length),
-                        version: Some(version_for_progress.clone()),
-                        error: None,
-                    },
-                );
-            },
-            || {
-                emit_update_progress(
-                    app,
-                    UpdateProgress {
-                        phase: "installing".into(),
-                        percent: Some(100),
-                        version: Some(target_version.to_owned()),
-                        error: None,
-                    },
-                );
-            },
-        )
+    let download = update.download_and_install(
+        move |chunk_length, content_length| {
+            downloaded = downloaded.saturating_add(chunk_length);
+            emit_update_progress(
+                &app_for_progress,
+                UpdateProgress {
+                    phase: "downloading".into(),
+                    percent: update_download_percent(downloaded, content_length),
+                    version: Some(version_for_progress.clone()),
+                    error: None,
+                },
+            );
+        },
+        || {
+            emit_update_progress(
+                app,
+                UpdateProgress {
+                    phase: "installing".into(),
+                    percent: Some(100),
+                    version: Some(target_version.to_owned()),
+                    error: None,
+                },
+            );
+        },
+    );
+    tokio::time::timeout(UPDATE_INSTALL_TIMEOUT, download)
         .await
+        .map_err(|_| "update download timed out".to_owned())?
         .map_err(|error| {
             let message = error.to_string();
             emit_update_progress(
@@ -1541,6 +1618,7 @@ async fn perform_signed_update_install(
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("updates", "tauri_command", "install_update", async move {
+        let _guard = services(&app)?.updates.begin()?;
         perform_complete_update_install(&app, Uuid::new_v4()).await
     })
     .await
@@ -1564,6 +1642,10 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Linux and Windows backend construction stay in one startup path"
+)]
 fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     info!(
         event = "services.initializing",
@@ -1666,6 +1748,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         cloud_rules,
         network,
         paths,
+        updates: Arc::new(UpdateCoordinator::new()),
     })
 }
 
@@ -2192,6 +2275,16 @@ mod tests {
         BUNDLE_IDENTIFIER, UPDATE_CHECK_ATTEMPTS, UPDATE_CHECK_FIRST_BACKOFF,
     };
     use std::{fs, time::Duration};
+
+    #[test]
+    fn update_check_attempt_timeout_bounds_a_hang() {
+        assert_eq!(super::UPDATE_CHECK_ATTEMPT_TIMEOUT, Duration::from_secs(8));
+        assert_eq!(super::UPDATE_INSTALL_TIMEOUT, Duration::from_secs(10 * 60));
+        assert_eq!(
+            super::update_in_progress_message(),
+            "an update is already in progress"
+        );
+    }
 
     #[test]
     fn update_check_backoff_grows_and_stays_bounded() {

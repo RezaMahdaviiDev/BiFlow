@@ -293,6 +293,10 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /fn perform_complete_update_install\(/);
     assert.match(rust, /fn apply_sidecar_updates\(/);
     assert.match(rust, /fn merge_update_channels\(/);
+    assert.match(rust, /const UPDATE_CHECK_ATTEMPT_TIMEOUT/);
+    assert.match(rust, /const UPDATE_INSTALL_TIMEOUT/);
+    assert.match(rust, /fn update_in_progress_message\(/);
+    assert.match(rust, /updates\.begin\(\)/);
   });
 
   it("never reports a previous attempt's Windows install reason", () => {

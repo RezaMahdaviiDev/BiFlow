@@ -211,6 +211,36 @@ describe("app store", () => {
     expect(useAppStore.getState().update.error).toMatch(/bad manifest/);
   });
 
+  it("ignores a second update check while one is already in flight", async () => {
+    let finish: (status: {
+      available: boolean;
+      version: string | null;
+      notes: string | null;
+      app_available: boolean;
+      rules_available: boolean;
+      thirdparty_available: boolean;
+    }) => void = () => undefined;
+    vi.mocked(desktop.checkUpdate).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const first = useAppStore.getState().checkForUpdate();
+    await useAppStore.getState().checkForUpdate();
+    expect(desktop.checkUpdate).toHaveBeenCalledOnce();
+    finish({
+      available: false,
+      version: null,
+      notes: null,
+      app_available: false,
+      rules_available: false,
+      thirdparty_available: false,
+    });
+    await first;
+    expect(useAppStore.getState().update.phase).toBe("current");
+  });
+
   it("retries install after a failed update when a version is known", async () => {
     vi.mocked(desktop.installUpdate).mockResolvedValue({
       operation_id: "update-op",
