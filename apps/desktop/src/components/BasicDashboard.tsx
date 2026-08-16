@@ -1,8 +1,17 @@
-import { LoaderCircle } from "lucide-react";
+import {
+  Download,
+  LoaderCircle,
+  Pause,
+  Play,
+  Power,
+  PowerOff,
+  X,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { StackPhase, StackSnapshot } from "../api/models";
 import { controlsLocked } from "../lib/lifecycle";
 import { useAppStore } from "../store/app";
+import { AppButton, BUTTON_ICON_PX } from "./AppButton";
 
 const progressPhases: StackPhase[] = [
   "starting_hiddify",
@@ -84,68 +93,77 @@ export function BasicDashboard({ snapshot }: { snapshot: StackSnapshot }) {
         >
           <p>{showError}</p>
           {missing ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<Download size={BUTTON_ICON_PX} aria-hidden />}
               className="mt-3 rounded-xl bg-brand px-4 py-2 font-semibold text-white"
               onClick={() => void installDependency(missingId)}
             >
               {t("install")} {missingId === "mihomo" ? "Mihomo" : "Hiddify"}
-            </button>
+            </AppButton>
           ) : null}
         </div>
       ) : null}
 
       <div className="flex flex-wrap items-center justify-center gap-2">
         {operating && snapshot.operation_id ? (
-          <button
-            type="button"
+          <AppButton
+            icon={<X size={BUTTON_ICON_PX} aria-hidden />}
             onClick={() => void cancel()}
             className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
           >
             {t("cancel")}
-          </button>
+          </AppButton>
         ) : null}
         {active ? (
-          <button
-            type="button"
+          <AppButton
+            icon={<Pause size={BUTTON_ICON_PX} aria-hidden />}
             disabled={locked}
             onClick={() => void pauseConnection()}
             className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold disabled:opacity-50"
           >
             {t("pause")}
-          </button>
+          </AppButton>
         ) : null}
         {paused ? (
-          <button
-            type="button"
+          <AppButton
+            icon={<Play size={BUTTON_ICON_PX} aria-hidden />}
             disabled={locked}
             onClick={() => void resumeConnection()}
             className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
             {t("resume")}
-          </button>
+          </AppButton>
         ) : null}
         {!paused ? (
-          <button
-            type="button"
+          <AppButton
+            icon={
+              actionPending && !operating ? (
+                <LoaderCircle
+                  className="animate-spin"
+                  size={BUTTON_ICON_PX}
+                  aria-hidden
+                />
+              ) : active ? (
+                <PowerOff size={BUTTON_ICON_PX} aria-hidden />
+              ) : (
+                <Power size={BUTTON_ICON_PX} aria-hidden />
+              )
+            }
             disabled={locked}
             onClick={() => void toggleConnection()}
-            className="inline-flex min-w-36 items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
+            className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
-            {actionPending && !operating ? (
-              <LoaderCircle className="animate-spin" size={18} aria-hidden />
-            ) : null}
             {active ? t("disconnect") : t("connect")}
-          </button>
+          </AppButton>
         ) : (
-          <button
-            type="button"
+          <AppButton
+            icon={<PowerOff size={BUTTON_ICON_PX} aria-hidden />}
             disabled={locked}
             onClick={() => void toggleConnection()}
             className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold disabled:opacity-50"
           >
             {t("disconnect")}
-          </button>
+          </AppButton>
         )}
       </div>
     </section>

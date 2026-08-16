@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { isEditableTarget, selectionLength } from "../lib/editableTarget";
+import { BUTTON_ICON_PX } from "./AppButton";
 
 interface MenuState {
   x: number;
@@ -55,6 +57,7 @@ export function InputContextMenu() {
       onClick={(event) => event.stopPropagation()}
     >
       <MenuItem
+        icon={<TextSelect size={BUTTON_ICON_PX} aria-hidden />}
         label={t("contextSelectAll")}
         disabled={menu.field.disabled}
         onSelect={() => {
@@ -63,6 +66,7 @@ export function InputContextMenu() {
         }}
       />
       <MenuItem
+        icon={<Copy size={BUTTON_ICON_PX} aria-hidden />}
         label={t("contextCopy")}
         disabled={!hasSelection}
         onSelect={() => {
@@ -70,6 +74,7 @@ export function InputContextMenu() {
         }}
       />
       <MenuItem
+        icon={<Scissors size={BUTTON_ICON_PX} aria-hidden />}
         label={t("contextCut")}
         disabled={readonly || !hasSelection}
         onSelect={() => {
@@ -77,6 +82,7 @@ export function InputContextMenu() {
         }}
       />
       <MenuItem
+        icon={<ClipboardPaste size={BUTTON_ICON_PX} aria-hidden />}
         label={t("contextPaste")}
         disabled={readonly}
         onSelect={() => {
@@ -88,10 +94,12 @@ export function InputContextMenu() {
 }
 
 function MenuItem({
+  icon,
   label,
   disabled,
   onSelect,
 }: {
+  icon: ReactNode;
   label: string;
   disabled: boolean;
   onSelect: () => void;
@@ -102,9 +110,10 @@ function MenuItem({
         type="button"
         role="menuitem"
         disabled={disabled}
-        className="block w-full px-3 py-1.5 text-start disabled:text-muted"
+        className="inline-flex w-full items-center gap-2 px-3 py-1.5 text-start disabled:text-muted"
         onClick={onSelect}
       >
+        {icon}
         {label}
       </button>
     </li>

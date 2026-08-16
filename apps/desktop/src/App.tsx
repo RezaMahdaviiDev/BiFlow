@@ -2,6 +2,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Activity,
   BookOpen,
+  Download,
+  ExternalLink,
   Info,
   Languages,
   LayoutDashboard,
@@ -15,6 +17,11 @@ import { useTranslation } from "react-i18next";
 import logo from "./assets/logo.png";
 import { desktop } from "./api/desktop";
 import type { StackPhase } from "./api/models";
+import {
+  AppButton,
+  BUTTON_ICON_PX,
+  IconOnlyButton,
+} from "./components/AppButton";
 import { About } from "./components/About";
 import { BasicDashboard } from "./components/BasicDashboard";
 import { Dashboard } from "./components/Dashboard";
@@ -233,13 +240,13 @@ export function App() {
                 </p>
               ) : null}
               {missing ? (
-                <button
-                  type="button"
+                <AppButton
+                  icon={<Download size={BUTTON_ICON_PX} aria-hidden />}
                   className="mt-4 rounded-xl bg-brand px-4 py-2.5 font-semibold text-white"
                   onClick={() => void store.installDependency(missingId)}
                 >
                   {t("install")} {missingId === "mihomo" ? "Mihomo" : "Hiddify"}
-                </button>
+                </AppButton>
               ) : null}
               <Dialog.Close
                 className="absolute right-4 top-4 rounded-lg p-1 text-muted"
@@ -278,8 +285,8 @@ export function App() {
               ) : null}
               <div className="mt-5 flex flex-wrap gap-2">
                 {store.installGuide ? (
-                  <button
-                    type="button"
+                  <AppButton
+                    icon={<ExternalLink size={BUTTON_ICON_PX} aria-hidden />}
                     className="rounded-xl bg-brand px-4 py-2.5 font-semibold text-white"
                     onClick={() => {
                       const url = store.installGuide?.download_url;
@@ -287,9 +294,10 @@ export function App() {
                     }}
                   >
                     {t("openDownload")}
-                  </button>
+                  </AppButton>
                 ) : null}
-                <Dialog.Close className="rounded-xl border border-ink/15 px-4 py-2.5 font-semibold">
+                <Dialog.Close className="inline-flex items-center justify-center gap-2 rounded-xl border border-ink/15 px-4 py-2.5 font-semibold">
+                  <X size={BUTTON_ICON_PX} aria-hidden />
                   {t("close")}
                 </Dialog.Close>
               </div>
@@ -342,15 +350,15 @@ function ThemeButton({
   dark: boolean;
   setDark: (dark: boolean) => void;
 }) {
+  const label = dark ? "Use light theme" : "Use dark theme";
   return (
-    <button
-      type="button"
+    <IconOnlyButton
+      label={label}
       onClick={() => setDark(!dark)}
       className="rounded-xl p-2 text-muted hover:bg-ink/5 hover:text-ink"
-      aria-label={dark ? "Use light theme" : "Use dark theme"}
     >
       {dark ? <Sun size={19} aria-hidden /> : <Moon size={19} aria-hidden />}
-    </button>
+    </IconOnlyButton>
   );
 }
 
@@ -362,17 +370,16 @@ function LanguageButton({
   change: (language: string) => void;
 }) {
   return (
-    <button
-      type="button"
+    <IconOnlyButton
+      label="Change language"
       onClick={() => {
         const next = language === "fa" ? "en" : "fa";
         localStorage.setItem("biflow-language", next);
         change(next);
       }}
       className="rounded-xl p-2 text-muted hover:bg-ink/5 hover:text-ink"
-      aria-label="Change language"
     >
       <Languages size={19} aria-hidden />
-    </button>
+    </IconOnlyButton>
   );
 }

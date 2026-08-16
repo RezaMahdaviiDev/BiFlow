@@ -49,7 +49,9 @@ describe("Dashboard", () => {
     useAppStore.setState({ snapshot: stopped, actionPending: false });
     render(<Dashboard snapshot={stopped} />);
     expect(screen.getAllByText("stopped")).toHaveLength(5);
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    const connect = screen.getByRole("button", { name: "Connect" });
+    expect(connect.querySelector("svg")).not.toBeNull();
+    await userEvent.click(connect);
     expect(useAppStore.getState().actionPending).toBe(true);
   });
 

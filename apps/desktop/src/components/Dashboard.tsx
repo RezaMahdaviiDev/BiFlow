@@ -7,12 +7,18 @@ import {
   Globe2,
   LoaderCircle,
   Network,
+  Pause,
+  Play,
+  Power,
+  PowerOff,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ComponentStatus, StackPhase, StackSnapshot } from "../api/models";
 import { controlsLocked } from "../lib/lifecycle";
 import { useAppStore } from "../store/app";
+import { AppButton, BUTTON_ICON_PX } from "./AppButton";
 import { StatusPill } from "./StatusPill";
 
 const progressPhases: StackPhase[] = [
@@ -75,52 +81,58 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
         </div>
         <div className="flex flex-wrap gap-2">
           {operating && snapshot.operation_id ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<X size={BUTTON_ICON_PX} aria-hidden />}
               onClick={() => void cancel()}
               className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
             >
               {t("cancel")}
-            </button>
+            </AppButton>
           ) : null}
           {active ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<Pause size={BUTTON_ICON_PX} aria-hidden />}
               disabled={locked}
               onClick={() => void pauseConnection()}
               className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
             >
               {t("pause")}
-            </button>
+            </AppButton>
           ) : null}
           {paused ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<Play size={BUTTON_ICON_PX} aria-hidden />}
               disabled={locked}
               onClick={() => void resumeConnection()}
               className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {t("resume")}
-            </button>
+            </AppButton>
           ) : null}
           {!paused ? (
-            <button
-              type="button"
+            <AppButton
+              icon={
+                active ? (
+                  <PowerOff size={BUTTON_ICON_PX} aria-hidden />
+                ) : (
+                  <Power size={BUTTON_ICON_PX} aria-hidden />
+                )
+              }
               disabled={locked}
               onClick={() => void toggleConnection()}
               className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
             >
               {active ? t("disconnect") : t("connect")}
-            </button>
+            </AppButton>
           ) : (
-            <button
-              type="button"
+            <AppButton
+              icon={<PowerOff size={BUTTON_ICON_PX} aria-hidden />}
               disabled={locked}
               onClick={() => void toggleConnection()}
               className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
             >
               {t("disconnect")}
-            </button>
+            </AppButton>
           )}
         </div>
       </div>
