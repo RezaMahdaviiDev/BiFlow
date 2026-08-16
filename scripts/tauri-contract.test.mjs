@@ -76,8 +76,12 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /default_window_icon\(\)/);
     assert.match(
       rust,
-      /TrayIconBuilder::new\(\)[\s\S]*?\.icon\(icon\)[\s\S]*?\.menu\(&menu\)/,
+      /TrayIconBuilder::with_id\("main"\)[\s\S]*?\.icon\(icon\)[\s\S]*?\.menu\(&menu\)/,
     );
+    assert.match(rust, /PredefinedMenuItem::separator/);
+    assert.match(rust, /apply_tray_menu/);
+    const tray = readFileSync(join(root, "src-tauri/src/tray.rs"), "utf8");
+    assert.match(tray, /fn labels_for/);
   });
 
   it("disables WebKitGTK DMA-BUF rendering before the Linux webview starts", () => {

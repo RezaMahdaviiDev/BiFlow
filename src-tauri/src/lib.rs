@@ -5,6 +5,7 @@ mod helper_install;
 mod hiddify_reset;
 mod network;
 mod traffic;
+mod tray;
 mod version;
 mod window_state;
 
@@ -27,7 +28,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    menu::{Menu, MenuEvent, MenuItem},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalSize, Manager, Runtime, Size, Window, WindowEvent,
 };
@@ -2026,53 +2027,8 @@ fn disconnect_from_tray<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-fn disconnect_and_quit_from_tray<R: Runtime>(app: &AppHandle<R>) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let result =
-            diagnostics::trace_action("lifecycle", "tray_menu", "disconnect_and_quit", async {
-                let services = services(&app)?;
-                services
-                    .engine
-                    .stop_stack()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                services
-                    .engine
-                    .wait_for_phase(StackPhase::Stopped, Duration::from_secs(25))
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok::<(), String>(())
-            })
-            .await;
-        if let Err(cause) = result {
-            error!(
-                event = "shutdown.disconnect_failed",
-                section = "lifecycle",
-                initiator = "tray_menu",
-                cause,
-                trace_route = "tray_menu->stop_stack->application_exit",
-                "disconnect before quit failed"
-            );
-        }
-        diagnostics::flush();
-        app.exit(0);
-    });
-}
-
 fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
     match event.id.as_ref() {
-        "open" => {
-            info!(
-                event = "window.open_requested",
-                section = "window",
-                initiator = "tray_menu",
-                cause = "open_selected",
-                trace_route = "tray_menu->show_main",
-                "main window open requested"
-            );
-            show_main(app);
-        }
         "connect" => connect_from_tray(app),
         "pause" => pause_from_tray(app),
         "resume" => resume_from_tray(app),
@@ -2088,28 +2044,6 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
             );
             app.exit(0);
         }
-        "disconnect_quit" => disconnect_and_quit_from_tray(app),
-        "about" => {
-            info!(
-                event = "window.about_requested",
-                section = "window",
-                initiator = "tray_menu",
-                cause = "about_selected",
-                trace_route = "tray_menu->show_main->app-navigate",
-                "about page requested from tray"
-            );
-            show_main(app);
-            if let Err(cause) = app.emit("app-navigate", "about") {
-                warn!(
-                    event = "navigation.emit_failed",
-                    section = "window",
-                    initiator = "tray_menu",
-                    cause = %cause,
-                    trace_route = "tray_menu->emit(app-navigate)",
-                    "about navigation event could not be emitted"
-                );
-            }
-        }
         unknown => warn!(
             event = "tray.unknown_action",
             section = "tray",
@@ -2122,38 +2056,69 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
     }
 }
 
-fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let connect = MenuItem::with_id(app, "connect", "Connect", true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>)?;
-    let resume = MenuItem::with_id(app, "resume", "Resume", true, None::<&str>)?;
-    let disconnect = MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "About", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit UI", true, None::<&str>)?;
-    let disconnect_quit = MenuItem::with_id(
+fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, phase: StackPhase) -> tauri::Result<Menu<R>> {
+    let labels = tray::labels_for(phase);
+    let connection = MenuItem::with_id(
         app,
-        "disconnect_quit",
-        "Disconnect & Quit",
+        labels.connection_id,
+        labels.connection_label,
         true,
         None::<&str>,
     )?;
-    let menu = Menu::with_items(
+    let pause = MenuItem::with_id(app, labels.pause_id, labels.pause_label, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let first_separator = PredefinedMenuItem::separator(app)?;
+    let second_separator = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(
         app,
         &[
-            &connect,
+            &connection,
+            &first_separator,
             &pause,
-            &resume,
-            &disconnect,
-            &open,
-            &about,
+            &second_separator,
             &quit,
-            &disconnect_quit,
         ],
-    )?;
+    )
+}
+
+fn apply_tray_menu<R: Runtime>(app: &AppHandle<R>, phase: StackPhase) {
+    let Ok(menu) = build_tray_menu(app, phase) else {
+        warn!(
+            event = "tray.menu_build_failed",
+            section = "tray",
+            initiator = "apply_tray_menu",
+            cause = "menu_construction",
+            trace_route = "snapshot_watcher->build_tray_menu",
+            "tray menu could not be rebuilt"
+        );
+        return;
+    };
+    let Some(icon) = app.tray_by_id("main") else {
+        return;
+    };
+    if let Err(cause) = icon.set_menu(Some(menu)) {
+        warn!(
+            event = "tray.menu_update_failed",
+            section = "tray",
+            initiator = "apply_tray_menu",
+            cause = %cause,
+            trace_route = "snapshot_watcher->tray.set_menu",
+            "tray menu could not be replaced"
+        );
+    }
+}
+
+fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
+    let phase = app
+        .try_state::<AppServices>()
+        .map_or(StackPhase::Stopped, |services| {
+            services.engine.snapshot().phase
+        });
+    let menu = build_tray_menu(app.handle(), phase)?;
     let icon = app.default_window_icon().cloned().ok_or_else(|| {
         tauri::Error::from(std::io::Error::other("default window icon is missing"))
     })?;
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id("main")
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -2223,7 +2188,8 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     app.manage(services);
     tauri::async_runtime::spawn(async move {
         while snapshots.changed().await.is_ok() {
-            if let Err(cause) = handle.emit("stack-snapshot", snapshots.borrow().clone()) {
+            let snapshot = snapshots.borrow().clone();
+            if let Err(cause) = handle.emit("stack-snapshot", snapshot.clone()) {
                 warn!(
                     event = "snapshot.emit_failed",
                     section = "stack",
@@ -2233,6 +2199,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
                     "stack snapshot event could not be emitted"
                 );
             }
+            apply_tray_menu(&handle, snapshot.phase);
         }
         warn!(
             event = "snapshot.channel_closed",
