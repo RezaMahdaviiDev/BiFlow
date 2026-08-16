@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -376,11 +376,22 @@ describe("release artifact names", () => {
   it("presents BiFlow to end users with a tagline, architecture, and FAQ", () => {
     const readme = readFileSync(join(root, "README.md"), "utf8");
     assert.match(readme, /Right traffic\. Right route/);
+    assert.match(readme, /## Features/);
+    assert.match(readme, /docs\/screenshots\/desktop\.png/);
+    assert.match(readme, /docs\/screenshots\/mobile\.png/);
     assert.match(readme, /## Description/);
     assert.match(readme, /## How it works/);
     assert.match(readme, /## Architecture/);
     assert.match(readme, /## Develop/);
     assert.match(readme, /## FAQ/);
+    assert.ok(
+      existsSync(join(root, "docs/screenshots/desktop.png")),
+      "desktop screenshot",
+    );
+    assert.ok(
+      existsSync(join(root, "docs/screenshots/mobile.png")),
+      "mobile screenshot",
+    );
   });
 
   it("requires a green frontend and rust build before a change is done", () => {
