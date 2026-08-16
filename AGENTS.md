@@ -170,3 +170,4 @@ If a required command fails or emits a warning from project code, fix it in the 
   `receiver.changed()` so the waiter is armed before the operation is queued.
 - `pause_stack` used to treat `Stopped` as already complete without checking the lifecycle lock, so Pause succeeded while Connect was still reserved. Reject any other `busy` kind before the idempotent phase shortcuts.
 - Workspace Clippy `map_unwrap_or` rejects `option.map(f).unwrap_or(default)`. Use `map_or(default, f)` at the tray setup site and similar lookups.
+- `pnpm format:check` includes `docs/considering/*.md`. Compact table separators (`|---|---|`) fail Prettier and the frontend GitHub Action. Run `pnpm exec prettier --write` on new markdown before merge.

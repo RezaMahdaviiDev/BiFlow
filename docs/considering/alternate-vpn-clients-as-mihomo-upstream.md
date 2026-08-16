@@ -29,10 +29,10 @@ flowchart LR
   Hiddify --> World[Rest of the internet]
 ```
 
-| Layer | Owner | Job |
-|---|---|---|
-| Split engine | Mihomo, started by the privileged helper | Creates BiFlow’s TUN (`clash-iran`), hijacks DNS, applies Iran / private / pin rules |
-| VPN egress | Hiddify, treated as an external process | Must listen on a **loopback SOCKS5** port. BiFlow never logs into it or writes its profile |
+| Layer        | Owner                                    | Job                                                                                        |
+| ------------ | ---------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Split engine | Mihomo, started by the privileged helper | Creates BiFlow’s TUN (`clash-iran`), hijacks DNS, applies Iran / private / pin rules       |
+| VPN egress   | Hiddify, treated as an external process  | Must listen on a **loopback SOCKS5** port. BiFlow never logs into it or writes its profile |
 
 Connect order in `Engine::start_steps`:
 
@@ -91,14 +91,14 @@ Hiddify API.
 
 Pointing the port at v2rayN or HAPP and pressing Connect is **not** enough.
 
-| Constraint | Why it matters |
-|---|---|
-| Upstream type is `socks5` only | HTTP-CONNECT-only local proxies fail both YAML and the `socks5h://` egress probe |
-| Host is locked to `127.0.0.1` | Remote or LAN proxies are rejected in the UI schema |
-| Process bypass is Hiddify-only | Linux: `hiddify`, `*Hiddify*`. Windows: `hiddify.exe`, `Hiddify.exe`, `HiddifyNext.exe`, `*Hiddify*` |
-| Launch/discover/install/reset | Paths, GitHub URLs, “Fresh Hiddify start”, and `stop_with_stack` are Hiddify-specific |
-| UDP | Generated proxy sets `udp: true`. A SOCKS port without UDP ASSOCIATE breaks QUIC and some DNS-over-UDP on the VPN path |
-| System proxy | If the client also sets the OS HTTP proxy, some apps bypass Mihomo TUN; others still hit it. Pause already warns that not every Hiddify mode leaves the OS proxy off |
+| Constraint                     | Why it matters                                                                                                                                                       |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Upstream type is `socks5` only | HTTP-CONNECT-only local proxies fail both YAML and the `socks5h://` egress probe                                                                                     |
+| Host is locked to `127.0.0.1`  | Remote or LAN proxies are rejected in the UI schema                                                                                                                  |
+| Process bypass is Hiddify-only | Linux: `hiddify`, `*Hiddify*`. Windows: `hiddify.exe`, `Hiddify.exe`, `HiddifyNext.exe`, `*Hiddify*`                                                                 |
+| Launch/discover/install/reset  | Paths, GitHub URLs, “Fresh Hiddify start”, and `stop_with_stack` are Hiddify-specific                                                                                |
+| UDP                            | Generated proxy sets `udp: true`. A SOCKS port without UDP ASSOCIATE breaks QUIC and some DNS-over-UDP on the VPN path                                               |
+| System proxy                   | If the client also sets the OS HTTP proxy, some apps bypass Mihomo TUN; others still hit it. Pause already warns that not every Hiddify mode leaves the OS proxy off |
 
 The process-name gap is the dangerous one. [ADR 0018](../adr/0018-hiddify-egress-before-tun.md)
 exists because Hiddify AppImage traffic (`Hiddify-Linux-x`) was captured by
@@ -126,13 +126,13 @@ is not a new network architecture.
 
 ### Named clients in this class
 
-| Client | Fit if used as local proxy | Notes |
-|---|---|---|
-| **v2rayN** | Good | Typical SOCKS `10808`, HTTP `10809`. Turn **off** TUN / virtual adapter. Add `v2rayN.exe`, `xray.exe`, `v2ray.exe` to DIRECT. Point BiFlow at the SOCKS port, not HTTP-only. |
-| **HAPP** | Good (Hiddify-like) | sing-box family; mixed/SOCKS is the same pattern as Hiddify. Use proxy mode, not TUN. Bypass `Happ*` / `sing-box`. Default port is not 12334. |
-| **Hiddify** | Designed for this | Default mixed `12334`, already in bypass rules. Must not also run Hiddify TUN while BiFlow is connected. |
-| **Psiphon (proxy mode)** | Partial | Windows Psiphon 3 often exposes local HTTP/SOCKS. SOCKS must be on and UDP-capable if you care about QUIC. Bypass `psiphon*` / `psiphon-tunnel-core`. Do not use its VPN/TAP mode. |
-| **Windscribe** | Poor as-is | Primarily a system VPN. A local proxy, if present, is secondary. Kill switch and its own TUN usually fight Mihomo. |
+| Client                   | Fit if used as local proxy | Notes                                                                                                                                                                              |
+| ------------------------ | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **v2rayN**               | Good                       | Typical SOCKS `10808`, HTTP `10809`. Turn **off** TUN / virtual adapter. Add `v2rayN.exe`, `xray.exe`, `v2ray.exe` to DIRECT. Point BiFlow at the SOCKS port, not HTTP-only.       |
+| **HAPP**                 | Good (Hiddify-like)        | sing-box family; mixed/SOCKS is the same pattern as Hiddify. Use proxy mode, not TUN. Bypass `Happ*` / `sing-box`. Default port is not 12334.                                      |
+| **Hiddify**              | Designed for this          | Default mixed `12334`, already in bypass rules. Must not also run Hiddify TUN while BiFlow is connected.                                                                           |
+| **Psiphon (proxy mode)** | Partial                    | Windows Psiphon 3 often exposes local HTTP/SOCKS. SOCKS must be on and UDP-capable if you care about QUIC. Bypass `psiphon*` / `psiphon-tunnel-core`. Do not use its VPN/TAP mode. |
+| **Windscribe**           | Poor as-is                 | Primarily a system VPN. A local proxy, if present, is secondary. Kill switch and its own TUN usually fight Mihomo.                                                                 |
 
 ---
 
@@ -202,21 +202,21 @@ assume they own the network.
 
 Other approaches are worse for this product:
 
-| Idea | Problem |
-|---|---|
-| Disable Mihomo TUN; use only Mihomo mixed-port | Loses system-wide split routing unless every app is pointed at 17890 |
-| Let the other VPN own the default route; push Iran excludes into it | BiFlow no longer owns rules, DNS, Pause, or rollback |
-| tun2socks on their TUN to fake a local SOCKS | Extra hop, extra process, still need them not to take the default route |
-| Policy routing / fwmark only | Linux-possible, Windows-painful, no existing helper commands |
+| Idea                                                                | Problem                                                                 |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Disable Mihomo TUN; use only Mihomo mixed-port                      | Loses system-wide split routing unless every app is pointed at 17890    |
+| Let the other VPN own the default route; push Iran excludes into it | BiFlow no longer owns rules, DNS, Pause, or rollback                    |
+| tun2socks on their TUN to fake a local SOCKS                        | Extra hop, extra process, still need them not to take the default route |
+| Policy routing / fwmark only                                        | Linux-possible, Windows-painful, no existing helper commands            |
 
 ### Named clients in this class
 
-| Client | Assessment |
-|---|---|
-| **Windscribe** | System VPN. Dual-TUN + kill switch. Not a Mihomo upstream without a supported local SOCKS and split/kill-switch off. |
-| **Psiphon VPN/TAP mode** | Same class as Windscribe. Use proxy mode instead. |
-| **v2rayN / HAPP / Hiddify TUN mode** | Same conflict as any second TUN. Switch them to local proxy only. |
-| **WireGuard / OpenVPN / IKEv2** | No SOCKS. Would need interface-bound outbounds and a cooperative tunnel. Not in the current helper/engine. |
+| Client                               | Assessment                                                                                                           |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| **Windscribe**                       | System VPN. Dual-TUN + kill switch. Not a Mihomo upstream without a supported local SOCKS and split/kill-switch off. |
+| **Psiphon VPN/TAP mode**             | Same class as Windscribe. Use proxy mode instead.                                                                    |
+| **v2rayN / HAPP / Hiddify TUN mode** | Same conflict as any second TUN. Switch them to local proxy only.                                                    |
+| **WireGuard / OpenVPN / IKEv2**      | No SOCKS. Would need interface-bound outbounds and a cooperative tunnel. Not in the current helper/engine.           |
 
 ---
 
@@ -252,17 +252,17 @@ replaces DNS will break Iran DIRECT, fake-IP, or both.
 The two backends implement the same `PlatformBackend` contract, but the network
 is not the same.
 
-| Area | Linux | Windows |
-|---|---|---|
-| Capture TUN | Mihomo `auto-route`, `strict-route: false`, IPv6 on | Wintun, `strict-route: true`, IPv6 off |
-| TUN health | `/sys/class/net/<tun_name>` | Mihomo `GET /configs` `tun.enable` only (no adapter walk) |
-| DoH | Unpinned `https://1.1.1.1/dns-query` | `https://1.1.1.1/dns-query#VPN` — bootstrap must go through the SOCKS upstream |
-| Process bypass | `/proc` comm; AppImage names differ from the binary (`Hiddify-Linux-x`) | Image names; children like `xray.exe` / `sing-box.exe` need their own rules |
-| Helper | Unix socket, systemd/pkexec, can `ip link delete` | Named pipe, scheduled task, cleanup is “stop Mihomo”; no interface delete |
-| Foreign TUN | `ip rule` / fwmark / `interface-name` are at least expressible | WFP, NRPT, TAP/Wintun names (`Meta`, empty, device path). Interface binding is harder and adapter enumeration is forbidden in the platform crate |
-| System proxy | Less common; still can leak apps around TUN | Very common (v2rayN, Psiphon). Controller client already uses `no_proxy()` so Hiddify’s proxy cannot swallow `127.0.0.1:19090` |
-| Kill switch | Usually iptables/nft in the other app | Often WFP; will drop BiFlow DIRECT unless disabled |
-| UDP/QUIC | Mixed stack + sniff QUIC 443 | IPv6 off; QUIC still needs SOCKS UDP ASSOCIATE |
+| Area           | Linux                                                                   | Windows                                                                                                                                          |
+| -------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Capture TUN    | Mihomo `auto-route`, `strict-route: false`, IPv6 on                     | Wintun, `strict-route: true`, IPv6 off                                                                                                           |
+| TUN health     | `/sys/class/net/<tun_name>`                                             | Mihomo `GET /configs` `tun.enable` only (no adapter walk)                                                                                        |
+| DoH            | Unpinned `https://1.1.1.1/dns-query`                                    | `https://1.1.1.1/dns-query#VPN` — bootstrap must go through the SOCKS upstream                                                                   |
+| Process bypass | `/proc` comm; AppImage names differ from the binary (`Hiddify-Linux-x`) | Image names; children like `xray.exe` / `sing-box.exe` need their own rules                                                                      |
+| Helper         | Unix socket, systemd/pkexec, can `ip link delete`                       | Named pipe, scheduled task, cleanup is “stop Mihomo”; no interface delete                                                                        |
+| Foreign TUN    | `ip rule` / fwmark / `interface-name` are at least expressible          | WFP, NRPT, TAP/Wintun names (`Meta`, empty, device path). Interface binding is harder and adapter enumeration is forbidden in the platform crate |
+| System proxy   | Less common; still can leak apps around TUN                             | Very common (v2rayN, Psiphon). Controller client already uses `no_proxy()` so Hiddify’s proxy cannot swallow `127.0.0.1:19090`                   |
+| Kill switch    | Usually iptables/nft in the other app                                   | Often WFP; will drop BiFlow DIRECT unless disabled                                                                                               |
+| UDP/QUIC       | Mixed stack + sniff QUIC 443                                            | IPv6 off; QUIC still needs SOCKS UDP ASSOCIATE                                                                                                   |
 
 Windows is the stricter platform for a SOCKS upstream (DoH `#VPN`,
 `strict-route`) and the worse platform for a TUN-only upstream (no safe adapter
@@ -272,14 +272,14 @@ enumeration, Wintun name instability, WFP kill switches).
 
 ## Bottom line
 
-| Question | Answer |
-|---|---|
-| Can Mihomo keep doing Iran/DIRECT vs VPN if something other than Hiddify is the VPN layer? | **Yes**, if that something is a **local SOCKS5** egress and BiFlow still owns the only system TUN. |
-| Does the current app support that? | **No.** The wire format is generic SOCKS; naming, launch, install, probe errors, and process bypass are Hiddify-specific. A manual port change will recurse after TUN unless the other process is DIRECT. |
-| v2rayN, HAPP, Psiphon proxy mode? | **Feasible** after a generic-upstream design: SOCKS port, TUN off, process-name list, no OS kill switch. |
-| Windscribe, Psiphon VPN, any TUN-only client? | **Not feasible** in the current architecture. Two default routes and two DNS hijacks. A future “bind VPN outbound to their interface” design is theoretically possible and much larger, especially on Windows, and most commercial clients will not cooperate. |
-| HTTP-only local proxy? | Not today. Generator and probe are SOCKS5/`socks5h` only. |
-| Should BiFlow adopt the other client’s TUN and drop Mihomo TUN? | That would abandon the product’s rule engine, Pause/rollback, and helper-owned lifecycle. |
+| Question                                                                                   | Answer                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Can Mihomo keep doing Iran/DIRECT vs VPN if something other than Hiddify is the VPN layer? | **Yes**, if that something is a **local SOCKS5** egress and BiFlow still owns the only system TUN.                                                                                                                                                             |
+| Does the current app support that?                                                         | **No.** The wire format is generic SOCKS; naming, launch, install, probe errors, and process bypass are Hiddify-specific. A manual port change will recurse after TUN unless the other process is DIRECT.                                                      |
+| v2rayN, HAPP, Psiphon proxy mode?                                                          | **Feasible** after a generic-upstream design: SOCKS port, TUN off, process-name list, no OS kill switch.                                                                                                                                                       |
+| Windscribe, Psiphon VPN, any TUN-only client?                                              | **Not feasible** in the current architecture. Two default routes and two DNS hijacks. A future “bind VPN outbound to their interface” design is theoretically possible and much larger, especially on Windows, and most commercial clients will not cooperate. |
+| HTTP-only local proxy?                                                                     | Not today. Generator and probe are SOCKS5/`socks5h` only.                                                                                                                                                                                                      |
+| Should BiFlow adopt the other client’s TUN and drop Mihomo TUN?                            | That would abandon the product’s rule engine, Pause/rollback, and helper-owned lifecycle.                                                                                                                                                                      |
 
 The intended shape stays: **one capture TUN (Mihomo) + one userspace VPN egress
 (today Hiddify, tomorrow any SOCKS client)**. A second system VPN is a peer, not
