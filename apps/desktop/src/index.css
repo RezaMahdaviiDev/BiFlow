@@ -199,3 +199,40 @@ select:focus-visible,
     opacity: 0.9;
   }
 }
+
+.connection-action {
+  max-width: 100%;
+}
+
+.connection-action-fill-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.connection-action-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  transition: width 280ms ease-out;
+}
+
+.connection-action-primary .connection-action-fill {
+  background: rgb(255 255 255 / 0.28);
+}
+
+.connection-action-secondary .connection-action-fill {
+  background: rgb(var(--brand) / 0.28);
+}
+
+.connection-action-processing.connection-action-primary {
+  background-color: rgb(var(--brand) / 0.62);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-action-fill {
+    transition: none;
+  }
+}

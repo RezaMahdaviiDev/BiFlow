@@ -107,6 +107,36 @@ test.describe("responsive viewports", () => {
         expect(next.overlap, name).toBe(false);
         expect(next.hamburger, name).toBe(false);
       }
+
+      await page.getByRole("button", { name: "Dashboard" }).click();
+      const connect = page.getByRole("button", {
+        name: "Connect",
+        exact: true,
+      });
+      await connect.click();
+      const processing = page.locator("[data-connection-action='connect']");
+      await expect(processing).toHaveAttribute("data-processing", "true");
+      const labelBox = await processing
+        .locator(".connection-action-label")
+        .boundingBox();
+      const buttonBox = await processing.boundingBox();
+      expect(labelBox).not.toBeNull();
+      expect(buttonBox).not.toBeNull();
+      expect(labelBox?.width ?? 0).toBeLessThanOrEqual(
+        (buttonBox?.width ?? 0) + 1,
+      );
+      const clipped = await processing.evaluate((button) => {
+        const label = button.querySelector(".connection-action-label");
+        if (!(label instanceof HTMLElement)) {
+          return true;
+        }
+        return (
+          label.scrollWidth > label.clientWidth + 1 ||
+          label.scrollHeight > label.clientHeight + 1 ||
+          button.scrollWidth > button.clientWidth + 1
+        );
+      });
+      expect(clipped).toBe(false);
     });
   }
 });

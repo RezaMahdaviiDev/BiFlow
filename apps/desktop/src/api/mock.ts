@@ -18,6 +18,7 @@ import type {
   OperationAccepted,
   RouteTestResult,
   LifecycleBusy,
+  OperationStage,
   StackPhase,
   StackSnapshot,
   UpdateProgress,
@@ -44,6 +45,7 @@ function initialSnapshot(): StackSnapshot {
     revision: 1,
     phase: "stopped",
     busy: null,
+    operation_stage: null,
     operation_id: null,
     helper: helperMissing
       ? {
@@ -386,12 +388,14 @@ function emit(
   phase: StackPhase,
   operationId: string | null,
   busy: LifecycleBusy | null = lifecycleBusy,
+  operationStage: OperationStage | null = null,
 ) {
   snapshot = {
     ...snapshot,
     revision: snapshot.revision + 1,
     phase,
     busy,
+    operation_stage: operationStage,
     operation_id: operationId,
     updated_at: now(),
   };
@@ -414,15 +418,15 @@ function operation(): OperationAccepted {
 }
 
 async function runStart(accepted: OperationAccepted) {
-  const phases: StackPhase[] = [
-    "starting_hiddify",
-    "preparing_runtime",
-    "validating_config",
-    "starting_core",
-    "checking_readiness",
+  const phases: Array<[StackPhase, OperationStage]> = [
+    ["starting_hiddify", "starting_hiddify"],
+    ["preparing_runtime", "preparing_runtime"],
+    ["validating_config", "validating_config"],
+    ["starting_core", "starting_core"],
+    ["checking_readiness", "checking_readiness"],
   ];
-  for (const phase of phases) {
-    emit(phase, accepted.operation_id);
+  for (const [phase, stage] of phases) {
+    emit(phase, accepted.operation_id, lifecycleBusy, stage);
     await new Promise((resolve) => setTimeout(resolve, 180));
   }
   snapshot = {
@@ -440,7 +444,7 @@ async function runStart(accepted: OperationAccepted) {
     exit_ip: "203.0.113.42",
   };
   lifecycleBusy = null;
-  emit("running", null, null);
+  emit("running", null, null, null);
   logs.push({
     timestamp: now(),
     level: "info",
@@ -487,7 +491,7 @@ export const mockApi = {
     }
     begin("connecting");
     const accepted = operation();
-    emit(snapshot.phase, accepted.operation_id, "connecting");
+    emit(snapshot.phase, accepted.operation_id, "connecting", "preparing");
     void runStart(accepted);
     return accepted;
   },
@@ -500,7 +504,18 @@ export const mockApi = {
     }
     begin("disconnecting");
     const accepted = operation();
-    emit("stopping", accepted.operation_id, "disconnecting");
+    emit("stopping", accepted.operation_id, "disconnecting", "stopping_core");
+    window.setTimeout(() => {
+      emit(
+        "stopping",
+        accepted.operation_id,
+        "disconnecting",
+        "stopping_proxy",
+      );
+    }, 120);
+    window.setTimeout(() => {
+      emit("stopping", accepted.operation_id, "disconnecting", "cleaning_up");
+    }, 220);
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
@@ -512,7 +527,7 @@ export const mockApi = {
         exit_ip: null,
       };
       lifecycleBusy = null;
-      emit("stopped", null, null);
+      emit("stopped", null, null, null);
     }, 350);
     return accepted;
   },
@@ -528,7 +543,10 @@ export const mockApi = {
     }
     begin("pausing");
     const accepted = operation();
-    emit("stopping", accepted.operation_id, "pausing");
+    emit("stopping", accepted.operation_id, "pausing", "stopping_core");
+    window.setTimeout(() => {
+      emit("stopping", accepted.operation_id, "pausing", "cleaning_up");
+    }, 160);
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
@@ -540,7 +558,7 @@ export const mockApi = {
         exit_ip: null,
       };
       lifecycleBusy = null;
-      emit("paused", null, null);
+      emit("paused", null, null, null);
     }, 350);
     return accepted;
   },
@@ -556,14 +574,14 @@ export const mockApi = {
     }
     begin("resuming");
     const accepted = operation();
-    emit(snapshot.phase, accepted.operation_id, "resuming");
+    emit(snapshot.phase, accepted.operation_id, "resuming", "preparing");
     void runStart(accepted);
     return accepted;
   },
   async cancel(operationId: string) {
     if (snapshot.operation_id === operationId) {
       lifecycleBusy = null;
-      emit("stopped", null, null);
+      emit("stopped", null, null, null);
       return true;
     }
     return false;

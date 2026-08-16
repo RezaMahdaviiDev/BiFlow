@@ -55,3 +55,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0049](./0049-state-aware-tray-menu.md)                  | State-aware tray menu                       | Accepted   |
 | [0050](./0050-connection-operation-lock.md)              | Connection operation lock                   | Accepted   |
 | [0051](./0051-button-icons.md)                           | Icons on every button                       | Accepted   |
+| [0052](./0052-in-button-connection-progress.md)          | In-button connection progress               | Accepted   |

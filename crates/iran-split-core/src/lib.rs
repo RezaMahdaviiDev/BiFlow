@@ -148,12 +148,49 @@ impl LifecycleBusy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationStage {
+    Preparing,
+    StartingHiddify,
+    PreparingRuntime,
+    ValidatingConfig,
+    StartingCore,
+    CheckingReadiness,
+    StoppingCore,
+    StoppingProxy,
+    CleaningUp,
+    Recovering,
+}
+
+impl OperationStage {
+    const fn from_phase(phase: StackPhase) -> Option<Self> {
+        match phase {
+            StackPhase::StartingHiddify => Some(Self::StartingHiddify),
+            StackPhase::PreparingRuntime => Some(Self::PreparingRuntime),
+            StackPhase::ValidatingConfig => Some(Self::ValidatingConfig),
+            StackPhase::StartingCore => Some(Self::StartingCore),
+            StackPhase::CheckingReadiness => Some(Self::CheckingReadiness),
+            StackPhase::Recovering => Some(Self::Recovering),
+            StackPhase::Uninitialized
+            | StackPhase::Stopped
+            | StackPhase::Running
+            | StackPhase::Paused
+            | StackPhase::Degraded
+            | StackPhase::Stopping
+            | StackPhase::Error => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StackSnapshot {
     pub revision: u64,
     pub phase: StackPhase,
     #[serde(default)]
     pub busy: Option<LifecycleBusy>,
+    #[serde(default)]
+    pub operation_stage: Option<OperationStage>,
     pub operation_id: Option<Uuid>,
     pub helper: ComponentStatus,
     pub hiddify: ComponentStatus,
@@ -173,6 +210,7 @@ impl Default for StackSnapshot {
             revision: 0,
             phase: StackPhase::Uninitialized,
             busy: None,
+            operation_stage: None,
             operation_id: None,
             helper: ComponentStatus::default(),
             hiddify: ComponentStatus::default(),
@@ -444,6 +482,14 @@ impl OperationKind {
             Self::Stop => LifecycleBusy::Disconnecting,
             Self::Pause => LifecycleBusy::Pausing,
             Self::Resume => LifecycleBusy::Resuming,
+        }
+    }
+
+    const fn initial_stage(self) -> OperationStage {
+        match self {
+            Self::Reconcile => OperationStage::Recovering,
+            Self::Start | Self::Resume => OperationStage::Preparing,
+            Self::Stop | Self::Pause => OperationStage::StoppingCore,
         }
     }
 }
@@ -726,7 +772,10 @@ impl<B: PlatformBackend> Engine<B> {
             return Ok(());
         }
         drop(pending);
-        self.update(|snapshot| snapshot.busy = Some(kind.busy()));
+        self.update(|snapshot| {
+            snapshot.busy = Some(kind.busy());
+            snapshot.operation_stage = Some(kind.initial_stage());
+        });
         info!(
             event = "operation.reserved",
             section = "engine",
@@ -747,6 +796,7 @@ impl<B: PlatformBackend> Engine<B> {
         self.update(|snapshot| {
             if snapshot.busy == Some(kind.busy()) && snapshot.operation_id.is_none() {
                 snapshot.busy = None;
+                snapshot.operation_stage = None;
             }
         });
     }
@@ -901,6 +951,7 @@ impl<B: PlatformBackend> Engine<B> {
             engine.update(|snapshot| {
                 snapshot.operation_id = None;
                 snapshot.busy = None;
+                snapshot.operation_stage = None;
             });
             engine.operations.lock().await.remove(&item.id);
             engine.pending.lock().await.remove(&item.kind);
@@ -1001,7 +1052,8 @@ impl<B: PlatformBackend> Engine<B> {
             );
         });
 
-        self.transition(StackPhase::StartingHiddify, operation_id);
+        self.announce(StackPhase::StartingHiddify, operation_id)
+            .await;
         self.update(|snapshot| {
             snapshot.hiddify = ComponentStatus::new(ComponentPhase::Starting, None);
         });
@@ -1011,15 +1063,17 @@ impl<B: PlatformBackend> Engine<B> {
             snapshot.hiddify = ComponentStatus::new(ComponentPhase::Running, None);
         });
 
-        self.transition(StackPhase::PreparingRuntime, operation_id);
+        self.announce(StackPhase::PreparingRuntime, operation_id)
+            .await;
         let generation = self.backend.prepare_runtime().await?;
         check_cancelled(cancel)?;
 
-        self.transition(StackPhase::ValidatingConfig, operation_id);
+        self.announce(StackPhase::ValidatingConfig, operation_id)
+            .await;
         self.backend.validate_runtime(&generation).await?;
         check_cancelled(cancel)?;
 
-        self.transition(StackPhase::StartingCore, operation_id);
+        self.announce(StackPhase::StartingCore, operation_id).await;
         self.update(|snapshot| {
             snapshot.mihomo = ComponentStatus::new(ComponentPhase::Starting, None);
             snapshot.tun = ComponentStatus::new(ComponentPhase::Starting, None);
@@ -1029,7 +1083,8 @@ impl<B: PlatformBackend> Engine<B> {
         *core_started = true;
         check_cancelled(cancel)?;
 
-        self.transition(StackPhase::CheckingReadiness, operation_id);
+        self.announce(StackPhase::CheckingReadiness, operation_id)
+            .await;
         let readiness = self.backend.check_readiness(cancel.clone()).await?;
         if !readiness.controller_ready {
             return Err(CoreError::ControllerTimeout);
@@ -1120,7 +1175,8 @@ impl<B: PlatformBackend> Engine<B> {
             self.snapshot().phase,
             StackPhase::Running | StackPhase::Degraded | StackPhase::Paused
         );
-        self.transition(StackPhase::Stopping, operation_id);
+        self.announce(StackPhase::Stopping, operation_id).await;
+        self.announce_stage(OperationStage::StoppingCore).await;
         if was_active {
             if let Err(cause) = self.backend.stop_core().await {
                 warn!(
@@ -1134,7 +1190,9 @@ impl<B: PlatformBackend> Engine<B> {
                 );
             }
         }
+        self.announce_stage(OperationStage::StoppingProxy).await;
         self.backend.stop_user_proxy().await?;
+        self.announce_stage(OperationStage::CleaningUp).await;
         let report = self.backend.cleanup_owned_state().await?;
         let tun = self.backend.tun_status().await?;
         if tun.active || !report.clean() {
@@ -1150,7 +1208,8 @@ impl<B: PlatformBackend> Engine<B> {
     }
 
     async fn run_pause(&self, operation_id: Uuid) -> Result<(), CoreError> {
-        self.transition(StackPhase::Stopping, operation_id);
+        self.announce(StackPhase::Stopping, operation_id).await;
+        self.announce_stage(OperationStage::StoppingCore).await;
         if let Err(cause) = self.backend.stop_core().await {
             warn!(
                 event = "operation.pause_stop_core_failed",
@@ -1162,6 +1221,7 @@ impl<B: PlatformBackend> Engine<B> {
                 "pause continued after core stop failure"
             );
         }
+        self.announce_stage(OperationStage::CleaningUp).await;
         let report = self.backend.cleanup_owned_state().await?;
         let tun = self.backend.tun_status().await?;
         if tun.active || !report.clean() {
@@ -1232,7 +1292,24 @@ impl<B: PlatformBackend> Engine<B> {
         self.update(|snapshot| {
             snapshot.phase = phase;
             snapshot.operation_id = Some(operation_id);
+            if let Some(stage) = OperationStage::from_phase(phase) {
+                snapshot.operation_stage = Some(stage);
+            }
         });
+    }
+
+    fn set_operation_stage(&self, stage: OperationStage) {
+        self.update(|snapshot| snapshot.operation_stage = Some(stage));
+    }
+
+    async fn announce(&self, phase: StackPhase, operation_id: Uuid) {
+        self.transition(phase, operation_id);
+        tokio::task::yield_now().await;
+    }
+
+    async fn announce_stage(&self, stage: OperationStage) {
+        self.set_operation_stage(stage);
+        tokio::task::yield_now().await;
     }
 
     fn set_paused(&self, health: RuntimeHealth) {
@@ -1240,6 +1317,7 @@ impl<B: PlatformBackend> Engine<B> {
             apply_health(snapshot, health);
             snapshot.phase = StackPhase::Paused;
             snapshot.operation_id = None;
+            snapshot.operation_stage = None;
             snapshot.exit_ip = None;
             snapshot.mihomo = ComponentStatus::new(ComponentPhase::Stopped, None);
             snapshot.tun = ComponentStatus::new(ComponentPhase::Stopped, None);
@@ -1254,6 +1332,7 @@ impl<B: PlatformBackend> Engine<B> {
             apply_health(snapshot, health);
             snapshot.phase = StackPhase::Stopped;
             snapshot.operation_id = None;
+            snapshot.operation_stage = None;
             snapshot.exit_ip = None;
             snapshot.last_error = None;
         });
@@ -1769,6 +1848,49 @@ mod tests {
         let value = serde_json::to_value(snapshot).expect("serialize");
         assert_eq!(value["phase"], "checking_readiness");
         assert_eq!(value["busy"], serde_json::Value::Null);
+        assert_eq!(value["operation_stage"], serde_json::Value::Null);
+    }
+
+    async fn collect_stages_until(
+        receiver: &mut watch::Receiver<StackSnapshot>,
+        desired: StackPhase,
+    ) -> Vec<OperationStage> {
+        let mut stages = Vec::new();
+        loop {
+            receiver.changed().await.expect("snapshot update");
+            let snapshot = receiver.borrow().clone();
+            if let Some(stage) = snapshot.operation_stage {
+                if stages.last() != Some(&stage) {
+                    stages.push(stage);
+                }
+            }
+            if snapshot.phase == desired && snapshot.busy.is_none() {
+                return stages;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn start_and_stop_publish_real_operation_stages() {
+        let backend = Arc::new(FakeBackend::default());
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        let mut receiver = engine.subscribe();
+        let collect = collect_stages_until(&mut receiver, StackPhase::Running);
+        let start = engine.start_stack();
+        let (stages, accepted) = tokio::join!(collect, start);
+        accepted.expect("start accepted");
+        assert!(stages.contains(&OperationStage::StartingHiddify));
+        assert!(stages.contains(&OperationStage::StartingCore));
+        assert!(stages.contains(&OperationStage::CheckingReadiness));
+
+        let collect = collect_stages_until(&mut receiver, StackPhase::Stopped);
+        let stop = engine.stop_stack();
+        let (stages, accepted) = tokio::join!(collect, stop);
+        accepted.expect("stop accepted");
+        assert!(stages.contains(&OperationStage::StoppingCore));
+        assert!(stages.contains(&OperationStage::StoppingProxy));
+        assert!(stages.contains(&OperationStage::CleaningUp));
+        assert_eq!(engine.snapshot().operation_stage, None);
     }
 
     #[test]

@@ -66,10 +66,13 @@ describe("Dashboard", () => {
         }}
       />,
     );
-    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    const connecting = screen.getByRole("button", { name: "Start Hiddify" });
+    expect(connecting).toBeDisabled();
+    expect(connecting).toHaveAttribute("data-progress", "25");
     expect(
       screen.getByRole("button", { name: "Cancel operation" }),
     ).toBeEnabled();
+    expect(screen.queryByText("%")).toBeNull();
 
     const running = {
       phase: "running" as const,
@@ -90,16 +93,18 @@ describe("Dashboard", () => {
         }}
       />,
     );
-    expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Stop Mihomo" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeDisabled();
   });
 
-  it("exposes cancellation during an operation", () => {
+  it("exposes cancellation and in-button progress during an operation", () => {
     render(
       <Dashboard
         snapshot={{
           ...stopped,
           phase: "starting_core",
+          busy: "connecting",
+          operation_stage: "starting_core",
           operation_id: "operation-1",
         }}
       />,
@@ -107,7 +112,10 @@ describe("Dashboard", () => {
     expect(
       screen.getByRole("button", { name: "Cancel operation" }),
     ).toBeEnabled();
-    expect(screen.getByRole("status")).toHaveTextContent("starting core");
+    const connect = screen.getByRole("button", { name: "Start Mihomo" });
+    expect(connect).toBeDisabled();
+    expect(connect).toHaveAttribute("data-progress", "70");
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("shows install actions when Hiddify and Mihomo are missing", async () => {

@@ -31,6 +31,16 @@ describe("fixed desktop shell", () => {
     );
   });
 
+  it("fills connection progress inside the action button", () => {
+    expect(css).toMatch(
+      /\.connection-action-fill-clip[\s\S]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(/\.connection-action-fill[\s\S]*transition:\s*width/);
+    expect(css).toMatch(
+      /prefers-reduced-motion: reduce[\s\S]*\.connection-action-fill[\s\S]*transition:\s*none/,
+    );
+  });
+
   it("draws a square 3px connection glow that sits on the window edges", () => {
     expect(css).toMatch(
       /\.connection-glow::after[\s\S]*border-radius:\s*0[\s\S]*border:\s*3px solid/,

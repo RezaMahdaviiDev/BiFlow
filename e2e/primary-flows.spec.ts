@@ -112,6 +112,15 @@ test.describe("primary BiFlow flows", () => {
     const connect = connectButton(page);
     await connect.click();
     await expect(connect).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Start Hiddify" }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Start Mihomo" }),
+    ).toBeDisabled();
+    await expect(
+      page.locator("[data-connection-action='connect']"),
+    ).toHaveAttribute("data-processing", "true");
     await connect.click({ force: true });
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),

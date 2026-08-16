@@ -5,6 +5,18 @@ export type LifecycleBusy =
   | "resuming"
   | "reconciling";
 
+export type OperationStage =
+  | "preparing"
+  | "starting_hiddify"
+  | "preparing_runtime"
+  | "validating_config"
+  | "starting_core"
+  | "checking_readiness"
+  | "stopping_core"
+  | "stopping_proxy"
+  | "cleaning_up"
+  | "recovering";
+
 export type StackPhase =
   | "uninitialized"
   | "stopped"
@@ -63,6 +75,7 @@ export interface StackSnapshot {
   revision: number;
   phase: StackPhase;
   busy?: LifecycleBusy | null;
+  operation_stage?: OperationStage | null;
   operation_id: string | null;
   helper: ComponentStatus;
   hiddify: ComponentStatus;

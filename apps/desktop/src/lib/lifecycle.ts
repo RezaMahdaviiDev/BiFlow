@@ -18,6 +18,18 @@ export function snapshotBusy(
   return snapshot?.busy ?? null;
 }
 
+export function isOperating(
+  snapshot: StackSnapshot | null | undefined,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  return (
+    snapshotBusy(snapshot) !== null ||
+    TRANSITIONAL_PHASES.includes(snapshot.phase)
+  );
+}
+
 export function controlsLocked(
   snapshot: StackSnapshot | null | undefined,
   actionPending: boolean,

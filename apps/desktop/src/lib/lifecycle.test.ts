@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StackSnapshot } from "../api/models";
-import { controlsLocked } from "./lifecycle";
+import { controlsLocked, isOperating } from "./lifecycle";
 
 const snapshot = (overrides: Partial<StackSnapshot> = {}): StackSnapshot =>
   ({
@@ -23,6 +23,12 @@ describe("controlsLocked", () => {
     );
     expect(controlsLocked(snapshot({ busy: "pausing" }), false)).toBe(true);
     expect(controlsLocked(snapshot({ busy: "resuming" }), false)).toBe(true);
+  });
+
+  it("treats a published busy or transitional phase as operating", () => {
+    expect(isOperating(snapshot({ busy: "connecting" }))).toBe(true);
+    expect(isOperating(snapshot({ phase: "starting_core" }))).toBe(true);
+    expect(isOperating(snapshot({ phase: "running" }))).toBe(false);
   });
 
   it("unlocks after success, failure, or a cleared timeout", () => {
