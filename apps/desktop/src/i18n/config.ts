@@ -144,6 +144,8 @@ const resources = {
         tunCleanupFailed:
           "The owned TUN or routes could not be completely removed.",
         operationCancelled: "The operation was cancelled.",
+        operationInProgress: "Another connection operation is already running.",
+        operationTimeout: "The connection operation timed out.",
         internal: "An internal error occurred.",
       },
     },
@@ -288,6 +290,8 @@ const resources = {
         providerNotReady: "یک یا چند فراهم‌کننده قانون آماده نیست.",
         tunCleanupFailed: "تونل یا مسیرها به‌طور کامل حذف نشدند.",
         operationCancelled: "عملیات لغو شد.",
+        operationInProgress: "عملیات اتصال دیگری در حال اجرا است.",
+        operationTimeout: "عملیات اتصال بیش از حد طول کشید.",
         internal: "خطای داخلی رخ داد.",
       },
     },

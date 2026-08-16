@@ -1,6 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { StackPhase, StackSnapshot } from "../api/models";
+import { controlsLocked } from "../lib/lifecycle";
 import { useAppStore } from "../store/app";
 
 const progressPhases: StackPhase[] = [
@@ -24,6 +25,7 @@ export function BasicDashboard({ snapshot }: { snapshot: StackSnapshot }) {
   } = useAppStore();
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
   const paused = snapshot.phase === "paused";
+  const locked = controlsLocked(snapshot, actionPending);
   const operating =
     progressPhases.includes(snapshot.phase) || snapshot.phase === "stopping";
   const progressIndex = progressPhases.indexOf(snapshot.phase);
@@ -106,7 +108,7 @@ export function BasicDashboard({ snapshot }: { snapshot: StackSnapshot }) {
         {active ? (
           <button
             type="button"
-            disabled={actionPending || operating}
+            disabled={locked}
             onClick={() => void pauseConnection()}
             className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold disabled:opacity-50"
           >
@@ -116,7 +118,7 @@ export function BasicDashboard({ snapshot }: { snapshot: StackSnapshot }) {
         {paused ? (
           <button
             type="button"
-            disabled={actionPending || operating}
+            disabled={locked}
             onClick={() => void resumeConnection()}
             className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
@@ -126,7 +128,7 @@ export function BasicDashboard({ snapshot }: { snapshot: StackSnapshot }) {
         {!paused ? (
           <button
             type="button"
-            disabled={actionPending || operating}
+            disabled={locked}
             onClick={() => void toggleConnection()}
             className="inline-flex min-w-36 items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
@@ -138,7 +140,7 @@ export function BasicDashboard({ snapshot }: { snapshot: StackSnapshot }) {
         ) : (
           <button
             type="button"
-            disabled={actionPending || operating}
+            disabled={locked}
             onClick={() => void toggleConnection()}
             className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold disabled:opacity-50"
           >

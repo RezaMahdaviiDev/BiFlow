@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ComponentStatus, StackPhase, StackSnapshot } from "../api/models";
+import { controlsLocked } from "../lib/lifecycle";
 import { useAppStore } from "../store/app";
 import { StatusPill } from "./StatusPill";
 
@@ -38,6 +39,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   } = useAppStore();
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
   const paused = snapshot.phase === "paused";
+  const locked = controlsLocked(snapshot, actionPending);
   const operating =
     progressPhases.includes(snapshot.phase) || snapshot.phase === "stopping";
   const progressIndex = progressPhases.indexOf(snapshot.phase);
@@ -84,7 +86,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           {active ? (
             <button
               type="button"
-              disabled={actionPending || operating}
+              disabled={locked}
               onClick={() => void pauseConnection()}
               className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
             >
@@ -94,7 +96,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           {paused ? (
             <button
               type="button"
-              disabled={actionPending || operating}
+              disabled={locked}
               onClick={() => void resumeConnection()}
               className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
             >
@@ -104,7 +106,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           {!paused ? (
             <button
               type="button"
-              disabled={actionPending || operating}
+              disabled={locked}
               onClick={() => void toggleConnection()}
               className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
             >
@@ -113,7 +115,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           ) : (
             <button
               type="button"
-              disabled={actionPending || operating}
+              disabled={locked}
               onClick={() => void toggleConnection()}
               className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
             >

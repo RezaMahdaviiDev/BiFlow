@@ -17,6 +17,7 @@ import type {
   NetworkStatus,
   OperationAccepted,
   RouteTestResult,
+  LifecycleBusy,
   StackPhase,
   StackSnapshot,
   UpdateProgress,
@@ -42,6 +43,7 @@ function initialSnapshot(): StackSnapshot {
   return {
     revision: 1,
     phase: "stopped",
+    busy: null,
     operation_id: null,
     helper: helperMissing
       ? {
@@ -378,15 +380,33 @@ async function simulateInstallProgress(version: string) {
   });
 }
 
-function emit(phase: StackPhase, operationId: string | null) {
+let lifecycleBusy: LifecycleBusy | null = null;
+
+function emit(
+  phase: StackPhase,
+  operationId: string | null,
+  busy: LifecycleBusy | null = lifecycleBusy,
+) {
   snapshot = {
     ...snapshot,
     revision: snapshot.revision + 1,
     phase,
+    busy,
     operation_id: operationId,
     updated_at: now(),
   };
   for (const listener of listeners) listener(structuredClone(snapshot));
+}
+
+function assertIdle(): void {
+  if (lifecycleBusy) {
+    throw new Error("operation is already in progress");
+  }
+}
+
+function begin(busy: LifecycleBusy): void {
+  assertIdle();
+  lifecycleBusy = busy;
 }
 
 function operation(): OperationAccepted {
@@ -419,7 +439,8 @@ async function runStart(accepted: OperationAccepted) {
     },
     exit_ip: "203.0.113.42",
   };
-  emit("running", null);
+  lifecycleBusy = null;
+  emit("running", null, null);
   logs.push({
     timestamp: now(),
     level: "info",
@@ -458,19 +479,28 @@ export const mockApi = {
     return { ...trafficTotals };
   },
   async start(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "connecting") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "running") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("connecting");
     const accepted = operation();
+    emit(snapshot.phase, accepted.operation_id, "connecting");
     void runStart(accepted);
     return accepted;
   },
   async stop(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "disconnecting") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "stopped") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("disconnecting");
     const accepted = operation();
-    emit("stopping", accepted.operation_id);
+    emit("stopping", accepted.operation_id, "disconnecting");
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
@@ -481,19 +511,24 @@ export const mockApi = {
         providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
         exit_ip: null,
       };
-      emit("stopped", null);
+      lifecycleBusy = null;
+      emit("stopped", null, null);
     }, 350);
     return accepted;
   },
   async pause(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "pausing") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "paused") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
     if (snapshot.phase !== "running" && snapshot.phase !== "degraded") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("pausing");
     const accepted = operation();
-    emit("stopping", accepted.operation_id);
+    emit("stopping", accepted.operation_id, "pausing");
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
@@ -504,24 +539,31 @@ export const mockApi = {
         providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
         exit_ip: null,
       };
-      emit("paused", null);
+      lifecycleBusy = null;
+      emit("paused", null, null);
     }, 350);
     return accepted;
   },
   async resume(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "resuming") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "running") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
     if (snapshot.phase !== "paused") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("resuming");
     const accepted = operation();
+    emit(snapshot.phase, accepted.operation_id, "resuming");
     void runStart(accepted);
     return accepted;
   },
   async cancel(operationId: string) {
     if (snapshot.operation_id === operationId) {
-      emit("stopped", null);
+      lifecycleBusy = null;
+      emit("stopped", null, null);
       return true;
     }
     return false;
@@ -807,6 +849,7 @@ export function resetMockState() {
   } catch {
     // jsdom and Playwright always provide web storage.
   }
+  lifecycleBusy = null;
   snapshot = initialSnapshot();
   trafficTotals = { sent: 1_048_576, received: 2_097_152 };
   settings = initialSettings();

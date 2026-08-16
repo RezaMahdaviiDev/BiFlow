@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { desktop } from "../api/desktop";
 import { missingConnectRequirements } from "../lib/connectRequirements";
+import { ACTION_TIMEOUT_MS, controlsLocked } from "../lib/lifecycle";
 import type {
   AppConfig,
   BootstrapResult,
@@ -154,7 +155,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
       void get().refreshNetworkStatus();
       void get().refreshTrafficTotals();
       const unsubscribeSnapshot = await desktop.subscribe((snapshot) => {
-        set({ snapshot, actionPending: false });
+        set({
+          snapshot,
+          actionPending: snapshot.busy != null,
+        });
         void get().refreshTrafficTotals();
       });
       const unsubscribeUpdate = await desktop.subscribeUpdateProgress(
@@ -173,8 +177,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   toggleConnection: async () => {
     const snapshot = get().snapshot;
-    if (!snapshot) return;
+    if (!snapshot || controlsLocked(snapshot, get().actionPending)) return;
     set({ actionPending: true, error: null, installGuide: null });
+    const timeout = window.setTimeout(() => {
+      const current = get().snapshot;
+      if (get().actionPending) {
+        set({
+          actionPending: false,
+          installingId: null,
+          error: "The connection operation timed out.",
+          snapshot: current ? { ...current, busy: null } : current,
+        });
+      }
+    }, ACTION_TIMEOUT_MS);
     try {
       if (
         snapshot.phase === "running" ||
@@ -192,9 +207,12 @@ export const useAppStore = create<AppStore>((set, get) => ({
         installingId: null,
         error: message(error),
       });
+    } finally {
+      window.clearTimeout(timeout);
     }
   },
   pauseConnection: async () => {
+    if (controlsLocked(get().snapshot, get().actionPending)) return;
     set({ actionPending: true, error: null });
     try {
       await desktop.pause();
@@ -203,6 +221,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   resumeConnection: async () => {
+    if (controlsLocked(get().snapshot, get().actionPending)) return;
     set({ actionPending: true, error: null });
     try {
       await desktop.resume();

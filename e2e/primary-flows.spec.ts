@@ -99,6 +99,29 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.locator(".traffic-flow-route")).toHaveCount(0);
   });
 
+  test("disables lifecycle controls after the first Connect click", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    const installButtons = page.getByRole("button", {
+      name: "Install",
+      exact: true,
+    });
+    await installButtons.nth(0).click();
+    await page.getByRole("button", { name: "Install", exact: true }).click();
+    const connect = connectButton(page);
+    await connect.click();
+    await expect(connect).toBeDisabled();
+    await connect.click({ force: true });
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pause" })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Disconnect" }),
+    ).toBeEnabled();
+  });
+
   test("connect installs missing apps before starting the stack", async ({
     page,
   }) => {

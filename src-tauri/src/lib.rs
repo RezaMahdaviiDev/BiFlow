@@ -11,7 +11,9 @@ mod window_state;
 
 use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
-use iran_split_core::{Engine, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot};
+use iran_split_core::{
+    Engine, LifecycleBusy, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot,
+};
 use iran_split_mihomo::ControllerClient;
 use iran_split_rules::{
     bundled_snapshot_is_complete, ensure_bundled_snapshot, CloudRuleStore, CloudRulesStatus,
@@ -662,9 +664,22 @@ async fn start_stack(app: AppHandle) -> Result<OperationAccepted, String> {
 }
 
 async fn start_stack_inner<R: Runtime>(app: &AppHandle<R>) -> Result<OperationAccepted, String> {
-    prepare_stack_start(app).await?;
-    services(app)?
-        .engine
+    let engine = &services(app)?.engine;
+    if engine.snapshot().phase == StackPhase::Running {
+        return Ok(OperationAccepted {
+            operation_id: uuid::Uuid::new_v4(),
+            already_complete: true,
+        });
+    }
+    engine
+        .reserve_lifecycle(LifecycleBusy::Connecting)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = prepare_stack_start(app).await {
+        engine.release_lifecycle(LifecycleBusy::Connecting).await;
+        return Err(error);
+    }
+    engine
         .start_stack()
         .await
         .map_err(|error| error.to_string())
@@ -2056,16 +2071,27 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
     }
 }
 
-fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, phase: StackPhase) -> tauri::Result<Menu<R>> {
+fn build_tray_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    phase: StackPhase,
+    busy: Option<LifecycleBusy>,
+) -> tauri::Result<Menu<R>> {
     let labels = tray::labels_for(phase);
+    let enabled = tray::actions_enabled(busy);
     let connection = MenuItem::with_id(
         app,
         labels.connection_id,
         labels.connection_label,
-        true,
+        enabled,
         None::<&str>,
     )?;
-    let pause = MenuItem::with_id(app, labels.pause_id, labels.pause_label, true, None::<&str>)?;
+    let pause = MenuItem::with_id(
+        app,
+        labels.pause_id,
+        labels.pause_label,
+        enabled,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let first_separator = PredefinedMenuItem::separator(app)?;
     let second_separator = PredefinedMenuItem::separator(app)?;
@@ -2081,8 +2107,8 @@ fn build_tray_menu<R: Runtime>(app: &AppHandle<R>, phase: StackPhase) -> tauri::
     )
 }
 
-fn apply_tray_menu<R: Runtime>(app: &AppHandle<R>, phase: StackPhase) {
-    let Ok(menu) = build_tray_menu(app, phase) else {
+fn apply_tray_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &StackSnapshot) {
+    let Ok(menu) = build_tray_menu(app, snapshot.phase, snapshot.busy) else {
         warn!(
             event = "tray.menu_build_failed",
             section = "tray",
@@ -2109,12 +2135,12 @@ fn apply_tray_menu<R: Runtime>(app: &AppHandle<R>, phase: StackPhase) {
 }
 
 fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let phase = app
+    let snapshot = app
         .try_state::<AppServices>()
-        .map_or(StackPhase::Stopped, |services| {
-            services.engine.snapshot().phase
+        .map_or_else(StackSnapshot::default, |services| {
+            services.engine.snapshot()
         });
-    let menu = build_tray_menu(app.handle(), phase)?;
+    let menu = build_tray_menu(app.handle(), snapshot.phase, snapshot.busy)?;
     let icon = app.default_window_icon().cloned().ok_or_else(|| {
         tauri::Error::from(std::io::Error::other("default window icon is missing"))
     })?;
@@ -2199,7 +2225,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
                     "stack snapshot event could not be emitted"
                 );
             }
-            apply_tray_menu(&handle, snapshot.phase);
+            apply_tray_menu(&handle, &snapshot);
         }
         warn!(
             event = "snapshot.channel_closed",

@@ -149,6 +149,65 @@ describe("app store", () => {
     expect(desktop.getTrafficTotals).not.toHaveBeenCalled();
   });
 
+  it("starts only one backend operation when Connect is clicked twice", async () => {
+    vi.mocked(desktop.start).mockResolvedValue({
+      operation_id: "op",
+      already_complete: false,
+    });
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      actionPending: false,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: null,
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: null,
+          path: "/tmp/mihomo",
+        },
+      ],
+    });
+    const first = useAppStore.getState().toggleConnection();
+    await useAppStore.getState().toggleConnection();
+    await first;
+    expect(desktop.start).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().actionPending).toBe(true);
+  });
+
+  it("restores controls after a failed connection command", async () => {
+    vi.mocked(desktop.start).mockRejectedValue(new Error("helper missing"));
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      actionPending: false,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: null,
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: null,
+          path: "/tmp/mihomo",
+        },
+      ],
+    });
+    await useAppStore.getState().toggleConnection();
+    expect(useAppStore.getState().actionPending).toBe(false);
+    expect(useAppStore.getState().error).toMatch(/helper missing/);
+  });
+
   it("starts the stack from a stopped snapshot", async () => {
     vi.mocked(desktop.start).mockResolvedValue({
       operation_id: "op",

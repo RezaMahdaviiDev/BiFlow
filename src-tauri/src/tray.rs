@@ -1,4 +1,4 @@
-use iran_split_core::StackPhase;
+use iran_split_core::{LifecycleBusy, StackPhase};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrayLabels {
@@ -22,6 +22,11 @@ pub fn labels_for(phase: StackPhase) -> TrayLabels {
         pause_id: if paused { "resume" } else { "pause" },
         pause_label: if paused { "Resume" } else { "Pause" },
     }
+}
+
+#[must_use]
+pub const fn actions_enabled(busy: Option<LifecycleBusy>) -> bool {
+    busy.is_none()
 }
 
 #[cfg(test)]
@@ -74,5 +79,14 @@ mod tests {
             assert!((labels.connection_id == "connect") ^ (labels.connection_id == "disconnect"));
             assert!((labels.pause_id == "pause") ^ (labels.pause_id == "resume"));
         }
+    }
+
+    #[test]
+    fn tray_actions_disable_while_a_lifecycle_lock_is_held() {
+        assert!(actions_enabled(None));
+        assert!(!actions_enabled(Some(LifecycleBusy::Connecting)));
+        assert!(!actions_enabled(Some(LifecycleBusy::Disconnecting)));
+        assert!(!actions_enabled(Some(LifecycleBusy::Pausing)));
+        assert!(!actions_enabled(Some(LifecycleBusy::Resuming)));
     }
 }

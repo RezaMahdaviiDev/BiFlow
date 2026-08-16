@@ -1,3 +1,10 @@
+export type LifecycleBusy =
+  | "connecting"
+  | "disconnecting"
+  | "pausing"
+  | "resuming"
+  | "reconciling";
+
 export type StackPhase =
   | "uninitialized"
   | "stopped"
@@ -55,6 +62,7 @@ export interface AppError {
 export interface StackSnapshot {
   revision: number;
   phase: StackPhase;
+  busy?: LifecycleBusy | null;
   operation_id: string | null;
   helper: ComponentStatus;
   hiddify: ComponentStatus;

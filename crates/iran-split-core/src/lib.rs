@@ -100,6 +100,7 @@ pub enum ErrorCode {
     RouteTestFailed,
     UpdateSignatureInvalid,
     OperationInProgress,
+    OperationTimeout,
     OperationCancelled,
     Internal,
 }
@@ -125,10 +126,34 @@ pub struct AppError {
     pub correlation_id: Uuid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleBusy {
+    Connecting,
+    Disconnecting,
+    Pausing,
+    Resuming,
+    Reconciling,
+}
+
+impl LifecycleBusy {
+    const fn as_kind(self) -> OperationKind {
+        match self {
+            Self::Reconciling => OperationKind::Reconcile,
+            Self::Connecting => OperationKind::Start,
+            Self::Disconnecting => OperationKind::Stop,
+            Self::Pausing => OperationKind::Pause,
+            Self::Resuming => OperationKind::Resume,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StackSnapshot {
     pub revision: u64,
     pub phase: StackPhase,
+    #[serde(default)]
+    pub busy: Option<LifecycleBusy>,
     pub operation_id: Option<Uuid>,
     pub helper: ComponentStatus,
     pub hiddify: ComponentStatus,
@@ -147,6 +172,7 @@ impl Default for StackSnapshot {
         Self {
             revision: 0,
             phase: StackPhase::Uninitialized,
+            busy: None,
             operation_id: None,
             helper: ComponentStatus::default(),
             hiddify: ComponentStatus::default(),
@@ -261,6 +287,10 @@ pub enum CoreError {
     TunCleanupFailed(String),
     #[error("operation was cancelled")]
     Cancelled,
+    #[error("another connection operation is already in progress")]
+    OperationInProgress,
+    #[error("operation timed out")]
+    OperationTimeout,
     #[error("operation queue is unavailable")]
     QueueUnavailable,
     #[error("platform operation failed: {0}")]
@@ -337,6 +367,18 @@ impl CoreError {
                 true,
                 Some(Remediation::Retry),
             ),
+            Self::OperationInProgress => (
+                ErrorCode::OperationInProgress,
+                "errors.operationInProgress",
+                true,
+                Some(Remediation::Retry),
+            ),
+            Self::OperationTimeout => (
+                ErrorCode::OperationTimeout,
+                "errors.operationTimeout",
+                true,
+                Some(Remediation::Retry),
+            ),
             Self::QueueUnavailable | Self::Platform(_) => (
                 ErrorCode::Internal,
                 "errors.internal",
@@ -394,9 +436,35 @@ enum OperationKind {
     Resume,
 }
 
+impl OperationKind {
+    const fn busy(self) -> LifecycleBusy {
+        match self {
+            Self::Reconcile => LifecycleBusy::Reconciling,
+            Self::Start => LifecycleBusy::Connecting,
+            Self::Stop => LifecycleBusy::Disconnecting,
+            Self::Pause => LifecycleBusy::Pausing,
+            Self::Resume => LifecycleBusy::Resuming,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OperationTimeouts {
+    start: Duration,
+    stop: Duration,
+}
+
+impl Default for OperationTimeouts {
+    fn default() -> Self {
+        Self {
+            start: Duration::from_secs(120),
+            stop: Duration::from_secs(45),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct OperationRecord {
-    kind: OperationKind,
     cancel: CancellationToken,
 }
 
@@ -413,6 +481,7 @@ pub struct Engine<B: PlatformBackend> {
     queue: mpsc::Sender<WorkItem>,
     operations: Mutex<HashMap<Uuid, OperationRecord>>,
     pending: Mutex<HashMap<OperationKind, Uuid>>,
+    timeouts: OperationTimeouts,
 }
 
 impl<B: PlatformBackend> std::fmt::Debug for Engine<B> {
@@ -431,6 +500,14 @@ impl<B: PlatformBackend> Engine<B> {
     /// engine outside an entered Tokio context without panicking.
     #[must_use]
     pub fn new(backend: Arc<B>, runtime: &tokio::runtime::Handle) -> Arc<Self> {
+        Self::construct(backend, runtime, OperationTimeouts::default())
+    }
+
+    fn construct(
+        backend: Arc<B>,
+        runtime: &tokio::runtime::Handle,
+        timeouts: OperationTimeouts,
+    ) -> Arc<Self> {
         let (queue, receiver) = mpsc::channel(16);
         let (snapshots, _) = watch::channel(StackSnapshot::default());
         let engine = Arc::new(Self {
@@ -439,9 +516,21 @@ impl<B: PlatformBackend> Engine<B> {
             queue,
             operations: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
+            timeouts,
         });
         runtime.spawn(Self::worker(Arc::clone(&engine), receiver));
         engine
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn new_with_timeouts(
+        backend: Arc<B>,
+        runtime: &tokio::runtime::Handle,
+        start: Duration,
+        stop: Duration,
+    ) -> Arc<Self> {
+        Self::construct(backend, runtime, OperationTimeouts { start, stop })
     }
 
     #[must_use]
@@ -491,7 +580,12 @@ impl<B: PlatformBackend> Engine<B> {
     /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
     /// longer available.
     pub async fn start_stack(&self) -> Result<OperationAccepted, CoreError> {
+        if self.snapshot().busy.is_some() && self.snapshot().busy != Some(LifecycleBusy::Connecting)
+        {
+            return Err(CoreError::OperationInProgress);
+        }
         if self.snapshot().phase == StackPhase::Running {
+            self.release_if_idle(OperationKind::Start).await;
             return Ok(OperationAccepted {
                 operation_id: Uuid::new_v4(),
                 already_complete: true,
@@ -507,13 +601,17 @@ impl<B: PlatformBackend> Engine<B> {
     /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
     /// longer available.
     pub async fn stop_stack(&self) -> Result<OperationAccepted, CoreError> {
+        if self.snapshot().busy.is_some()
+            && self.snapshot().busy != Some(LifecycleBusy::Disconnecting)
+        {
+            return Err(CoreError::OperationInProgress);
+        }
         if self.snapshot().phase == StackPhase::Stopped && self.operations.lock().await.is_empty() {
             return Ok(OperationAccepted {
                 operation_id: Uuid::new_v4(),
                 already_complete: true,
             });
         }
-        self.cancel_inflight_starts().await;
         self.accept(OperationKind::Stop).await
     }
 
@@ -524,22 +622,19 @@ impl<B: PlatformBackend> Engine<B> {
     /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
     /// longer available.
     pub async fn pause_stack(&self) -> Result<OperationAccepted, CoreError> {
-        match self.snapshot().phase {
-            StackPhase::Paused if self.operations.lock().await.is_empty() => {
-                return Ok(OperationAccepted {
-                    operation_id: Uuid::new_v4(),
-                    already_complete: true,
-                });
-            }
-            StackPhase::Stopped | StackPhase::Uninitialized => {
-                return Ok(OperationAccepted {
-                    operation_id: Uuid::new_v4(),
-                    already_complete: true,
-                });
-            }
-            _ => {}
+        if self.snapshot().busy.is_some() && self.snapshot().busy != Some(LifecycleBusy::Pausing) {
+            return Err(CoreError::OperationInProgress);
         }
-        self.cancel_inflight_starts().await;
+        if matches!(
+            self.snapshot().phase,
+            StackPhase::Paused | StackPhase::Stopped | StackPhase::Uninitialized
+        ) && self.operations.lock().await.is_empty()
+        {
+            return Ok(OperationAccepted {
+                operation_id: Uuid::new_v4(),
+                already_complete: true,
+            });
+        }
         self.accept(OperationKind::Pause).await
     }
 
@@ -550,6 +645,9 @@ impl<B: PlatformBackend> Engine<B> {
     /// Returns [`CoreError::QueueUnavailable`] when the operation worker is no
     /// longer available.
     pub async fn resume_stack(&self) -> Result<OperationAccepted, CoreError> {
+        if self.snapshot().busy.is_some() && self.snapshot().busy != Some(LifecycleBusy::Resuming) {
+            return Err(CoreError::OperationInProgress);
+        }
         if self.snapshot().phase == StackPhase::Running {
             return Ok(OperationAccepted {
                 operation_id: Uuid::new_v4(),
@@ -565,13 +663,19 @@ impl<B: PlatformBackend> Engine<B> {
         self.accept(OperationKind::Resume).await
     }
 
-    async fn cancel_inflight_starts(&self) {
-        let operations = self.operations.lock().await;
-        for operation in operations.values() {
-            if operation.kind == OperationKind::Start {
-                operation.cancel.cancel();
-            }
-        }
+    /// Reserves the shared lifecycle lock before a long prepare step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::OperationInProgress`] when another connection
+    /// operation is already reserved or queued.
+    pub async fn reserve_lifecycle(&self, busy: LifecycleBusy) -> Result<(), CoreError> {
+        self.reserve(busy.as_kind()).await
+    }
+
+    /// Clears a reservation that never reached the worker queue.
+    pub async fn release_lifecycle(&self, busy: LifecycleBusy) {
+        self.release_if_idle(busy.as_kind()).await;
     }
 
     /// Queues a stop followed by a start.
@@ -596,7 +700,97 @@ impl<B: PlatformBackend> Engine<B> {
         }
     }
 
+    async fn reserve(&self, kind: OperationKind) -> Result<(), CoreError> {
+        let pending = self.pending.lock().await;
+        if let Some(operation_id) = pending.get(&kind) {
+            info!(
+                event = "operation.deduplicated",
+                section = "engine",
+                initiator = "operation_queue",
+                cause = "matching_operation_pending",
+                trace_route = "caller->engine->reserve",
+                operation_id = %operation_id,
+                kind = ?kind,
+                "existing operation reservation reused"
+            );
+            return Ok(());
+        }
+        if !pending.is_empty() {
+            return Err(CoreError::OperationInProgress);
+        }
+        let current = self.snapshot().busy;
+        if let Some(busy) = current {
+            if busy != kind.busy() {
+                return Err(CoreError::OperationInProgress);
+            }
+            return Ok(());
+        }
+        drop(pending);
+        self.update(|snapshot| snapshot.busy = Some(kind.busy()));
+        info!(
+            event = "operation.reserved",
+            section = "engine",
+            initiator = "operation_queue",
+            cause = "accepted",
+            trace_route = "caller->engine->reserve",
+            kind = ?kind,
+            busy = ?kind.busy(),
+            "lifecycle lock reserved"
+        );
+        Ok(())
+    }
+
+    async fn release_if_idle(&self, kind: OperationKind) {
+        if !self.pending.lock().await.is_empty() {
+            return;
+        }
+        self.update(|snapshot| {
+            if snapshot.busy == Some(kind.busy()) && snapshot.operation_id.is_none() {
+                snapshot.busy = None;
+            }
+        });
+    }
+
+    fn timeout_for(&self, kind: OperationKind) -> Duration {
+        match kind {
+            OperationKind::Stop | OperationKind::Pause => self.timeouts.stop,
+            OperationKind::Reconcile | OperationKind::Start | OperationKind::Resume => {
+                self.timeouts.start
+            }
+        }
+    }
+
+    async fn execute_item(&self, item: &WorkItem) -> Result<(), CoreError> {
+        let work = async {
+            match item.kind {
+                OperationKind::Reconcile => self.run_reconcile(item.id, &item.cancel).await,
+                OperationKind::Start => self.run_start(item.id, &item.cancel).await,
+                OperationKind::Stop => self.run_stop(item.id).await,
+                OperationKind::Pause => self.run_pause(item.id).await,
+                OperationKind::Resume => self.run_resume(item.id, &item.cancel).await,
+            }
+        };
+        if let Ok(result) = tokio::time::timeout(self.timeout_for(item.kind), work).await {
+            result
+        } else {
+            item.cancel.cancel();
+            warn!(
+                event = "operation.timed_out",
+                section = "engine",
+                initiator = "operation_worker",
+                cause = "timeout",
+                trace_id = %item.id,
+                trace_route = "operation_queue->worker->timeout",
+                operation_id = %item.id,
+                kind = ?item.kind,
+                "operation exceeded its time budget"
+            );
+            Err(CoreError::OperationTimeout)
+        }
+    }
+
     async fn accept(&self, kind: OperationKind) -> Result<OperationAccepted, CoreError> {
+        self.reserve(kind).await?;
         let mut pending = self.pending.lock().await;
         if let Some(operation_id) = pending.get(&kind) {
             info!(
@@ -619,7 +813,6 @@ impl<B: PlatformBackend> Engine<B> {
         self.operations.lock().await.insert(
             operation_id,
             OperationRecord {
-                kind,
                 cancel: cancel.clone(),
             },
         );
@@ -677,13 +870,7 @@ impl<B: PlatformBackend> Engine<B> {
                 kind = ?item.kind,
                 "operation started"
             );
-            let result = match item.kind {
-                OperationKind::Reconcile => engine.run_reconcile(item.id, &item.cancel).await,
-                OperationKind::Start => engine.run_start(item.id, &item.cancel).await,
-                OperationKind::Stop => engine.run_stop(item.id).await,
-                OperationKind::Pause => engine.run_pause(item.id).await,
-                OperationKind::Resume => engine.run_resume(item.id, &item.cancel).await,
-            };
+            let result = engine.execute_item(&item).await;
             if let Err(error) = result {
                 if !matches!(error, CoreError::Cancelled) {
                     error!(
@@ -711,7 +898,10 @@ impl<B: PlatformBackend> Engine<B> {
                     });
                 }
             }
-            engine.update(|snapshot| snapshot.operation_id = None);
+            engine.update(|snapshot| {
+                snapshot.operation_id = None;
+                snapshot.busy = None;
+            });
             engine.operations.lock().await.remove(&item.id);
             engine.pending.lock().await.remove(&item.kind);
             info!(
@@ -1454,18 +1644,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_cancels_an_in_progress_start_then_cleans() {
+    async fn conflicting_operations_are_rejected_while_start_is_busy() {
         let backend = Arc::new(FakeBackend::default());
         backend.slow_hiddify.store(true, Ordering::SeqCst);
         let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
-        engine.start_stack().await.expect("start accepted");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        engine.stop_stack().await.expect("stop accepted");
+        let first = engine.start_stack().await.expect("start accepted");
+        let duplicate = engine.start_stack().await.expect("duplicate start");
+        assert_eq!(first.operation_id, duplicate.operation_id);
+        assert_eq!(engine.snapshot().busy, Some(LifecycleBusy::Connecting));
+        assert!(matches!(
+            engine.stop_stack().await,
+            Err(CoreError::OperationInProgress)
+        ));
+        assert!(matches!(
+            engine.pause_stack().await,
+            Err(CoreError::OperationInProgress)
+        ));
         engine
-            .wait_for_phase(StackPhase::Stopped, Duration::from_secs(2))
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(3))
             .await
-            .expect("stopped");
-        assert!(!backend.tun.load(Ordering::SeqCst));
+            .expect("running");
+        assert_eq!(engine.snapshot().busy, None);
+        assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn operation_timeout_clears_the_lifecycle_lock() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.slow_hiddify.store(true, Ordering::SeqCst);
+        let engine = Engine::new_with_timeouts(
+            Arc::clone(&backend),
+            &tokio::runtime::Handle::current(),
+            Duration::from_millis(40),
+            Duration::from_secs(1),
+        );
+        engine.start_stack().await.expect("start accepted");
+        let mut receiver = engine.subscribe();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = receiver.borrow().clone();
+                if snapshot.phase == StackPhase::Error && snapshot.busy.is_none() {
+                    return;
+                }
+                receiver.changed().await.expect("snapshot update");
+            }
+        })
+        .await
+        .expect("timeout recovered");
+        let error = engine.snapshot().last_error.expect("timeout error");
+        assert_eq!(error.code, ErrorCode::OperationTimeout);
+        engine
+            .stop_stack()
+            .await
+            .expect("controls recover after timeout");
+    }
+
+    #[tokio::test]
+    async fn reserve_blocks_tray_like_conflicting_entry_points() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.slow_hiddify.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine
+            .reserve_lifecycle(LifecycleBusy::Connecting)
+            .await
+            .expect("reserved");
+        assert!(matches!(
+            engine.reserve_lifecycle(LifecycleBusy::Disconnecting).await,
+            Err(CoreError::OperationInProgress)
+        ));
+        assert!(matches!(
+            engine.pause_stack().await,
+            Err(CoreError::OperationInProgress)
+        ));
+        engine.release_lifecycle(LifecycleBusy::Connecting).await;
+        assert_eq!(engine.snapshot().busy, None);
     }
 
     #[tokio::test]
@@ -1516,6 +1768,7 @@ mod tests {
         };
         let value = serde_json::to_value(snapshot).expect("serialize");
         assert_eq!(value["phase"], "checking_readiness");
+        assert_eq!(value["busy"], serde_json::Value::Null);
     }
 
     #[test]

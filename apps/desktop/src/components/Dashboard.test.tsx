@@ -53,6 +53,45 @@ describe("Dashboard", () => {
     expect(useAppStore.getState().actionPending).toBe(true);
   });
 
+  it("disables every lifecycle control during a transition", () => {
+    const { rerender } = render(
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          phase: "starting_hiddify",
+          busy: "connecting",
+          operation_id: "operation-1",
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Cancel operation" }),
+    ).toBeEnabled();
+
+    const running = {
+      phase: "running" as const,
+      message: "Ready",
+      since: now,
+    };
+    rerender(
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          phase: "running",
+          busy: "pausing",
+          helper: running,
+          hiddify: running,
+          mihomo: running,
+          tun: running,
+          dns: running,
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeDisabled();
+  });
+
   it("exposes cancellation during an operation", () => {
     render(
       <Dashboard

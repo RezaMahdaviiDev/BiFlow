@@ -82,6 +82,8 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /apply_tray_menu/);
     const tray = readFileSync(join(root, "src-tauri/src/tray.rs"), "utf8");
     assert.match(tray, /fn labels_for/);
+    assert.match(tray, /fn actions_enabled/);
+    assert.match(rust, /reserve_lifecycle/);
   });
 
   it("disables WebKitGTK DMA-BUF rendering before the Linux webview starts", () => {

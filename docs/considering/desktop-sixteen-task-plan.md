@@ -37,6 +37,10 @@ requested tasks. Runtime changes land in numbered commits on this branch.
 14. **Three viewports** — Playwright + browser screenshots at 390×844, 768×1024, 1024×768; fix clipping.
 15. **Input context menu** — Allow `contextmenu` on text/number inputs; Select All / Copy / Cut / Paste; disable when inapplicable.
 16. **Tray** — Exactly Connect\|Disconnect, Pause\|Resume, Quit, with separators; rebuild on every snapshot.
+17. **Connection lock** — One shared lifecycle lock (`connecting` / `disconnecting` / `pausing` / `resuming`) in the engine, tray, and UI. Reject conflicting operations; restore controls after success, failure, or timeout.
+18. **Button icons** — Lucide icons on every button; icon-only controls keep a tooltip and accessible name.
+19. **In-button progress** — Remove the standalone connect progress card. Fill the active Connect/Disconnect/Pause/Resume button from real stack phases and show the current stage on the label.
+20. **Connect glow** — Subtle available-state glow on Connect; off while disabled/processing; honor `prefers-reduced-motion`.
 
 ## Platform notes
 
