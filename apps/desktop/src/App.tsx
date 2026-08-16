@@ -19,6 +19,7 @@ import { About } from "./components/About";
 import { BasicDashboard } from "./components/BasicDashboard";
 import { Dashboard } from "./components/Dashboard";
 import { AppStatusBar } from "./components/AppStatusBar";
+import { InputContextMenu } from "./components/InputContextMenu";
 import { Diagnostics } from "./components/Diagnostics";
 import { DirectRules } from "./components/DirectRules";
 import { Settings } from "./components/Settings";
@@ -209,6 +210,7 @@ export function App() {
         </main>
         {advanced && mobile ? <BottomNav /> : null}
         <AppStatusBar />
+        <InputContextMenu />
       </div>
 
       {advanced ? (

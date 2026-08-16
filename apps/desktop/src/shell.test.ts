@@ -50,4 +50,18 @@ describe("fixed desktop shell", () => {
     document.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
   });
+
+  it("leaves text and number inputs free for the custom context menu", () => {
+    installContextMenuGuard();
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.append(input);
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    input.remove();
+  });
 });

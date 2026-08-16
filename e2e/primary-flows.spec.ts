@@ -13,7 +13,11 @@ async function openFresh(page: Page, mode: "basic" | "advanced" = "advanced") {
     [mode],
   );
   await page.reload();
-  await expect(page.getByText("BiFlow")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Advanced" })).toBeVisible();
+}
+
+function connectButton(page: Page) {
+  return page.getByRole("button", { name: "Connect", exact: true });
 }
 
 async function expectNoDocumentOverflow(page: Page) {
@@ -66,7 +70,7 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("button", { name: "Install", exact: true }),
     ).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
@@ -102,7 +106,7 @@ test.describe("primary BiFlow flows", () => {
     await expect(
       page.getByRole("button", { name: "Install", exact: true }),
     ).toHaveCount(2);
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
@@ -208,7 +212,7 @@ test.describe("primary BiFlow flows", () => {
     await installButtons.first().click();
     await expect(installButtons).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(shell).toHaveAttribute("data-connection-glow", "active");
     await expect(shell).toHaveClass(/connection-glow-active/);
 
@@ -306,13 +310,13 @@ test.describe("primary BiFlow flows", () => {
     page,
   }) => {
     await openFresh(page, "basic");
-    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(connectButton(page)).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Direct rules" }),
     ).toHaveCount(0);
     await expectNoDocumentOverflow(page);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
@@ -332,13 +336,13 @@ test.describe("primary BiFlow flows", () => {
   }) => {
     await openFresh(page);
     await page.getByRole("radio", { name: "Basic" }).click();
-    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(connectButton(page)).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Direct rules" }),
     ).toHaveCount(0);
     await expectNoDocumentOverflow(page);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
@@ -351,7 +355,7 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Disconnect" }).click();
-    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(connectButton(page)).toBeVisible();
 
     await page.getByRole("radio", { name: "Advanced" }).click();
     await expect(
@@ -360,6 +364,36 @@ test.describe("primary BiFlow flows", () => {
     await expect(
       page.getByRole("button", { name: "Direct rules" }),
     ).toBeVisible();
+  });
+
+  test("offers select all, copy, cut, and paste on text inputs", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    const field = page.getByLabel("Test IP or domain");
+    await field.fill("example.ir");
+    await field.evaluate((node) => {
+      if (node instanceof HTMLInputElement) {
+        node.focus();
+        node.setSelectionRange(0, 0);
+      }
+    });
+    await field.click({ button: "right" });
+    const menu = page.getByTestId("input-context-menu");
+    await expect(menu).toBeVisible();
+    await expect(
+      menu.getByRole("menuitem", { name: "Select All" }),
+    ).toBeEnabled();
+    await expect(menu.getByRole("menuitem", { name: "Copy" })).toBeDisabled();
+    await expect(menu.getByRole("menuitem", { name: "Cut" })).toBeDisabled();
+    await expect(menu.getByRole("menuitem", { name: "Paste" })).toBeEnabled();
+    await menu.getByRole("menuitem", { name: "Select All" }).click();
+    await expect(field).toHaveJSProperty("selectionStart", 0);
+    await expect(field).toHaveJSProperty("selectionEnd", "example.ir".length);
+    await field.click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "Copy" })).toBeEnabled();
+    await expect(page.getByRole("menuitem", { name: "Cut" })).toBeEnabled();
   });
 
   test("blocks the document context menu", async ({ page }) => {

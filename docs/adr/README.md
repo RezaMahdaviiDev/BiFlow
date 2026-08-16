@@ -51,3 +51,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0045](./0045-square-connection-glow.md)                 | Square connection glow                      | Accepted   |
 | [0046](./0046-persist-window-size.md)                    | Persist window size                         | Accepted   |
 | [0047](./0047-three-viewport-layouts.md)                 | Three representative viewport layouts       | Accepted   |
+| [0048](./0048-input-context-menu.md)                     | Input context menu                          | Accepted   |

@@ -76,6 +76,7 @@ If a required command fails or emits a warning from project code, fix it in the 
 - The diagnostics **Test flow** button stays disabled until the target field is non-empty.
 - The Zustand store is a process singleton. App tests that change `page` must reset store state in `beforeEach`, or the next test stays on Settings and never sees the dashboard heading.
 - `getByRole(..., { name: "Install" })` substring-matches **Installing…**. Use `{ name: /^Install$/ }` in Vitest and `{ exact: true }` in Playwright.
+- Playwright `getByRole("button", { name: "Connect" })` also matches the status-bar **Internet connected** control. Use `{ name: "Connect", exact: true }`. Basic mode has no sidebar **BiFlow** wordmark, so wait for the mode switch instead.
 - `scripts/sync-version.mjs` must only sync manifests when it is the process entry point. Importing `readAppVersion` from tests or `build-plan.mjs` must not rewrite `package.json`.
 - After installing rustup, the same shell must prepend `$HOME/.cargo/bin` (or `source "$HOME/.cargo/env"`) or `cargo` is still missing. Both `./build.sh` and `./dev.sh` do this before every toolchain check, including clean/non-interactive shells.
 - Hiddify/Mihomo Install buttons must use PATH and `~/.local/bin`, not only `~/.local/share/biflow`. Mock UI reads the same locations at Vite startup; Playwright still forces missing deps via `sessionStorage` so e2e can test Install.
