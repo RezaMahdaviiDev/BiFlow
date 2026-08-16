@@ -17,9 +17,12 @@ import type {
   NetworkStatus,
   OperationAccepted,
   RouteTestResult,
+  LifecycleBusy,
+  OperationStage,
   StackPhase,
   StackSnapshot,
   UpdateProgress,
+  TrafficTotals,
   UpdateStatus,
   ValidationIssue,
 } from "./models";
@@ -41,6 +44,8 @@ function initialSnapshot(): StackSnapshot {
   return {
     revision: 1,
     phase: "stopped",
+    busy: null,
+    operation_stage: null,
     operation_id: null,
     helper: helperMissing
       ? {
@@ -228,6 +233,7 @@ function detectedDependencies(): DependencyStatus[] {
 }
 
 let snapshot = initialSnapshot();
+let trafficTotals: TrafficTotals = { sent: 1_048_576, received: 2_097_152 };
 let settings = initialSettings();
 let directRules = initialDirectRules();
 let cloudRules = initialCloudRules();
@@ -376,15 +382,35 @@ async function simulateInstallProgress(version: string) {
   });
 }
 
-function emit(phase: StackPhase, operationId: string | null) {
+let lifecycleBusy: LifecycleBusy | null = null;
+
+function emit(
+  phase: StackPhase,
+  operationId: string | null,
+  busy: LifecycleBusy | null = lifecycleBusy,
+  operationStage: OperationStage | null = null,
+) {
   snapshot = {
     ...snapshot,
     revision: snapshot.revision + 1,
     phase,
+    busy,
+    operation_stage: operationStage,
     operation_id: operationId,
     updated_at: now(),
   };
   for (const listener of listeners) listener(structuredClone(snapshot));
+}
+
+function assertIdle(): void {
+  if (lifecycleBusy) {
+    throw new Error("operation is already in progress");
+  }
+}
+
+function begin(busy: LifecycleBusy): void {
+  assertIdle();
+  lifecycleBusy = busy;
 }
 
 function operation(): OperationAccepted {
@@ -392,15 +418,15 @@ function operation(): OperationAccepted {
 }
 
 async function runStart(accepted: OperationAccepted) {
-  const phases: StackPhase[] = [
-    "starting_hiddify",
-    "preparing_runtime",
-    "validating_config",
-    "starting_core",
-    "checking_readiness",
+  const phases: Array<[StackPhase, OperationStage]> = [
+    ["starting_hiddify", "starting_hiddify"],
+    ["preparing_runtime", "preparing_runtime"],
+    ["validating_config", "validating_config"],
+    ["starting_core", "starting_core"],
+    ["checking_readiness", "checking_readiness"],
   ];
-  for (const phase of phases) {
-    emit(phase, accepted.operation_id);
+  for (const [phase, stage] of phases) {
+    emit(phase, accepted.operation_id, lifecycleBusy, stage);
     await new Promise((resolve) => setTimeout(resolve, 180));
   }
   snapshot = {
@@ -417,7 +443,8 @@ async function runStart(accepted: OperationAccepted) {
     },
     exit_ip: "203.0.113.42",
   };
-  emit("running", null);
+  lifecycleBusy = null;
+  emit("running", null, null, null);
   logs.push({
     timestamp: now(),
     level: "info",
@@ -446,20 +473,49 @@ export const mockApi = {
   async getNetworkStatus() {
     return mockNetworkStatus();
   },
+  async getTrafficTotals(): Promise<TrafficTotals> {
+    if (snapshot.phase === "running" || snapshot.phase === "degraded") {
+      trafficTotals = {
+        sent: trafficTotals.sent + 4_096,
+        received: trafficTotals.received + 8_192,
+      };
+    }
+    return { ...trafficTotals };
+  },
   async start(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "connecting") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "running") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("connecting");
     const accepted = operation();
+    emit(snapshot.phase, accepted.operation_id, "connecting", "preparing");
     void runStart(accepted);
     return accepted;
   },
   async stop(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "disconnecting") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "stopped") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("disconnecting");
     const accepted = operation();
-    emit("stopping", accepted.operation_id);
+    emit("stopping", accepted.operation_id, "disconnecting", "stopping_core");
+    window.setTimeout(() => {
+      emit(
+        "stopping",
+        accepted.operation_id,
+        "disconnecting",
+        "stopping_proxy",
+      );
+    }, 120);
+    window.setTimeout(() => {
+      emit("stopping", accepted.operation_id, "disconnecting", "cleaning_up");
+    }, 220);
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
@@ -470,19 +526,27 @@ export const mockApi = {
         providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
         exit_ip: null,
       };
-      emit("stopped", null);
+      lifecycleBusy = null;
+      emit("stopped", null, null, null);
     }, 350);
     return accepted;
   },
   async pause(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "pausing") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "paused") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
     if (snapshot.phase !== "running" && snapshot.phase !== "degraded") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("pausing");
     const accepted = operation();
-    emit("stopping", accepted.operation_id);
+    emit("stopping", accepted.operation_id, "pausing", "stopping_core");
+    window.setTimeout(() => {
+      emit("stopping", accepted.operation_id, "pausing", "cleaning_up");
+    }, 160);
     window.setTimeout(() => {
       snapshot = {
         ...snapshot,
@@ -493,24 +557,31 @@ export const mockApi = {
         providers: { ready: 0, total: 0, rules_loaded: 0, last_refresh: null },
         exit_ip: null,
       };
-      emit("paused", null);
+      lifecycleBusy = null;
+      emit("paused", null, null, null);
     }, 350);
     return accepted;
   },
   async resume(): Promise<OperationAccepted> {
+    if (lifecycleBusy && lifecycleBusy !== "resuming") {
+      throw new Error("operation is already in progress");
+    }
     if (snapshot.phase === "running") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
     if (snapshot.phase !== "paused") {
       return { operation_id: crypto.randomUUID(), already_complete: true };
     }
+    begin("resuming");
     const accepted = operation();
+    emit(snapshot.phase, accepted.operation_id, "resuming", "preparing");
     void runStart(accepted);
     return accepted;
   },
   async cancel(operationId: string) {
     if (snapshot.operation_id === operationId) {
-      emit("stopped", null);
+      lifecycleBusy = null;
+      emit("stopped", null, null, null);
       return true;
     }
     return false;
@@ -748,9 +819,19 @@ export const mockApi = {
         available: true,
         version: "9.9.9",
         notes: "Mock signed release",
+        app_available: true,
+        rules_available: false,
+        thirdparty_available: false,
       };
     }
-    return { available: false, version: null, notes: null };
+    return {
+      available: false,
+      version: null,
+      notes: null,
+      app_available: false,
+      rules_available: false,
+      thirdparty_available: false,
+    };
   },
   async installUpdate(): Promise<OperationAccepted> {
     if (mockUpdateShouldFail()) {
@@ -786,7 +867,9 @@ export function resetMockState() {
   } catch {
     // jsdom and Playwright always provide web storage.
   }
+  lifecycleBusy = null;
   snapshot = initialSnapshot();
+  trafficTotals = { sent: 1_048_576, received: 2_097_152 };
   settings = initialSettings();
   directRules = initialDirectRules();
   cloudRules = initialCloudRules();

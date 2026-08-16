@@ -42,3 +42,18 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0036](./0036-windows-helper-task-xml.md)                | Windows helper scheduled task XML           | Accepted   |
 | [0037](./0037-windows-mihomo-controller-reachability.md) | Windows Mihomo controller reachability      | Accepted   |
 | [0038](./0038-windows-tun-readiness.md)                  | Windows TUN readiness and clash alignment   | Accepted   |
+| [0039](./0039-complete-update-channels.md)               | Complete update channels                    | Accepted   |
+| [0040](./0040-reliable-update-check.md)                  | Reliable update check                       | Accepted   |
+| [0041](./0041-reliable-cloud-rule-sync.md)               | Reliable cloud rule sync                    | Accepted   |
+| [0042](./0042-responsive-bottom-nav.md)                  | Responsive bottom navigation                | Accepted   |
+| [0043](./0043-persistent-traffic-totals.md)              | Persistent traffic totals                   | Accepted   |
+| [0044](./0044-connect-installs-dependencies.md)          | Connect installs required services          | Accepted   |
+| [0045](./0045-square-connection-glow.md)                 | Square connection glow                      | Accepted   |
+| [0046](./0046-persist-window-size.md)                    | Persist window size                         | Accepted   |
+| [0047](./0047-three-viewport-layouts.md)                 | Three representative viewport layouts       | Accepted   |
+| [0048](./0048-input-context-menu.md)                     | Input context menu                          | Accepted   |
+| [0049](./0049-state-aware-tray-menu.md)                  | State-aware tray menu                       | Accepted   |
+| [0050](./0050-connection-operation-lock.md)              | Connection operation lock                   | Accepted   |
+| [0051](./0051-button-icons.md)                           | Icons on every button                       | Accepted   |
+| [0052](./0052-in-button-connection-progress.md)          | In-button connection progress               | Accepted   |
+| [0053](./0053-connect-button-glow.md)                    | Connect button availability glow            | Accepted   |

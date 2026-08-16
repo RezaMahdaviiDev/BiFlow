@@ -1,13 +1,20 @@
+mod connect_prep;
 mod deps;
 mod diagnostics;
 mod helper_install;
 mod hiddify_reset;
 mod network;
+mod traffic;
+mod tray;
 mod version;
+mod window_state;
 
 use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
-use iran_split_core::{Engine, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot};
+use iran_split_core::{
+    Engine, LifecycleBusy, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot,
+};
+use iran_split_mihomo::ControllerClient;
 use iran_split_rules::{
     bundled_snapshot_is_complete, ensure_bundled_snapshot, CloudRuleStore, CloudRulesStatus,
     DirectRulesDocument, DohResolver, Outbound, RuleManager, RuleSet,
@@ -16,13 +23,16 @@ use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tauri::{
-    menu::{Menu, MenuEvent, MenuItem},
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, Runtime, Window, WindowEvent,
+    AppHandle, Emitter, LogicalSize, Manager, Runtime, Size, Window, WindowEvent,
 };
 use tauri_plugin_updater::UpdaterExt;
 use tracing::{error, info, warn};
@@ -42,6 +52,58 @@ struct AppServices {
     cloud_rules: CloudRuleStore,
     network: network::NetworkMonitor,
     paths: AppPaths,
+    updates: Arc<UpdateCoordinator>,
+    traffic_lock: tokio::sync::Mutex<()>,
+}
+
+struct UpdateCoordinator {
+    lock: tokio::sync::Mutex<()>,
+    cancel: AtomicBool,
+}
+
+impl std::fmt::Debug for UpdateCoordinator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("UpdateCoordinator")
+            .field("cancel", &self.cancel.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl UpdateCoordinator {
+    fn new() -> Self {
+        Self {
+            lock: tokio::sync::Mutex::new(()),
+            cancel: AtomicBool::new(false),
+        }
+    }
+
+    fn request_cancel(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+    }
+
+    fn begin(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
+        let guard = self
+            .lock
+            .try_lock()
+            .map_err(|_| update_in_progress_message())?;
+        self.cancel.store(false, Ordering::SeqCst);
+        Ok(guard)
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+}
+
+fn update_in_progress_message() -> String {
+    "an update is already in progress".into()
+}
+
+fn update_check_cancelled(app: &AppHandle) -> bool {
+    services(app)
+        .ok()
+        .is_some_and(|services| services.updates.is_cancelled())
 }
 
 #[derive(Debug, Clone)]
@@ -363,10 +425,17 @@ struct ExportResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "IPC shape matches the About page channel flags"
+)]
 struct UpdateStatus {
     available: bool,
     version: Option<String>,
     notes: Option<String>,
+    app_available: bool,
+    rules_available: bool,
+    thirdparty_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -505,6 +574,76 @@ async fn get_network_status(app: AppHandle) -> Result<network::NetworkStatus, St
     .await
 }
 
+const TRAFFIC_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[tauri::command]
+async fn get_traffic_totals(app: AppHandle) -> Result<traffic::TrafficTotals, String> {
+    diagnostics::trace_action(
+        "traffic",
+        "tauri_command",
+        "get_traffic_totals",
+        async move {
+            let services = services(&app)?;
+            let _guard = services.traffic_lock.lock().await;
+            let path = services.paths.data.join("traffic-totals.json");
+            let mut store = traffic::load(&path);
+            let connected = matches!(
+                services.engine.snapshot().phase,
+                StackPhase::Running | StackPhase::Degraded
+            );
+            let (session_sent, session_received) = if connected {
+                match session_connection_totals(services).await {
+                    Ok(totals) => totals,
+                    Err(cause) => {
+                        warn!(
+                            event = "traffic.session_probe_failed",
+                            section = "traffic",
+                            initiator = "get_traffic_totals",
+                            cause = %cause,
+                            trace_route = "tauri_command->mihomo_controller",
+                            "session traffic totals were unavailable; using last known session"
+                        );
+                        (store.last_session_sent, store.last_session_received)
+                    }
+                }
+            } else {
+                (0, 0)
+            };
+            let totals = traffic::accumulate(&mut store, session_sent, session_received, connected);
+            if let Err(cause) = traffic::save(&path, &store) {
+                warn!(
+                    event = "traffic.persist_failed",
+                    section = "traffic",
+                    initiator = "get_traffic_totals",
+                    cause = %cause,
+                    trace_route = "tauri_command->traffic_totals_file",
+                    "lifetime traffic totals could not be written"
+                );
+            }
+            Ok(totals)
+        },
+    )
+    .await
+}
+
+async fn session_connection_totals(services: &AppServices) -> Result<(u64, u64), String> {
+    let config = services
+        .config_store
+        .load()
+        .or_else(|_| services.config_store.load_or_create())
+        .map_err(|error| error.to_string())?;
+    let client = ControllerClient::new(
+        &config.mihomo.controller_host,
+        config.mihomo.controller_port,
+        &config.mihomo.controller_secret,
+    )
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(TRAFFIC_PROBE_TIMEOUT, client.connection_totals())
+        .await
+        .map_err(|_| "traffic probe timed out".to_owned())?
+        .map_err(|error| error.to_string())
+}
+
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Tauri injects AppHandle command arguments by value"
@@ -519,13 +658,94 @@ fn get_stack_snapshot(app: AppHandle) -> Result<StackSnapshot, String> {
 #[tauri::command]
 async fn start_stack(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("stack", "tauri_command", "start_stack", async move {
-        services(&app)?
-            .engine
-            .start_stack()
-            .await
-            .map_err(|error| error.to_string())
+        start_stack_inner(&app).await
     })
     .await
+}
+
+async fn start_stack_inner<R: Runtime>(app: &AppHandle<R>) -> Result<OperationAccepted, String> {
+    let engine = &services(app)?.engine;
+    if engine.snapshot().phase == StackPhase::Running {
+        return Ok(OperationAccepted {
+            operation_id: uuid::Uuid::new_v4(),
+            already_complete: true,
+        });
+    }
+    engine
+        .reserve_lifecycle(LifecycleBusy::Connecting)
+        .await
+        .map_err(|error| error.to_string())?;
+    if let Err(error) = prepare_stack_start(app).await {
+        engine.release_lifecycle(LifecycleBusy::Connecting).await;
+        return Err(error);
+    }
+    engine
+        .start_stack()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn prepare_stack_start<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let services = services(app)?;
+    let helper_ready = connect_prep::helper_is_ready(services.engine.snapshot().helper.phase);
+    let statuses = deps::dependency_status(&services.paths.data);
+    let hiddify = statuses
+        .iter()
+        .any(|item| item.id == "hiddify" && item.installed);
+    let mihomo = statuses
+        .iter()
+        .any(|item| item.id == "mihomo" && item.installed);
+    for requirement in connect_prep::missing_requirements(helper_ready, hiddify, mihomo) {
+        info!(
+            event = "connect.install_required",
+            section = "stack",
+            initiator = "prepare_stack_start",
+            cause = "missing_dependency",
+            trace_route = "start_stack->prepare_stack_start",
+            requirement = requirement.as_str(),
+            "installing a required service before connect"
+        );
+        match requirement {
+            connect_prep::ConnectRequirement::Helper => {
+                helper_install::install_helper(app).await?;
+                services.engine.refresh_health().await;
+                if !connect_prep::helper_is_ready(services.engine.snapshot().helper.phase) {
+                    return Err("privileged helper is still unavailable after installation".into());
+                }
+            }
+            connect_prep::ConnectRequirement::Hiddify => {
+                install_required_dependency(services, deps::DependencyId::Hiddify).await?;
+            }
+            connect_prep::ConnectRequirement::Mihomo => {
+                install_required_dependency(services, deps::DependencyId::Mihomo).await?;
+            }
+        }
+    }
+    services.engine.refresh_health().await;
+    Ok(())
+}
+
+async fn install_required_dependency(
+    services: &AppServices,
+    id: deps::DependencyId,
+) -> Result<(), String> {
+    let result = deps::install_dependency(id, &services.paths.data, &services.paths.dependencies)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !result.installed {
+        return Err(format!("{} installation did not complete", id.as_str()));
+    }
+    let statuses = deps::dependency_status(&services.paths.data);
+    if !statuses
+        .iter()
+        .any(|item| item.id == id.as_str() && item.installed)
+    {
+        return Err(format!(
+            "{} is still missing after installation",
+            id.as_str()
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -591,7 +811,9 @@ async fn restart_stack(app: AppHandle) -> Result<OperationAccepted, String> {
 async fn cancel_operation(app: AppHandle, operation_id: Uuid) -> Result<bool, String> {
     diagnostics::trace_action("stack", "tauri_command", "cancel_operation", async move {
         info!(operation_id = %operation_id, "operation cancellation requested");
-        Ok(services(&app)?.engine.cancel_operation(operation_id).await)
+        let services = services(&app)?;
+        services.updates.request_cancel();
+        Ok(services.engine.cancel_operation(operation_id).await)
     })
     .await
 }
@@ -1140,30 +1362,134 @@ fn export_support_bundle(app: AppHandle) -> Result<ExportResult, String> {
 /// becomes a Retry button the operator has to press.
 const UPDATE_CHECK_ATTEMPTS: u32 = 4;
 const UPDATE_CHECK_FIRST_BACKOFF: Duration = Duration::from_millis(600);
+const UPDATE_CHECK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(8);
+const UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// How long to wait after launch before the first background check, and the
 /// interval between later ones.
 const UPDATE_BACKGROUND_DELAY: Duration = Duration::from_secs(90);
 const UPDATE_BACKGROUND_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
-    let update = app
-        .updater()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?;
+    let update = tokio::time::timeout(UPDATE_CHECK_ATTEMPT_TIMEOUT, async {
+        app.updater()
+            .map_err(|error| error.to_string())?
+            .check()
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "update check timed out".to_owned())??;
     Ok(update.map_or(
         UpdateStatus {
             available: false,
             version: None,
             notes: None,
+            app_available: false,
+            rules_available: false,
+            thirdparty_available: false,
         },
         |update| UpdateStatus {
             available: true,
             version: Some(update.version.clone()),
             notes: update.body.clone(),
+            app_available: true,
+            rules_available: false,
+            thirdparty_available: false,
         },
     ))
+}
+
+fn merge_update_channels(
+    mut status: UpdateStatus,
+    rules_available: bool,
+    thirdparty_available: bool,
+) -> UpdateStatus {
+    status.rules_available = rules_available;
+    status.thirdparty_available = thirdparty_available;
+    status.available = status.app_available || rules_available || thirdparty_available;
+    status
+}
+
+async fn enrich_update_channels(app: &AppHandle, status: &mut UpdateStatus) {
+    let Ok(services) = services(app) else {
+        return;
+    };
+    match services.cloud_rules.peek_remote_revision().await {
+        Ok(remote) => {
+            status.rules_available =
+                services.cloud_rules.cached_revision().as_deref() != Some(remote.as_str());
+        }
+        Err(cause) => {
+            warn!(
+                event = "update.rules_probe_failed",
+                section = "updates",
+                initiator = "check_for_update",
+                cause = %cause,
+                trace_route = "updater->cloud_rule_store->manifest",
+                "rule snapshot revision could not be compared"
+            );
+        }
+    }
+    let thirdparty_available = deps::dependency_status(&services.paths.data)
+        .into_iter()
+        .any(|item| item.id == "mihomo" && !item.installed);
+    *status = merge_update_channels(status.clone(), status.rules_available, thirdparty_available);
+}
+
+async fn collect_update_status(
+    app: &AppHandle,
+    initiator: &'static str,
+) -> Result<UpdateStatus, String> {
+    let mut status = check_update_with_retry(app, initiator).await?;
+    enrich_update_channels(app, &mut status).await;
+    Ok(status)
+}
+
+async fn apply_sidecar_updates(app: &AppHandle, operation_id: Uuid) -> Result<(), String> {
+    let services = services(app)?;
+    info!(
+        event = "update.sidecars_started",
+        section = "updates",
+        initiator = "install_update",
+        cause = "versioned_assets",
+        trace_route = "tauri_command->cloud_rules->mihomo_install",
+        trace_id = %operation_id,
+        "applying versioned rule and third-party updates"
+    );
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "installing".into(),
+            percent: Some(10),
+            version: None,
+            error: None,
+        },
+    );
+    if let Err(cause) = services.cloud_rules.sync().await {
+        warn!(
+            event = "update.rules_sync_failed",
+            section = "updates",
+            initiator = "install_update",
+            cause = %cause,
+            trace_route = "install_update->cloud_rule_store->sync",
+            trace_id = %operation_id,
+            "cloud rule update failed; last good snapshot remains"
+        );
+    }
+    let mihomo_missing = deps::dependency_status(&services.paths.data)
+        .into_iter()
+        .any(|item| item.id == "mihomo" && !item.installed);
+    if mihomo_missing {
+        deps::install_dependency(
+            deps::DependencyId::Mihomo,
+            &services.paths.data,
+            &services.paths.dependencies,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        services.engine.refresh_health().await;
+    }
+    Ok(())
 }
 
 /// Doubles the wait after each failed attempt. Attempt `0` is immediate.
@@ -1178,6 +1504,9 @@ async fn check_update_with_retry(
 ) -> Result<UpdateStatus, String> {
     let mut last_error = String::new();
     for attempt in 0..UPDATE_CHECK_ATTEMPTS {
+        if update_check_cancelled(app) {
+            return Err("update check cancelled".into());
+        }
         match check_update_once(app).await {
             Ok(status) => {
                 if attempt > 0 {
@@ -1208,6 +1537,9 @@ async fn check_update_with_retry(
             }
         }
         if attempt + 1 < UPDATE_CHECK_ATTEMPTS {
+            if update_check_cancelled(app) {
+                return Err("update check cancelled".into());
+            }
             tokio::time::sleep(update_check_backoff(attempt)).await;
         }
     }
@@ -1226,7 +1558,8 @@ async fn check_update_with_retry(
 #[tauri::command]
 async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     diagnostics::trace_action("updates", "tauri_command", "check_for_update", async move {
-        check_update_with_retry(&app, "tauri_command").await
+        let _guard = services(&app)?.updates.begin()?;
+        collect_update_status(&app, "tauri_command").await
     })
     .await
 }
@@ -1239,7 +1572,15 @@ fn spawn_background_update_checks(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(UPDATE_BACKGROUND_DELAY).await;
         loop {
-            match check_update_with_retry(&app, "background_poll").await {
+            let Ok(services) = services(&app) else {
+                tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
+                continue;
+            };
+            let Ok(_guard) = services.updates.begin() else {
+                tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
+                continue;
+            };
+            match collect_update_status(&app, "background_poll").await {
                 Ok(status) if status.available => {
                     info!(
                         event = "update.background_found",
@@ -1285,33 +1626,34 @@ async fn download_and_install_signed_update(
     let mut downloaded = 0usize;
     let app_for_progress = app.clone();
     let version_for_progress = target_version.to_owned();
-    update
-        .download_and_install(
-            move |chunk_length, content_length| {
-                downloaded = downloaded.saturating_add(chunk_length);
-                emit_update_progress(
-                    &app_for_progress,
-                    UpdateProgress {
-                        phase: "downloading".into(),
-                        percent: update_download_percent(downloaded, content_length),
-                        version: Some(version_for_progress.clone()),
-                        error: None,
-                    },
-                );
-            },
-            || {
-                emit_update_progress(
-                    app,
-                    UpdateProgress {
-                        phase: "installing".into(),
-                        percent: Some(100),
-                        version: Some(target_version.to_owned()),
-                        error: None,
-                    },
-                );
-            },
-        )
+    let download = update.download_and_install(
+        move |chunk_length, content_length| {
+            downloaded = downloaded.saturating_add(chunk_length);
+            emit_update_progress(
+                &app_for_progress,
+                UpdateProgress {
+                    phase: "downloading".into(),
+                    percent: update_download_percent(downloaded, content_length),
+                    version: Some(version_for_progress.clone()),
+                    error: None,
+                },
+            );
+        },
+        || {
+            emit_update_progress(
+                app,
+                UpdateProgress {
+                    phase: "installing".into(),
+                    percent: Some(100),
+                    version: Some(target_version.to_owned()),
+                    error: None,
+                },
+            );
+        },
+    );
+    tokio::time::timeout(UPDATE_INSTALL_TIMEOUT, download)
         .await
+        .map_err(|_| "update download timed out".to_owned())?
         .map_err(|error| {
             let message = error.to_string();
             emit_update_progress(
@@ -1350,6 +1692,34 @@ fn schedule_update_restart(app: &AppHandle, operation_id: Uuid) -> OperationAcce
     }
 }
 
+async fn perform_complete_update_install(
+    app: &AppHandle,
+    operation_id: Uuid,
+) -> Result<OperationAccepted, String> {
+    apply_sidecar_updates(app, operation_id).await?;
+    let status = collect_update_status(app, "install_update").await?;
+    if !status.app_available {
+        emit_update_progress(
+            app,
+            UpdateProgress {
+                phase: if status.available {
+                    "available".into()
+                } else {
+                    "current".into()
+                },
+                percent: Some(100),
+                version: status.version,
+                error: None,
+            },
+        );
+        return Ok(OperationAccepted {
+            operation_id,
+            already_complete: true,
+        });
+    }
+    perform_signed_update_install(app, operation_id).await
+}
+
 async fn perform_signed_update_install(
     app: &AppHandle,
     operation_id: Uuid,
@@ -1359,13 +1729,17 @@ async fn perform_signed_update_install(
     if !linux_updater_self_replace_supported() {
         return open_linux_deb_release(app, operation_id);
     }
-    let update = app
-        .updater()
-        .map_err(|error| error.to_string())?
-        .check()
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or("no update is available")?;
+    let update = match check_update_with_retry(app, "install_update").await {
+        Ok(status) if status.app_available => app
+            .updater()
+            .map_err(|error| error.to_string())?
+            .check()
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or("no update is available")?,
+        Ok(_) => return Err("no update is available".into()),
+        Err(error) => return Err(error),
+    };
     let target_version = update.version.clone();
     info!(
         event = "update.download_started",
@@ -1403,7 +1777,8 @@ async fn perform_signed_update_install(
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("updates", "tauri_command", "install_update", async move {
-        perform_signed_update_install(&app, Uuid::new_v4()).await
+        let _guard = services(&app)?.updates.begin()?;
+        perform_complete_update_install(&app, Uuid::new_v4()).await
     })
     .await
 }
@@ -1426,6 +1801,10 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Linux and Windows backend construction stay in one startup path"
+)]
 fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     info!(
         event = "services.initializing",
@@ -1528,6 +1907,8 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         cloud_rules,
         network,
         paths,
+        updates: Arc::new(UpdateCoordinator::new()),
+        traffic_lock: tokio::sync::Mutex::new(()),
     })
 }
 
@@ -1573,11 +1954,7 @@ fn connect_from_tray<R: Runtime>(app: &AppHandle<R>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = diagnostics::trace_action("stack", "tray_menu", "start_stack", async move {
-            services(&app)?
-                .engine
-                .start_stack()
-                .await
-                .map_err(|error| error.to_string())
+            start_stack_inner(&app).await
         })
         .await;
         if let Err(cause) = result {
@@ -1665,53 +2042,8 @@ fn disconnect_from_tray<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-fn disconnect_and_quit_from_tray<R: Runtime>(app: &AppHandle<R>) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let result =
-            diagnostics::trace_action("lifecycle", "tray_menu", "disconnect_and_quit", async {
-                let services = services(&app)?;
-                services
-                    .engine
-                    .stop_stack()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                services
-                    .engine
-                    .wait_for_phase(StackPhase::Stopped, Duration::from_secs(25))
-                    .await
-                    .map_err(|error| error.to_string())?;
-                Ok::<(), String>(())
-            })
-            .await;
-        if let Err(cause) = result {
-            error!(
-                event = "shutdown.disconnect_failed",
-                section = "lifecycle",
-                initiator = "tray_menu",
-                cause,
-                trace_route = "tray_menu->stop_stack->application_exit",
-                "disconnect before quit failed"
-            );
-        }
-        diagnostics::flush();
-        app.exit(0);
-    });
-}
-
 fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
     match event.id.as_ref() {
-        "open" => {
-            info!(
-                event = "window.open_requested",
-                section = "window",
-                initiator = "tray_menu",
-                cause = "open_selected",
-                trace_route = "tray_menu->show_main",
-                "main window open requested"
-            );
-            show_main(app);
-        }
         "connect" => connect_from_tray(app),
         "pause" => pause_from_tray(app),
         "resume" => resume_from_tray(app),
@@ -1727,28 +2059,6 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
             );
             app.exit(0);
         }
-        "disconnect_quit" => disconnect_and_quit_from_tray(app),
-        "about" => {
-            info!(
-                event = "window.about_requested",
-                section = "window",
-                initiator = "tray_menu",
-                cause = "about_selected",
-                trace_route = "tray_menu->show_main->app-navigate",
-                "about page requested from tray"
-            );
-            show_main(app);
-            if let Err(cause) = app.emit("app-navigate", "about") {
-                warn!(
-                    event = "navigation.emit_failed",
-                    section = "window",
-                    initiator = "tray_menu",
-                    cause = %cause,
-                    trace_route = "tray_menu->emit(app-navigate)",
-                    "about navigation event could not be emitted"
-                );
-            }
-        }
         unknown => warn!(
             event = "tray.unknown_action",
             section = "tray",
@@ -1761,38 +2071,80 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
     }
 }
 
-fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let connect = MenuItem::with_id(app, "connect", "Connect", true, None::<&str>)?;
-    let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>)?;
-    let resume = MenuItem::with_id(app, "resume", "Resume", true, None::<&str>)?;
-    let disconnect = MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "About", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit UI", true, None::<&str>)?;
-    let disconnect_quit = MenuItem::with_id(
+fn build_tray_menu<R: Runtime>(
+    app: &AppHandle<R>,
+    phase: StackPhase,
+    busy: Option<LifecycleBusy>,
+) -> tauri::Result<Menu<R>> {
+    let labels = tray::labels_for(phase);
+    let enabled = tray::actions_enabled(busy);
+    let connection = MenuItem::with_id(
         app,
-        "disconnect_quit",
-        "Disconnect & Quit",
-        true,
+        labels.connection_id,
+        labels.connection_label,
+        enabled,
         None::<&str>,
     )?;
-    let menu = Menu::with_items(
+    let pause = MenuItem::with_id(
+        app,
+        labels.pause_id,
+        labels.pause_label,
+        enabled,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let first_separator = PredefinedMenuItem::separator(app)?;
+    let second_separator = PredefinedMenuItem::separator(app)?;
+    Menu::with_items(
         app,
         &[
-            &connect,
+            &connection,
+            &first_separator,
             &pause,
-            &resume,
-            &disconnect,
-            &open,
-            &about,
+            &second_separator,
             &quit,
-            &disconnect_quit,
         ],
-    )?;
+    )
+}
+
+fn apply_tray_menu<R: Runtime>(app: &AppHandle<R>, snapshot: &StackSnapshot) {
+    let Ok(menu) = build_tray_menu(app, snapshot.phase, snapshot.busy) else {
+        warn!(
+            event = "tray.menu_build_failed",
+            section = "tray",
+            initiator = "apply_tray_menu",
+            cause = "menu_construction",
+            trace_route = "snapshot_watcher->build_tray_menu",
+            "tray menu could not be rebuilt"
+        );
+        return;
+    };
+    let Some(icon) = app.tray_by_id("main") else {
+        return;
+    };
+    if let Err(cause) = icon.set_menu(Some(menu)) {
+        warn!(
+            event = "tray.menu_update_failed",
+            section = "tray",
+            initiator = "apply_tray_menu",
+            cause = %cause,
+            trace_route = "snapshot_watcher->tray.set_menu",
+            "tray menu could not be replaced"
+        );
+    }
+}
+
+fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
+    let snapshot = app
+        .try_state::<AppServices>()
+        .map_or_else(StackSnapshot::default, |services| {
+            services.engine.snapshot()
+        });
+    let menu = build_tray_menu(app.handle(), snapshot.phase, snapshot.busy)?;
     let icon = app.default_window_icon().cloned().ok_or_else(|| {
         tauri::Error::from(std::io::Error::other("default window icon is missing"))
     })?;
-    TrayIconBuilder::new()
+    TrayIconBuilder::with_id("main")
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -1857,11 +2209,13 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     let mut snapshots = services.engine.subscribe();
     let engine = Arc::clone(&services.engine);
     let health_engine = Arc::clone(&services.engine);
+    let data_dir = services.paths.data.clone();
     let handle = app.handle().clone();
     app.manage(services);
     tauri::async_runtime::spawn(async move {
         while snapshots.changed().await.is_ok() {
-            if let Err(cause) = handle.emit("stack-snapshot", snapshots.borrow().clone()) {
+            let snapshot = snapshots.borrow().clone();
+            if let Err(cause) = handle.emit("stack-snapshot", snapshot.clone()) {
                 warn!(
                     event = "snapshot.emit_failed",
                     section = "stack",
@@ -1871,6 +2225,7 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
                     "stack snapshot event could not be emitted"
                 );
             }
+            apply_tray_menu(&handle, &snapshot);
         }
         warn!(
             event = "snapshot.channel_closed",
@@ -1916,6 +2271,9 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             }
         }
     });
+    if let Some(window) = app.get_webview_window("main") {
+        restore_main_window_size(&window, &data_dir);
+    }
     setup_tray(app).map_err(|cause| {
         error!(
             event = "startup.tray_failed",
@@ -1938,7 +2296,103 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+fn restore_main_window_size<R: Runtime>(window: &tauri::WebviewWindow<R>, data: &Path) {
+    let saved = window_state::load(&data.join("window-size.json"));
+    let (work_width, work_height) = monitor_work_area_logical(window)
+        .unwrap_or((window_state::DEFAULT_WIDTH, window_state::DEFAULT_HEIGHT));
+    let size = window_state::clamp_logical(saved.width, saved.height, work_width, work_height);
+    if let Err(cause) = window.set_min_size(Some(Size::Logical(LogicalSize::new(
+        window_state::MIN_WIDTH,
+        window_state::MIN_HEIGHT,
+    )))) {
+        warn!(
+            event = "window.min_size_failed",
+            section = "window",
+            initiator = "restore_main_window_size",
+            cause = %cause,
+            trace_route = "tauri_setup->window.set_min_size",
+            "minimum window size could not be applied"
+        );
+    }
+    if let Err(cause) = window.set_size(Size::Logical(LogicalSize::new(size.width, size.height))) {
+        warn!(
+            event = "window.size_restore_failed",
+            section = "window",
+            initiator = "restore_main_window_size",
+            cause = %cause,
+            trace_route = "tauri_setup->window.set_size",
+            "saved window size could not be applied"
+        );
+    } else {
+        info!(
+            event = "window.size_restored",
+            section = "window",
+            initiator = "restore_main_window_size",
+            cause = "persisted_size",
+            trace_route = "tauri_setup->window.set_size",
+            "main window size restored within the current work area"
+        );
+    }
+}
+
+fn monitor_work_area_logical<R: Runtime>(window: &tauri::WebviewWindow<R>) -> Option<(f64, f64)> {
+    let monitor = window.current_monitor().ok().flatten()?;
+    let scale = monitor.scale_factor();
+    if scale <= 0.0 {
+        return None;
+    }
+    let work = monitor.work_area();
+    Some((
+        f64::from(work.size.width) / scale,
+        f64::from(work.size.height) / scale,
+    ))
+}
+
+fn persist_main_window_size<R: Runtime>(window: &Window<R>) {
+    let Ok(services) = services(window.app_handle()) else {
+        return;
+    };
+    let Ok(physical) = window.inner_size() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if scale <= 0.0 {
+        return;
+    }
+    let logical = physical.to_logical::<f64>(scale);
+    let (work_width, work_height) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .and_then(|monitor| {
+            let scale = monitor.scale_factor();
+            if scale <= 0.0 {
+                return None;
+            }
+            let work = monitor.work_area();
+            Some((
+                f64::from(work.size.width) / scale,
+                f64::from(work.size.height) / scale,
+            ))
+        })
+        .unwrap_or((window_state::DEFAULT_WIDTH, window_state::DEFAULT_HEIGHT));
+    let size = window_state::clamp_logical(logical.width, logical.height, work_width, work_height);
+    if let Err(cause) = window_state::save(&services.paths.data.join("window-size.json"), size) {
+        warn!(
+            event = "window.size_persist_failed",
+            section = "window",
+            initiator = "persist_main_window_size",
+            cause = %cause,
+            trace_route = "window_control->window_size_file",
+            "window size could not be written"
+        );
+    }
+}
+
 fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    if let WindowEvent::Resized(_) = event {
+        persist_main_window_size(window);
+    }
     if let WindowEvent::CloseRequested { api, .. } = event {
         info!(
             event = "window.close_requested",
@@ -2003,6 +2457,7 @@ pub fn run() {
             bootstrap_app,
             get_stack_snapshot,
             get_network_status,
+            get_traffic_totals,
             start_stack,
             stop_stack,
             pause_stack,
@@ -2049,11 +2504,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        packaged_rule_snapshot_dir, single_instance_dbus_id, update_check_backoff,
-        update_download_percent, UpdateProgress, BUNDLE_IDENTIFIER, UPDATE_CHECK_ATTEMPTS,
-        UPDATE_CHECK_FIRST_BACKOFF,
+        merge_update_channels, packaged_rule_snapshot_dir, single_instance_dbus_id,
+        update_check_backoff, update_download_percent, UpdateProgress, UpdateStatus,
+        BUNDLE_IDENTIFIER, UPDATE_CHECK_ATTEMPTS, UPDATE_CHECK_FIRST_BACKOFF,
     };
     use std::{fs, time::Duration};
+
+    #[test]
+    fn update_check_attempt_timeout_bounds_a_hang() {
+        assert_eq!(super::UPDATE_CHECK_ATTEMPT_TIMEOUT, Duration::from_secs(8));
+        assert_eq!(super::UPDATE_INSTALL_TIMEOUT, Duration::from_secs(10 * 60));
+        assert_eq!(
+            super::update_in_progress_message(),
+            "an update is already in progress"
+        );
+    }
 
     #[test]
     fn update_check_backoff_grows_and_stays_bounded() {
@@ -2105,6 +2570,56 @@ mod tests {
             packaged_rule_snapshot_dir(directory.path()),
             directory.path().join("rules")
         );
+    }
+
+    #[test]
+    fn merge_update_channels_marks_any_pending_channel() {
+        let none = merge_update_channels(
+            UpdateStatus {
+                available: false,
+                version: None,
+                notes: None,
+                app_available: false,
+                rules_available: false,
+                thirdparty_available: false,
+            },
+            false,
+            false,
+        );
+        assert!(!none.available);
+
+        let rules_only = merge_update_channels(
+            UpdateStatus {
+                available: false,
+                version: None,
+                notes: None,
+                app_available: false,
+                rules_available: false,
+                thirdparty_available: false,
+            },
+            true,
+            false,
+        );
+        assert!(rules_only.available);
+        assert!(rules_only.rules_available);
+        assert!(!rules_only.app_available);
+
+        let app = merge_update_channels(
+            UpdateStatus {
+                available: true,
+                version: Some("3.1.0".into()),
+                notes: None,
+                app_available: true,
+                rules_available: false,
+                thirdparty_available: false,
+            },
+            false,
+            true,
+        );
+        assert!(app.available);
+        assert!(app.app_available);
+        assert!(app.thirdparty_available);
+        assert_eq!(app.version.as_deref(), Some("3.1.0"));
     }
 
     #[test]

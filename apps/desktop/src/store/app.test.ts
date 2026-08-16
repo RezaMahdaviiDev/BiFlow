@@ -19,6 +19,7 @@ vi.mock("../api/desktop", () => ({
     getSnapshot: vi.fn(),
     syncCloudRules: vi.fn(),
     getNetworkStatus: vi.fn(),
+    getTrafficTotals: vi.fn(),
     checkUpdate: vi.fn(),
     installUpdate: vi.fn(),
     openUrl: vi.fn(),
@@ -88,6 +89,8 @@ describe("app store", () => {
       cloudRules: null,
       dependencies: [],
       networkStatus: null,
+      trafficTotals: { sent: 0, received: 0 },
+      trafficRefreshing: false,
       diagnostics: null,
       error: null,
       installGuide: null,
@@ -110,12 +113,99 @@ describe("app store", () => {
       checked_at: "now",
       detail: null,
     });
+    vi.mocked(desktop.getTrafficTotals).mockResolvedValue({
+      sent: 2048,
+      received: 4096,
+    });
     await useAppStore.getState().initialize();
     const state = useAppStore.getState();
     expect(state.loading).toBe(false);
     expect(state.cloudRules?.domain_count).toBe(10);
     expect(state.dependencies[0]?.id).toBe("hiddify");
     expect(desktop.getNetworkStatus).toHaveBeenCalledOnce();
+    expect(desktop.getTrafficTotals).toHaveBeenCalledOnce();
+    expect(state.trafficTotals).toEqual({ sent: 2048, received: 4096 });
+  });
+
+  it("keeps lifetime traffic totals when a later probe fails", async () => {
+    useAppStore.setState({
+      trafficTotals: { sent: 9_000, received: 8_000 },
+      trafficRefreshing: false,
+    });
+    vi.mocked(desktop.getTrafficTotals).mockRejectedValue(
+      new Error("controller offline"),
+    );
+    await useAppStore.getState().refreshTrafficTotals();
+    expect(useAppStore.getState().trafficTotals).toEqual({
+      sent: 9_000,
+      received: 8_000,
+    });
+    expect(useAppStore.getState().trafficRefreshing).toBe(false);
+  });
+
+  it("ignores a second traffic refresh while one is in flight", async () => {
+    useAppStore.setState({ trafficRefreshing: true });
+    await useAppStore.getState().refreshTrafficTotals();
+    expect(desktop.getTrafficTotals).not.toHaveBeenCalled();
+  });
+
+  it("starts only one backend operation when Connect is clicked twice", async () => {
+    vi.mocked(desktop.start).mockResolvedValue({
+      operation_id: "op",
+      already_complete: false,
+    });
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      actionPending: false,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: null,
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: null,
+          path: "/tmp/mihomo",
+        },
+      ],
+    });
+    const first = useAppStore.getState().toggleConnection();
+    await useAppStore.getState().toggleConnection();
+    await first;
+    expect(desktop.start).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().actionPending).toBe(true);
+  });
+
+  it("restores controls after a failed connection command", async () => {
+    vi.mocked(desktop.start).mockRejectedValue(new Error("helper missing"));
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      actionPending: false,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: null,
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: null,
+          path: "/tmp/mihomo",
+        },
+      ],
+    });
+    await useAppStore.getState().toggleConnection();
+    expect(useAppStore.getState().actionPending).toBe(false);
+    expect(useAppStore.getState().error).toMatch(/helper missing/);
   });
 
   it("starts the stack from a stopped snapshot", async () => {
@@ -123,10 +213,129 @@ describe("app store", () => {
       operation_id: "op",
       already_complete: false,
     });
-    useAppStore.setState({ snapshot: boot.snapshot, actionPending: false });
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      actionPending: false,
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: true,
+          version: null,
+          path: "/tmp/hiddify",
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: true,
+          version: null,
+          path: "/tmp/mihomo",
+        },
+      ],
+    });
     await useAppStore.getState().toggleConnection();
     expect(desktop.start).toHaveBeenCalledOnce();
+    expect(desktop.installHelper).not.toHaveBeenCalled();
+    expect(desktop.installDependency).not.toHaveBeenCalled();
     expect(useAppStore.getState().actionPending).toBe(true);
+  });
+
+  it("installs helper then apps before connecting", async () => {
+    const order: string[] = [];
+    vi.mocked(desktop.installHelper).mockImplementation(async () => {
+      order.push("helper");
+      return { installed: true };
+    });
+    vi.mocked(desktop.getSnapshot).mockResolvedValue({
+      ...boot.snapshot,
+      helper: { phase: "running", message: "ready", since: "now" },
+    });
+    vi.mocked(desktop.installDependency).mockImplementation(async (id) => {
+      order.push(id);
+      return {
+        id,
+        installed: true,
+        path: `/tmp/${id}`,
+        guide: {
+          id,
+          title: id,
+          download_url: "https://example.invalid",
+          steps: [],
+        },
+      };
+    });
+    vi.mocked(desktop.listDependencies).mockResolvedValue([
+      {
+        id: "hiddify",
+        name: "Hiddify",
+        installed: true,
+        version: null,
+        path: "/tmp/hiddify",
+      },
+      {
+        id: "mihomo",
+        name: "Mihomo",
+        installed: true,
+        version: null,
+        path: "/tmp/mihomo",
+      },
+    ]);
+    vi.mocked(desktop.start).mockResolvedValue({
+      operation_id: "op",
+      already_complete: false,
+    });
+    useAppStore.setState({
+      snapshot: {
+        ...boot.snapshot,
+        helper: { phase: "unavailable", message: "missing", since: "now" },
+      },
+      dependencies: [
+        {
+          id: "hiddify",
+          name: "Hiddify",
+          installed: false,
+          version: null,
+          path: null,
+        },
+        {
+          id: "mihomo",
+          name: "Mihomo",
+          installed: false,
+          version: null,
+          path: null,
+        },
+      ],
+      actionPending: false,
+    });
+    await useAppStore.getState().toggleConnection();
+    expect(order).toEqual(["helper", "hiddify", "mihomo"]);
+    expect(desktop.start).toHaveBeenCalledOnce();
+    expect(useAppStore.getState().installingId).toBeNull();
+  });
+
+  it("stops before start when a required install fails", async () => {
+    vi.mocked(desktop.installDependency).mockResolvedValue({
+      id: "hiddify",
+      installed: false,
+      path: null,
+      guide: {
+        id: "hiddify",
+        title: "Install Hiddify",
+        download_url: "https://example.invalid",
+        steps: ["Download"],
+      },
+    });
+    vi.mocked(desktop.listDependencies).mockResolvedValue(boot.dependencies);
+    useAppStore.setState({
+      snapshot: boot.snapshot,
+      dependencies: boot.dependencies,
+      actionPending: false,
+    });
+    await useAppStore.getState().toggleConnection();
+    expect(desktop.start).not.toHaveBeenCalled();
+    expect(useAppStore.getState().error).toMatch(/hiddify installation/);
+    expect(useAppStore.getState().installGuide?.id).toBe("hiddify");
+    expect(useAppStore.getState().actionPending).toBe(false);
   });
 
   it("pauses and resumes from a running snapshot", async () => {
@@ -192,11 +401,26 @@ describe("app store", () => {
     expect(useAppStore.getState().actionPending).toBe(false);
   });
 
+  it("ignores a second network refresh while one is in flight", async () => {
+    useAppStore.setState({ networkRefreshing: true });
+    await useAppStore.getState().refreshNetworkStatus();
+    expect(desktop.getNetworkStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not start a second cloud rule sync while one is pending", async () => {
+    useAppStore.setState({ actionPending: true });
+    await useAppStore.getState().syncCloudRules();
+    expect(desktop.syncCloudRules).not.toHaveBeenCalled();
+  });
+
   it("tracks available and failed update states", async () => {
     vi.mocked(desktop.checkUpdate).mockResolvedValue({
       available: true,
       version: "1.3.0",
       notes: "Signed release",
+      app_available: true,
+      rules_available: false,
+      thirdparty_available: false,
     });
     await useAppStore.getState().checkForUpdate();
     expect(useAppStore.getState().update.phase).toBe("available");
@@ -206,6 +430,36 @@ describe("app store", () => {
     await useAppStore.getState().checkForUpdate();
     expect(useAppStore.getState().update.phase).toBe("failed");
     expect(useAppStore.getState().update.error).toMatch(/bad manifest/);
+  });
+
+  it("ignores a second update check while one is already in flight", async () => {
+    let finish: (status: {
+      available: boolean;
+      version: string | null;
+      notes: string | null;
+      app_available: boolean;
+      rules_available: boolean;
+      thirdparty_available: boolean;
+    }) => void = () => undefined;
+    vi.mocked(desktop.checkUpdate).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const first = useAppStore.getState().checkForUpdate();
+    await useAppStore.getState().checkForUpdate();
+    expect(desktop.checkUpdate).toHaveBeenCalledOnce();
+    finish({
+      available: false,
+      version: null,
+      notes: null,
+      app_available: false,
+      rules_available: false,
+      thirdparty_available: false,
+    });
+    await first;
+    expect(useAppStore.getState().update.phase).toBe("current");
   });
 
   it("retries install after a failed update when a version is known", async () => {

@@ -7,20 +7,20 @@ import {
   Globe2,
   LoaderCircle,
   Network,
+  Pause,
+  Play,
+  Power,
+  PowerOff,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { ComponentStatus, StackPhase, StackSnapshot } from "../api/models";
+import type { ComponentStatus, StackSnapshot } from "../api/models";
+import { controlsLocked, isOperating } from "../lib/lifecycle";
 import { useAppStore } from "../store/app";
+import { AppButton, BUTTON_ICON_PX } from "./AppButton";
+import { ConnectionActionButton } from "./ConnectionActionButton";
 import { StatusPill } from "./StatusPill";
-
-const progressPhases: StackPhase[] = [
-  "starting_hiddify",
-  "preparing_runtime",
-  "validating_config",
-  "starting_core",
-  "checking_readiness",
-];
 
 export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   const { t } = useTranslation();
@@ -38,9 +38,8 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   } = useAppStore();
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
   const paused = snapshot.phase === "paused";
-  const operating =
-    progressPhases.includes(snapshot.phase) || snapshot.phase === "stopping";
-  const progressIndex = progressPhases.indexOf(snapshot.phase);
+  const locked = controlsLocked(snapshot, actionPending);
+  const operating = isOperating(snapshot);
   const needsAttention = [
     snapshot.helper,
     snapshot.hiddify,
@@ -52,7 +51,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   return (
     <section
       aria-labelledby="dashboard-title"
-      className="flex h-full min-h-0 flex-col gap-4 overflow-hidden"
+      className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto"
     >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -71,83 +70,58 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           </h1>
           <p className="mt-2 max-w-2xl text-muted">{t("routingSummary")}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex w-full max-w-xl flex-wrap gap-3 sm:w-auto">
           {operating && snapshot.operation_id ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<X size={BUTTON_ICON_PX} aria-hidden />}
               onClick={() => void cancel()}
-              className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
+              className="rounded-2xl border border-ink/15 bg-surface px-5 py-3.5 font-semibold"
             >
               {t("cancel")}
-            </button>
+            </AppButton>
           ) : null}
           {active ? (
-            <button
-              type="button"
-              disabled={actionPending || operating}
+            <ConnectionActionButton
+              action="pause"
+              snapshot={snapshot}
+              installingId={installingId}
+              actionPending={actionPending}
+              disabled={locked}
               onClick={() => void pauseConnection()}
-              className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
-            >
-              {t("pause")}
-            </button>
+              icon={<Pause size={BUTTON_ICON_PX} aria-hidden />}
+              variant="secondary"
+            />
           ) : null}
           {paused ? (
-            <button
-              type="button"
-              disabled={actionPending || operating}
+            <ConnectionActionButton
+              action="resume"
+              snapshot={snapshot}
+              installingId={installingId}
+              actionPending={actionPending}
+              disabled={locked}
               onClick={() => void resumeConnection()}
-              className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              {t("resume")}
-            </button>
+              icon={<Play size={BUTTON_ICON_PX} aria-hidden />}
+              variant="primary"
+            />
           ) : null}
-          {!paused ? (
-            <button
-              type="button"
-              disabled={actionPending || operating}
-              onClick={() => void toggleConnection()}
-              className="min-w-36 rounded-xl bg-brand px-5 py-3 font-semibold text-white shadow-lg shadow-brand/20 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
-            >
-              {active ? t("disconnect") : t("connect")}
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={actionPending || operating}
-              onClick={() => void toggleConnection()}
-              className="rounded-xl border border-ink/15 bg-surface px-4 py-3 font-semibold"
-            >
-              {t("disconnect")}
-            </button>
-          )}
+          <ConnectionActionButton
+            action={active || paused ? "disconnect" : "connect"}
+            snapshot={snapshot}
+            installingId={installingId}
+            actionPending={actionPending}
+            disabled={locked}
+            onClick={() => void toggleConnection()}
+            icon={
+              active || paused ? (
+                <PowerOff size={BUTTON_ICON_PX} aria-hidden />
+              ) : (
+                <Power size={BUTTON_ICON_PX} aria-hidden />
+              )
+            }
+            variant={paused ? "secondary" : "primary"}
+          />
         </div>
       </div>
-
-      {operating ? (
-        <div
-          className="rounded-2xl border border-brand/15 bg-brand/5 p-4"
-          role="status"
-        >
-          <div className="mb-2 flex justify-between text-sm font-medium">
-            <span>{snapshot.phase.replaceAll("_", " ")}</span>
-            <span>
-              {Math.max(
-                10,
-                ((progressIndex + 1) / progressPhases.length) * 100,
-              ).toFixed(0)}
-              %
-            </span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-brand/10">
-            <div
-              className="h-full rounded-full bg-brand transition-all duration-300"
-              style={{
-                width: `${Math.max(10, ((progressIndex + 1) / progressPhases.length) * 100)}%`,
-              }}
-            />
-          </div>
-        </div>
-      ) : null}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Metric
@@ -234,7 +208,7 @@ function Metric({
         {icon}
       </div>
       <p className="text-sm text-muted">{label}</p>
-      <p className="mt-1 truncate text-lg font-semibold" title={value}>
+      <p className="mt-1 text-lg font-semibold leading-snug break-words">
         {value}
       </p>
     </div>

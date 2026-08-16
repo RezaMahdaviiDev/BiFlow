@@ -1,4 +1,11 @@
-import { Info, RefreshCw } from "lucide-react";
+import {
+  Download,
+  ExternalLink,
+  Info,
+  RefreshCw,
+  RotateCw,
+} from "lucide-react";
+import { AppButton, BUTTON_ICON_PX } from "./AppButton";
 import { useTranslation } from "react-i18next";
 import { APP_VERSION } from "../version";
 import { useAppStore } from "../store/app";
@@ -55,13 +62,13 @@ export function About() {
             {t("aboutRepositoryLabel")}
           </dt>
           <dd className="mt-1">
-            <button
-              type="button"
+            <AppButton
+              icon={<ExternalLink size={16} aria-hidden />}
               className="font-medium text-brand underline-offset-2 hover:underline"
               onClick={() => void openRepository()}
             >
               devlifeX/BiFlow
-            </button>
+            </AppButton>
           </dd>
         </div>
       </dl>
@@ -76,6 +83,14 @@ export function About() {
         <p className="mt-4 text-sm" role="status">
           {updateMessage(t, update)}
         </p>
+        {update.rules_available ? (
+          <p className="mt-2 text-sm text-muted">{t("updateRulesAvailable")}</p>
+        ) : null}
+        {update.thirdparty_available ? (
+          <p className="mt-2 text-sm text-muted">
+            {t("updateThirdpartyAvailable")}
+          </p>
+        ) : null}
 
         {update.phase === "downloading" && update.percent !== null ? (
           <div className="mt-4">
@@ -113,23 +128,23 @@ export function About() {
               : t("updateCheck")}
           </button>
           {showInstall ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<Download size={BUTTON_ICON_PX} aria-hidden />}
               className="rounded-xl border border-brand px-4 py-2.5 font-semibold text-brand disabled:opacity-60"
               disabled={busy}
               onClick={() => void installUpdate()}
             >
               {t("updateInstall", { version: update.version ?? "" })}
-            </button>
+            </AppButton>
           ) : null}
           {showRetry ? (
-            <button
-              type="button"
+            <AppButton
+              icon={<RotateCw size={BUTTON_ICON_PX} aria-hidden />}
               className="rounded-xl border border-ink/15 px-4 py-2.5 font-semibold"
               onClick={() => void retryUpdate()}
             >
               {t("updateRetry")}
-            </button>
+            </AppButton>
           ) : null}
         </div>
       </div>

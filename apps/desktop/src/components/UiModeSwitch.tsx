@@ -1,6 +1,9 @@
+import { SlidersHorizontal, Sparkles } from "lucide-react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { UiMode } from "../lib/uiMode";
 import { writeUiMode } from "../lib/uiMode";
+import { BUTTON_ICON_PX } from "./AppButton";
 
 export function UiModeSwitch({
   mode,
@@ -18,7 +21,7 @@ export function UiModeSwitch({
     onChange(next);
   }
 
-  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const forward = rtl
       ? event.key === "ArrowLeft"
       : event.key === "ArrowRight";
@@ -50,11 +53,13 @@ export function UiModeSwitch({
         }}
       />
       <ModeOption
+        icon={<Sparkles size={BUTTON_ICON_PX} aria-hidden />}
         label={t("uiModeBasic")}
         checked={mode === "basic"}
         onSelect={() => select("basic")}
       />
       <ModeOption
+        icon={<SlidersHorizontal size={BUTTON_ICON_PX} aria-hidden />}
         label={t("uiModeAdvanced")}
         checked={mode === "advanced"}
         onSelect={() => select("advanced")}
@@ -64,10 +69,12 @@ export function UiModeSwitch({
 }
 
 function ModeOption({
+  icon,
   label,
   checked,
   onSelect,
 }: {
+  icon: ReactNode;
   label: string;
   checked: boolean;
   onSelect: () => void;
@@ -79,10 +86,11 @@ function ModeOption({
       aria-checked={checked}
       tabIndex={checked ? 0 : -1}
       onClick={onSelect}
-      className={`relative z-10 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
+      className={`relative z-10 inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
         checked ? "text-brand" : "text-muted hover:text-ink"
       }`}
     >
+      {icon}
       {label}
     </button>
   );

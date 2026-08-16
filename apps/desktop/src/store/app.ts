@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { desktop } from "../api/desktop";
+import { missingConnectRequirements } from "../lib/connectRequirements";
+import { ACTION_TIMEOUT_MS, controlsLocked } from "../lib/lifecycle";
 import type {
   AppConfig,
   BootstrapResult,
@@ -10,6 +12,7 @@ import type {
   InstallGuide,
   NetworkStatus,
   StackSnapshot,
+  TrafficTotals,
   UpdateProgress,
   UpdateStatus,
 } from "../api/models";
@@ -21,6 +24,9 @@ const initialUpdateProgress = (): UpdateProgress => ({
   percent: null,
   version: null,
   error: null,
+  app_available: false,
+  rules_available: false,
+  thirdparty_available: false,
 });
 
 interface AppStore {
@@ -35,6 +41,9 @@ interface AppStore {
   cloudRules: CloudRulesStatus | null;
   dependencies: DependencyStatus[];
   networkStatus: NetworkStatus | null;
+  networkRefreshing: boolean;
+  trafficTotals: TrafficTotals;
+  trafficRefreshing: boolean;
   diagnostics: DiagnosticsReport | null;
   error: string | null;
   installGuide: InstallGuide | null;
@@ -52,6 +61,7 @@ interface AppStore {
   refreshRules: () => Promise<void>;
   syncCloudRules: () => Promise<void>;
   refreshNetworkStatus: () => Promise<void>;
+  refreshTrafficTotals: () => Promise<void>;
   installDependency: (id: string) => Promise<void>;
   installHelper: () => Promise<void>;
   runDiagnostics: () => Promise<void>;
@@ -70,6 +80,44 @@ function message(error: unknown): string {
   return "An unexpected error occurred";
 }
 
+async function ensureRequiredServices(
+  get: () => AppStore,
+  set: (partial: Partial<AppStore>) => void,
+): Promise<void> {
+  const missing = missingConnectRequirements(
+    get().snapshot,
+    get().dependencies,
+  );
+  for (const id of missing) {
+    if (id === "helper") {
+      set({ installingId: "helper" });
+      await desktop.installHelper();
+      const snapshot = await desktop.getSnapshot();
+      set({ snapshot });
+      if (
+        snapshot.helper.phase === "unavailable" ||
+        snapshot.helper.phase === "error"
+      ) {
+        throw new Error(
+          "privileged helper is still unavailable after installation",
+        );
+      }
+      continue;
+    }
+    set({ installingId: id });
+    const result = await desktop.installDependency(id);
+    const dependencies = await desktop.listDependencies();
+    set({
+      dependencies,
+      installGuide: result.installed ? null : result.guide,
+    });
+    if (!result.installed) {
+      throw new Error(`${id} installation did not complete`);
+    }
+  }
+  set({ installingId: null });
+}
+
 export const useAppStore = create<AppStore>((set, get) => ({
   loading: true,
   actionPending: false,
@@ -82,6 +130,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
   cloudRules: null,
   dependencies: [],
   networkStatus: null,
+  networkRefreshing: false,
+  trafficTotals: { sent: 0, received: 0 },
+  trafficRefreshing: false,
   diagnostics: null,
   error: null,
   installGuide: null,
@@ -102,9 +153,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
         update: initialUpdateProgress(),
       });
       void get().refreshNetworkStatus();
-      const unsubscribeSnapshot = await desktop.subscribe((snapshot) =>
-        set({ snapshot, actionPending: false }),
-      );
+      void get().refreshTrafficTotals();
+      const unsubscribeSnapshot = await desktop.subscribe((snapshot) => {
+        set({
+          snapshot,
+          actionPending: snapshot.busy != null,
+        });
+        void get().refreshTrafficTotals();
+      });
       const unsubscribeUpdate = await desktop.subscribeUpdateProgress(
         (progress) => {
           get().applyUpdateProgress(progress);
@@ -121,8 +177,19 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   toggleConnection: async () => {
     const snapshot = get().snapshot;
-    if (!snapshot) return;
-    set({ actionPending: true, error: null });
+    if (!snapshot || controlsLocked(snapshot, get().actionPending)) return;
+    set({ actionPending: true, error: null, installGuide: null });
+    const timeout = window.setTimeout(() => {
+      const current = get().snapshot;
+      if (get().actionPending) {
+        set({
+          actionPending: false,
+          installingId: null,
+          error: "The connection operation timed out.",
+          snapshot: current ? { ...current, busy: null } : current,
+        });
+      }
+    }, ACTION_TIMEOUT_MS);
     try {
       if (
         snapshot.phase === "running" ||
@@ -131,13 +198,21 @@ export const useAppStore = create<AppStore>((set, get) => ({
       ) {
         await desktop.stop();
       } else {
+        await ensureRequiredServices(get, set);
         await desktop.start();
       }
     } catch (error) {
-      set({ actionPending: false, error: message(error) });
+      set({
+        actionPending: false,
+        installingId: null,
+        error: message(error),
+      });
+    } finally {
+      window.clearTimeout(timeout);
     }
   },
   pauseConnection: async () => {
+    if (controlsLocked(get().snapshot, get().actionPending)) return;
     set({ actionPending: true, error: null });
     try {
       await desktop.pause();
@@ -146,6 +221,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   resumeConnection: async () => {
+    if (controlsLocked(get().snapshot, get().actionPending)) return;
     set({ actionPending: true, error: null });
     try {
       await desktop.resume();
@@ -211,6 +287,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   syncCloudRules: async () => {
+    if (get().actionPending) {
+      return;
+    }
     set({ actionPending: true, error: null });
     try {
       const cloudRules = await desktop.syncCloudRules();
@@ -219,12 +298,29 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ actionPending: false, error: message(error) });
     }
   },
+  refreshTrafficTotals: async () => {
+    if (get().trafficRefreshing) {
+      return;
+    }
+    set({ trafficRefreshing: true });
+    try {
+      const trafficTotals = await desktop.getTrafficTotals();
+      set({ trafficTotals, trafficRefreshing: false });
+    } catch {
+      set({ trafficRefreshing: false });
+    }
+  },
   refreshNetworkStatus: async () => {
+    if (get().networkRefreshing) {
+      return;
+    }
+    set({ networkRefreshing: true });
     try {
       const networkStatus = await desktop.getNetworkStatus();
-      set({ networkStatus });
+      set({ networkStatus, networkRefreshing: false });
     } catch (error) {
       set({
+        networkRefreshing: false,
         networkStatus: {
           state: "offline",
           public_ip: null,
@@ -274,6 +370,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     set({ update: progress });
   },
   checkForUpdate: async () => {
+    const phase = get().update.phase;
+    if (
+      phase === "checking" ||
+      phase === "downloading" ||
+      phase === "installing" ||
+      phase === "restarting"
+    ) {
+      return;
+    }
     set({
       update: {
         phase: "checking",
@@ -299,6 +404,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   installUpdate: async () => {
+    const phase = get().update.phase;
+    if (
+      phase === "checking" ||
+      phase === "downloading" ||
+      phase === "installing" ||
+      phase === "restarting"
+    ) {
+      return;
+    }
     const current = get().update;
     set({
       update: {
@@ -354,6 +468,9 @@ function updateStatusToProgress(status: UpdateStatus): UpdateProgress {
       percent: null,
       version: null,
       error: null,
+      app_available: false,
+      rules_available: false,
+      thirdparty_available: false,
     };
   }
   return {
@@ -361,5 +478,8 @@ function updateStatusToProgress(status: UpdateStatus): UpdateProgress {
     percent: null,
     version: status.version,
     error: null,
+    app_available: status.app_available,
+    rules_available: status.rules_available,
+    thirdparty_available: status.thirdparty_available,
   };
 }

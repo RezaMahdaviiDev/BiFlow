@@ -1,13 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
 
-async function openFresh(page: Page) {
+async function openFresh(page: Page, mode: "basic" | "advanced" = "advanced") {
   await page.goto("/");
   await page.waitForFunction(
     "typeof window.__BIFLOW_RESET_MOCK === 'function'",
   );
-  await page.evaluate("window.__BIFLOW_RESET_MOCK()");
+  await page.evaluate(
+    ([nextMode]) => {
+      window.__BIFLOW_RESET_MOCK?.();
+      localStorage.setItem("biflow-ui-mode-v1", nextMode);
+    },
+    [mode],
+  );
   await page.reload();
-  await expect(page.getByText("BiFlow")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Advanced" })).toBeVisible();
+}
+
+function connectButton(page: Page) {
+  return page.getByRole("button", { name: "Connect", exact: true });
 }
 
 async function expectNoDocumentOverflow(page: Page) {
@@ -42,6 +52,8 @@ test.describe("primary BiFlow flows", () => {
     await expect(statusBar).toContainText("Internet connected");
     await expect(statusBar).toContainText("198.51.100.24");
     await expect(statusBar).toContainText("🇮🇷");
+    await expect(statusBar).toContainText("Sent: 1.00 MiB");
+    await expect(statusBar).toContainText("Received: 2.00 MiB");
     await expect(page.getByText("unknown", { exact: true })).toHaveCount(0);
 
     const installButtons = page.getByRole("button", {
@@ -58,7 +70,7 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("button", { name: "Install", exact: true }),
     ).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
@@ -85,6 +97,76 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("heading", { name: "Ready when you are" }),
     ).toBeVisible();
     await expect(page.locator(".traffic-flow-route")).toHaveCount(0);
+  });
+
+  test("disables lifecycle controls after the first Connect click", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    const installButtons = page.getByRole("button", {
+      name: "Install",
+      exact: true,
+    });
+    await installButtons.nth(0).click();
+    await page.getByRole("button", { name: "Install", exact: true }).click();
+    const connect = page.locator("[data-connection-action='connect']");
+    await expect(connect).toHaveAttribute("data-connect-glow", "available");
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      const record = () => {
+        const label = document.querySelector(
+          "[data-connection-action='connect'] .connection-action-label",
+        );
+        const text = label?.textContent?.trim();
+        if (text && seen.at(-1) !== text) {
+          seen.push(text);
+        }
+      };
+      record();
+      const observer = new MutationObserver(record);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+      window.__BIFLOW_STAGE_SEEN = seen;
+      window.__BIFLOW_STAGE_STOP = () => observer.disconnect();
+    });
+    await connect.click();
+    await expect(connect).toBeDisabled();
+    await expect(connect).toHaveAttribute("data-processing", "true");
+    await expect(connect).toHaveAttribute("data-connect-glow", "off");
+    await connect.click({ force: true });
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pause" })).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Disconnect" }),
+    ).toBeEnabled();
+    const stages = await page.evaluate(() => {
+      window.__BIFLOW_STAGE_STOP?.();
+      return window.__BIFLOW_STAGE_SEEN ?? [];
+    });
+    expect(stages).toEqual(
+      expect.arrayContaining(["Start Hiddify", "Start Mihomo"]),
+    );
+  });
+
+  test("connect installs missing apps before starting the stack", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await expect(
+      page.getByRole("button", { name: "Install", exact: true }),
+    ).toHaveCount(2);
+    await connectButton(page).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Install", exact: true }),
+    ).toHaveCount(0);
   });
 
   test("installs a missing helper from the advanced dashboard", async ({
@@ -184,7 +266,7 @@ test.describe("primary BiFlow flows", () => {
     await installButtons.first().click();
     await expect(installButtons).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
     await expect(shell).toHaveAttribute("data-connection-glow", "active");
     await expect(shell).toHaveClass(/connection-glow-active/);
 
@@ -278,18 +360,43 @@ test.describe("primary BiFlow flows", () => {
     ]);
   });
 
-  test("hides advanced chrome in Basic mode and can return to Advanced", async ({
+  test("starts in Basic mode on first launch and can return to Advanced", async ({
     page,
   }) => {
-    await openFresh(page);
-    await page.getByRole("radio", { name: "Basic" }).click();
-    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await openFresh(page, "basic");
+    await expect(connectButton(page)).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Direct rules" }),
     ).toHaveCount(0);
     await expectNoDocumentOverflow(page);
 
-    await page.getByRole("button", { name: "Connect" }).click();
+    await connectButton(page).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Disconnect" }).click();
+
+    await page.getByRole("radio", { name: "Advanced" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Direct rules" }),
+    ).toBeVisible();
+  });
+
+  test("hides advanced chrome in Basic mode and can return to Advanced", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("radio", { name: "Basic" }).click();
+    await expect(connectButton(page)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Direct rules" }),
+    ).toHaveCount(0);
+    await expectNoDocumentOverflow(page);
+
+    await connectButton(page).click();
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
@@ -302,7 +409,7 @@ test.describe("primary BiFlow flows", () => {
       page.getByRole("heading", { name: "Protected split routing is active" }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Disconnect" }).click();
-    await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+    await expect(connectButton(page)).toBeVisible();
 
     await page.getByRole("radio", { name: "Advanced" }).click();
     await expect(
@@ -311,6 +418,36 @@ test.describe("primary BiFlow flows", () => {
     await expect(
       page.getByRole("button", { name: "Direct rules" }),
     ).toBeVisible();
+  });
+
+  test("offers select all, copy, cut, and paste on text inputs", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    const field = page.getByLabel("Test IP or domain");
+    await field.fill("example.ir");
+    await field.evaluate((node) => {
+      if (node instanceof HTMLInputElement) {
+        node.focus();
+        node.setSelectionRange(0, 0);
+      }
+    });
+    await field.click({ button: "right" });
+    const menu = page.getByTestId("input-context-menu");
+    await expect(menu).toBeVisible();
+    await expect(
+      menu.getByRole("menuitem", { name: "Select All" }),
+    ).toBeEnabled();
+    await expect(menu.getByRole("menuitem", { name: "Copy" })).toBeDisabled();
+    await expect(menu.getByRole("menuitem", { name: "Cut" })).toBeDisabled();
+    await expect(menu.getByRole("menuitem", { name: "Paste" })).toBeEnabled();
+    await menu.getByRole("menuitem", { name: "Select All" }).click();
+    await expect(field).toHaveJSProperty("selectionStart", 0);
+    await expect(field).toHaveJSProperty("selectionEnd", "example.ir".length);
+    await field.click({ button: "right" });
+    await expect(page.getByRole("menuitem", { name: "Copy" })).toBeEnabled();
+    await expect(page.getByRole("menuitem", { name: "Cut" })).toBeEnabled();
   });
 
   test("blocks the document context menu", async ({ page }) => {

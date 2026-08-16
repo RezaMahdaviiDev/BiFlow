@@ -22,6 +22,7 @@ hex.workspace = true
 iran-split-config = { path = "../crates/iran-split-config" }
 iran-split-core = { path = "../crates/iran-split-core" }
 iran-split-ipc = { path = "../crates/iran-split-ipc" }
+iran-split-mihomo = { path = "../crates/iran-split-mihomo" }
 iran-split-rules = { path = "../crates/iran-split-rules" }
 reqwest.workspace = true
 regex.workspace = true

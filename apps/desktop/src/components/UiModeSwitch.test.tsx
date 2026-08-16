@@ -9,8 +9,8 @@ describe("UiModeSwitch", () => {
     localStorage.removeItem(UI_MODE_STORAGE_KEY);
   });
 
-  it("defaults existing users to Advanced when no preference is stored", () => {
-    expect(readUiMode()).toBe("advanced");
+  it("defaults a first launch to Basic when no preference is stored", () => {
+    expect(readUiMode()).toBe("basic");
   });
 
   it("persists Basic and Advanced selections", async () => {

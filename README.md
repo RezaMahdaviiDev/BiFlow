@@ -12,6 +12,8 @@
 </p>
 
 <p align="center">
+  <a href="#features">Features</a>
+  ·
   <a href="#how-it-works">How it works</a>
   ·
   <a href="#architecture">Architecture</a>
@@ -21,7 +23,28 @@
   <a href="#faq">FAQ</a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/desktop.png" alt="BiFlow desktop dashboard while split routing is active" width="800" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="BiFlow on a phone-sized window with bottom navigation" width="280" />
+</p>
+
 ---
+
+## Features
+
+- **Split routing** — Iranian sites, Iranian IP ranges, and private/LAN traffic stay **DIRECT**. Everything else uses the Hiddify connection you already have.
+- **Connect, Pause, Resume, Disconnect** — One operation at a time. The active button shows the real stage (Start Hiddify, Start Mihomo, and so on) with an in-button progress fill.
+- **Basic and Advanced** — First launch opens Basic. Advanced adds component health, live traffic routes, and extra tools.
+- **Direct rules** — Pin hosts to DIRECT or VPN. Refresh the bundled Iran domain and IP lists from the BiFlow cloud snapshot.
+- **Diagnostics** — Test whether a host would go DIRECT or through the VPN, then move it. Export or clear the local `debug.log`. Fresh Hiddify start repairs a blank Hiddify window without touching subscriptions.
+- **Status bar** — Internet reachability, public IP, approximate country, and lifetime sent/received totals.
+- **In-app install** — Connect can install the privileged helper, Hiddify, and the bundled Mihomo build when they are missing.
+- **English and Persian** — Built-in UI languages, with a tray menu for Connect/Disconnect, Pause/Resume, and Quit.
+- **Linux and Windows** — Debian package, AppImage, portable `.exe`, and NSIS setup. Signed AppImage and NSIS builds can update in-app.
+- **Fits the window** — Desktop sidebar, phone-sized bottom navigation, and a resizable window down to 390×640.
 
 ## Description
 

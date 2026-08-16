@@ -12,12 +12,14 @@ pause, resume, and disconnect controls. The preference must survive restarts.
 ## Decision
 
 - Store the UI mode under the versioned localStorage key `biflow-ui-mode-v1`.
-- Default missing or invalid values to **Advanced** so existing installs keep
-  every current screen and capability until they opt into Basic.
+- Default missing or invalid values to **Basic** so a first launch shows the
+  connect-only dashboard. Existing installs that already stored Advanced keep
+  that preference. Connect still installs missing services in Basic (ADR 0044).
 - Render Basic mode as a dedicated minimal dashboard with only the segmented
   mode control, lifecycle actions, progress/cancel, and concise inline errors.
-- Keep About reachable from the tray menu and Advanced sidebar even when Basic
-  mode hides navigation and the status bar.
+- Keep About reachable from the tray menu even when Basic mode hides
+  navigation. Selecting Basic from About (or any other page) returns to the
+  Basic dashboard so the control matches every other screen.
 
 ## Consequences
 

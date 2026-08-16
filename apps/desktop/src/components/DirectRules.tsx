@@ -192,6 +192,11 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
                       )
                     }
                     className="rounded-lg border border-ink/15 p-2 text-muted hover:text-brand"
+                    title={
+                      outbound === "vpn"
+                        ? t("moveToDirect", { target: rule.target.value })
+                        : t("moveToVpn", { target: rule.target.value })
+                    }
                     aria-label={
                       outbound === "vpn"
                         ? t("moveToDirect", { target: rule.target.value })
@@ -209,6 +214,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
                     disabled={testing}
                     onClick={() => void test(rule.target.value)}
                     className="rounded-lg border border-ink/15 p-2 text-muted hover:text-brand"
+                    title={`Test route for ${rule.target.value}`}
                     aria-label={`Test route for ${rule.target.value}`}
                   >
                     <Route size={18} aria-hidden />
@@ -218,6 +224,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
                     disabled={actionPending}
                     onClick={() => void removeRule(rule.target.value)}
                     className="rounded-lg border border-ink/15 p-2 text-muted hover:text-danger"
+                    title={`Remove ${rule.target.value}`}
                     aria-label={`Remove ${rule.target.value}`}
                   >
                     <Trash2 size={18} aria-hidden />

@@ -54,18 +54,21 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /emit\("update-progress"/);
   });
 
-  it("fixes the main window at 1120x760 without resize", () => {
+  it("keeps a resizable main window with a 390x640 minimum", () => {
     const config = JSON.parse(
       readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
     );
     const window = config.app.windows[0];
     assert.equal(window.width, 1120);
     assert.equal(window.height, 760);
-    assert.equal(window.minWidth, 1120);
-    assert.equal(window.minHeight, 760);
-    assert.equal(window.maxWidth, 1120);
-    assert.equal(window.maxHeight, 760);
-    assert.equal(window.resizable, false);
+    assert.equal(window.minWidth, 390);
+    assert.equal(window.minHeight, 640);
+    assert.equal(window.maxWidth, undefined);
+    assert.equal(window.maxHeight, undefined);
+    assert.equal(window.resizable, true);
+    const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    assert.match(rust, /restore_main_window_size/);
+    assert.match(rust, /persist_main_window_size/);
   });
 
   it("assigns the default application icon to the tray builder", () => {
@@ -73,8 +76,14 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /default_window_icon\(\)/);
     assert.match(
       rust,
-      /TrayIconBuilder::new\(\)[\s\S]*?\.icon\(icon\)[\s\S]*?\.menu\(&menu\)/,
+      /TrayIconBuilder::with_id\("main"\)[\s\S]*?\.icon\(icon\)[\s\S]*?\.menu\(&menu\)/,
     );
+    assert.match(rust, /PredefinedMenuItem::separator/);
+    assert.match(rust, /apply_tray_menu/);
+    const tray = readFileSync(join(root, "src-tauri/src/tray.rs"), "utf8");
+    assert.match(tray, /fn labels_for/);
+    assert.match(tray, /fn actions_enabled/);
+    assert.match(rust, /reserve_lifecycle/);
   });
 
   it("disables WebKitGTK DMA-BUF rendering before the Linux webview starts", () => {
@@ -272,7 +281,11 @@ describe("Tauri frontend contract", () => {
     // The command must go through the retry, not call the plugin directly.
     assert.match(
       rust,
-      /async fn check_for_update\([\s\S]*?check_update_with_retry\(&app, "tauri_command"\)/,
+      /async fn check_for_update\([\s\S]*?collect_update_status\(&app, "tauri_command"\)/,
+    );
+    assert.match(
+      rust,
+      /async fn collect_update_status\([\s\S]*?check_update_with_retry\(app, initiator\)/,
     );
     assert.match(rust, /fn spawn_background_update_checks\(/);
     assert.match(rust, /spawn_background_update_checks\(app\.handle\(\)\)/);
@@ -286,6 +299,13 @@ describe("Tauri frontend contract", () => {
     // Signed self-replacement, not a browser link.
     assert.match(rust, /update\s*\.download_and_install\(/);
     assert.match(rust, /fn schedule_update_restart\(/);
+    assert.match(rust, /fn perform_complete_update_install\(/);
+    assert.match(rust, /fn apply_sidecar_updates\(/);
+    assert.match(rust, /fn merge_update_channels\(/);
+    assert.match(rust, /const UPDATE_CHECK_ATTEMPT_TIMEOUT/);
+    assert.match(rust, /const UPDATE_INSTALL_TIMEOUT/);
+    assert.match(rust, /fn update_in_progress_message\(/);
+    assert.match(rust, /updates\.begin\(\)/);
   });
 
   it("never reports a previous attempt's Windows install reason", () => {

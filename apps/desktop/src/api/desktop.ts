@@ -16,6 +16,7 @@ import type {
   LogEntry,
   NetworkStatus,
   OperationAccepted,
+  TrafficTotals,
   RouteTestResult,
   StackSnapshot,
   UpdateProgress,
@@ -35,6 +36,9 @@ export const desktop = {
   },
   getNetworkStatus(): Promise<NetworkStatus> {
     return native ? invoke("get_network_status") : mockApi.getNetworkStatus();
+  },
+  getTrafficTotals(): Promise<TrafficTotals> {
+    return native ? invoke("get_traffic_totals") : mockApi.getTrafficTotals();
   },
   start(): Promise<OperationAccepted> {
     return native ? invoke("start_stack") : mockApi.start();

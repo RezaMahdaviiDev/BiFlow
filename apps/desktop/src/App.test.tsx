@@ -9,7 +9,7 @@ import { APP_VERSION } from "./version";
 
 beforeEach(() => {
   resetMockState();
-  localStorage.removeItem(UI_MODE_STORAGE_KEY);
+  localStorage.setItem(UI_MODE_STORAGE_KEY, "advanced");
   useAppStore.setState({
     loading: true,
     actionPending: false,
@@ -63,6 +63,18 @@ describe("App", () => {
     expect(screen.getByText("Dariush Vesal")).toBeVisible();
   });
 
+  it("opens Basic mode on a first launch with no stored preference", async () => {
+    localStorage.removeItem(UI_MODE_STORAGE_KEY);
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Direct rules" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
+  });
+
   it("hides advanced chrome in Basic mode", async () => {
     render(<App />);
     expect(
@@ -73,7 +85,21 @@ describe("App", () => {
     expect(
       screen.queryByRole("button", { name: "Direct rules" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText("Internet connected")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
+  });
+
+  it("leaves About for the Basic dashboard when Basic is selected", async () => {
+    render(<App />);
+    expect(
+      await screen.findByRole("heading", { name: "Ready when you are" }),
+    ).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "About" }));
+    expect(screen.getByRole("heading", { name: "About" })).toBeVisible();
+    await userEvent.click(screen.getByRole("radio", { name: "Basic" }));
+    expect(
+      screen.queryByRole("heading", { name: "About" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect" })).toBeVisible();
   });
 

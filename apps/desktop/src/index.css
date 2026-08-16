@@ -154,18 +154,19 @@ select:focus-visible,
 /* Connection glow: the window border breathes while the stack is live, so the
    state is readable from across the room without reading the dashboard. The
    ring is drawn on an inset overlay rather than the shell's own border so it
-   never shifts the fixed 1120x760 layout. */
+   never shifts layout. Square corners keep the ring flush with the window
+   edges at 100% and scaled displays. */
 .connection-glow::after {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 50;
   pointer-events: none;
-  border-radius: 0.5rem;
-  border: 2px solid rgb(var(--glow) / 0.85);
+  border-radius: 0;
+  border: 3px solid rgb(var(--glow) / 0.9);
   box-shadow:
-    inset 0 0 12px rgb(var(--glow) / 0.45),
-    0 0 10px rgb(var(--glow) / 0.35);
+    inset 0 0 18px rgb(var(--glow) / 0.55),
+    0 0 16px rgb(var(--glow) / 0.5);
   animation: connection-glow-pulse 2.4s ease-in-out infinite;
 }
 
@@ -196,5 +197,71 @@ select:focus-visible,
   .connection-glow::after {
     animation: none;
     opacity: 0.9;
+  }
+}
+
+.connection-action {
+  max-width: 100%;
+}
+
+.connection-action-fill-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.connection-action-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  transition: width 280ms ease-out;
+}
+
+.connection-action-primary .connection-action-fill {
+  background: rgb(255 255 255 / 0.28);
+}
+
+.connection-action-secondary .connection-action-fill {
+  background: rgb(var(--brand) / 0.28);
+}
+
+.connection-action-processing.connection-action-primary {
+  background-color: rgb(var(--brand) / 0.62);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-action-fill {
+    transition: none;
+  }
+}
+
+/* Available Connect only: a quiet pulse that sits on the button box-shadow
+   so the in-button progress fill can keep animating independently. */
+.connect-button-glow {
+  animation: connect-button-glow-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes connect-button-glow-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 2px rgb(var(--brand) / 0.22),
+      0 0 14px rgb(var(--brand) / 0.28),
+      0 10px 18px rgb(var(--brand) / 0.16);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgb(var(--brand) / 0.38),
+      0 0 22px rgb(var(--brand) / 0.4),
+      0 12px 22px rgb(var(--brand) / 0.2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-button-glow {
+    animation: none;
+    box-shadow: 0 0 0 2px rgb(var(--brand) / 0.28);
   }
 }

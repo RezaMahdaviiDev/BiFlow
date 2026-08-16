@@ -2,6 +2,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Activity,
   BookOpen,
+  Download,
+  ExternalLink,
   Info,
   Languages,
   LayoutDashboard,
@@ -15,14 +17,22 @@ import { useTranslation } from "react-i18next";
 import logo from "./assets/logo.png";
 import { desktop } from "./api/desktop";
 import type { StackPhase } from "./api/models";
+import {
+  AppButton,
+  BUTTON_ICON_PX,
+  IconOnlyButton,
+} from "./components/AppButton";
 import { About } from "./components/About";
 import { BasicDashboard } from "./components/BasicDashboard";
 import { Dashboard } from "./components/Dashboard";
 import { AppStatusBar } from "./components/AppStatusBar";
+import { InputContextMenu } from "./components/InputContextMenu";
 import { Diagnostics } from "./components/Diagnostics";
 import { DirectRules } from "./components/DirectRules";
 import { Settings } from "./components/Settings";
+import { BottomNav } from "./components/BottomNav";
 import { UiModeSwitch } from "./components/UiModeSwitch";
+import { isMobileViewport, subscribeMobileViewport } from "./lib/viewport";
 import { readUiMode, type UiMode } from "./lib/uiMode";
 import { useAppStore } from "./store/app";
 
@@ -40,11 +50,14 @@ export function App() {
   const { i18n, t } = useTranslation();
   const store = useAppStore();
   const [uiMode, setUiMode] = useState<UiMode>(() => readUiMode());
+  const [mobile, setMobile] = useState(isMobileViewport);
   const [dark, setDark] = useState(
     () =>
       (localStorage.getItem("biflow-theme") ??
         localStorage.getItem("iran-split-theme")) === "dark",
   );
+
+  useEffect(() => subscribeMobileViewport(setMobile), []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -86,6 +99,13 @@ export function App() {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void useAppStore.getState().refreshTrafficTotals();
+    }, 2_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   if (store.loading) {
     return (
       <main className="grid h-full place-items-center" aria-busy="true">
@@ -111,12 +131,15 @@ export function App() {
   return (
     <div
       data-connection-glow={glow ?? "none"}
-      className={`grid h-full overflow-hidden ${
-        advanced ? "grid-cols-[15rem_1fr]" : "grid-cols-1"
+      className={`app-shell grid h-full overflow-hidden ${
+        advanced ? "app-shell-advanced md:grid-cols-[15rem_1fr]" : "grid-cols-1"
       } ${glow ? `connection-glow connection-glow-${glow}` : ""}`}
     >
-      {advanced ? (
-        <aside className="flex h-full min-h-0 flex-col border-r border-ink/10 bg-surface/85 p-4 backdrop-blur">
+      {advanced && !mobile ? (
+        <aside
+          data-testid="sidebar-nav"
+          className="app-sidebar hidden h-full min-h-0 flex-col border-r border-ink/10 bg-surface/85 p-4 backdrop-blur md:flex"
+        >
           <div className="flex items-center gap-3 px-2 py-2">
             <img
               src={logo}
@@ -161,9 +184,17 @@ export function App() {
       ) : null}
 
       <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden p-5">
+        <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col overflow-hidden p-3 sm:p-5">
           <div className="shrink-0 pb-4">
-            <UiModeSwitch mode={uiMode} onChange={setUiMode} />
+            <UiModeSwitch
+              mode={uiMode}
+              onChange={(mode) => {
+                setUiMode(mode);
+                if (mode === "basic") {
+                  useAppStore.getState().setPage("dashboard");
+                }
+              }}
+            />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {!advanced && store.page !== "about" && store.snapshot ? (
@@ -184,7 +215,9 @@ export function App() {
             {store.page === "about" ? <About /> : null}
           </div>
         </main>
-        {advanced ? <AppStatusBar /> : null}
+        {advanced && mobile ? <BottomNav /> : null}
+        <AppStatusBar />
+        <InputContextMenu />
       </div>
 
       {advanced ? (
@@ -207,13 +240,13 @@ export function App() {
                 </p>
               ) : null}
               {missing ? (
-                <button
-                  type="button"
+                <AppButton
+                  icon={<Download size={BUTTON_ICON_PX} aria-hidden />}
                   className="mt-4 rounded-xl bg-brand px-4 py-2.5 font-semibold text-white"
                   onClick={() => void store.installDependency(missingId)}
                 >
                   {t("install")} {missingId === "mihomo" ? "Mihomo" : "Hiddify"}
-                </button>
+                </AppButton>
               ) : null}
               <Dialog.Close
                 className="absolute right-4 top-4 rounded-lg p-1 text-muted"
@@ -252,8 +285,8 @@ export function App() {
               ) : null}
               <div className="mt-5 flex flex-wrap gap-2">
                 {store.installGuide ? (
-                  <button
-                    type="button"
+                  <AppButton
+                    icon={<ExternalLink size={BUTTON_ICON_PX} aria-hidden />}
                     className="rounded-xl bg-brand px-4 py-2.5 font-semibold text-white"
                     onClick={() => {
                       const url = store.installGuide?.download_url;
@@ -261,9 +294,10 @@ export function App() {
                     }}
                   >
                     {t("openDownload")}
-                  </button>
+                  </AppButton>
                 ) : null}
-                <Dialog.Close className="rounded-xl border border-ink/15 px-4 py-2.5 font-semibold">
+                <Dialog.Close className="inline-flex items-center justify-center gap-2 rounded-xl border border-ink/15 px-4 py-2.5 font-semibold">
+                  <X size={BUTTON_ICON_PX} aria-hidden />
                   {t("close")}
                 </Dialog.Close>
               </div>
@@ -316,15 +350,15 @@ function ThemeButton({
   dark: boolean;
   setDark: (dark: boolean) => void;
 }) {
+  const label = dark ? "Use light theme" : "Use dark theme";
   return (
-    <button
-      type="button"
+    <IconOnlyButton
+      label={label}
       onClick={() => setDark(!dark)}
       className="rounded-xl p-2 text-muted hover:bg-ink/5 hover:text-ink"
-      aria-label={dark ? "Use light theme" : "Use dark theme"}
     >
       {dark ? <Sun size={19} aria-hidden /> : <Moon size={19} aria-hidden />}
-    </button>
+    </IconOnlyButton>
   );
 }
 
@@ -336,17 +370,16 @@ function LanguageButton({
   change: (language: string) => void;
 }) {
   return (
-    <button
-      type="button"
+    <IconOnlyButton
+      label="Change language"
       onClick={() => {
         const next = language === "fa" ? "en" : "fa";
         localStorage.setItem("biflow-language", next);
         change(next);
       }}
       className="rounded-xl p-2 text-muted hover:bg-ink/5 hover:text-ink"
-      aria-label="Change language"
     >
       <Languages size={19} aria-hidden />
-    </button>
+    </IconOnlyButton>
   );
 }

@@ -20,6 +20,10 @@ vi.mock("../api/desktop", () => ({
       .fn()
       .mockResolvedValue({ operation_id: "op", already_complete: false }),
     cancel: vi.fn().mockResolvedValue(true),
+    installHelper: vi.fn().mockResolvedValue({ installed: true }),
+    installDependency: vi.fn(),
+    listDependencies: vi.fn(),
+    getSnapshot: vi.fn(),
   },
 }));
 
@@ -45,16 +49,64 @@ describe("Dashboard", () => {
     useAppStore.setState({ snapshot: stopped, actionPending: false });
     render(<Dashboard snapshot={stopped} />);
     expect(screen.getAllByText("stopped")).toHaveLength(5);
-    await userEvent.click(screen.getByRole("button", { name: "Connect" }));
+    const connect = screen.getByRole("button", { name: "Connect" });
+    expect(connect.querySelector("svg")).not.toBeNull();
+    expect(connect).toHaveAttribute("data-connect-glow", "available");
+    await userEvent.click(connect);
     expect(useAppStore.getState().actionPending).toBe(true);
   });
 
-  it("exposes cancellation during an operation", () => {
+  it("disables every lifecycle control during a transition", () => {
+    const { rerender } = render(
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          phase: "starting_hiddify",
+          busy: "connecting",
+          operation_id: "operation-1",
+        }}
+      />,
+    );
+    const connecting = screen.getByRole("button", { name: "Start Hiddify" });
+    expect(connecting).toBeDisabled();
+    expect(connecting).toHaveAttribute("data-progress", "25");
+    expect(connecting).toHaveAttribute("data-connect-glow", "off");
+    expect(
+      screen.getByRole("button", { name: "Cancel operation" }),
+    ).toBeEnabled();
+    expect(screen.queryByText("%")).toBeNull();
+
+    const running = {
+      phase: "running" as const,
+      message: "Ready",
+      since: now,
+    };
+    rerender(
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          phase: "running",
+          busy: "pausing",
+          helper: running,
+          hiddify: running,
+          mihomo: running,
+          tun: running,
+          dns: running,
+        }}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Stop Mihomo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Disconnect" })).toBeDisabled();
+  });
+
+  it("exposes cancellation and in-button progress during an operation", () => {
     render(
       <Dashboard
         snapshot={{
           ...stopped,
           phase: "starting_core",
+          busy: "connecting",
+          operation_stage: "starting_core",
           operation_id: "operation-1",
         }}
       />,
@@ -62,7 +114,10 @@ describe("Dashboard", () => {
     expect(
       screen.getByRole("button", { name: "Cancel operation" }),
     ).toBeEnabled();
-    expect(screen.getByRole("status")).toHaveTextContent("starting core");
+    const connect = screen.getByRole("button", { name: "Start Mihomo" });
+    expect(connect).toBeDisabled();
+    expect(connect).toHaveAttribute("data-progress", "70");
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("shows install actions when Hiddify and Mihomo are missing", async () => {
@@ -225,5 +280,19 @@ describe("Dashboard", () => {
     expect(screen.getByRole("button", { name: "Disconnect" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Resume" }));
     expect(useAppStore.getState().actionPending).toBe(true);
+  });
+
+  it("lets metric values wrap instead of clipping on narrow columns", () => {
+    render(<Dashboard snapshot={stopped} />);
+    const exitIp = screen.getByText("Available after connection");
+    expect(exitIp.className).toMatch(/break-words/);
+    expect(exitIp.className).not.toMatch(/truncate/);
+  });
+
+  it("scrolls the dashboard section vertically when content overflows", () => {
+    const { container } = render(<Dashboard snapshot={stopped} />);
+    expect(container.querySelector("section")?.className).toMatch(
+      /overflow-y-auto/,
+    );
   });
 });

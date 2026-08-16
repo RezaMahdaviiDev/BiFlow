@@ -31,6 +31,35 @@ describe("fixed desktop shell", () => {
     );
   });
 
+  it("pulses a Connect glow only when the button is available", () => {
+    expect(css).toMatch(
+      /\.connect-button-glow[\s\S]*connect-button-glow-pulse/,
+    );
+    expect(css).toMatch(
+      /prefers-reduced-motion: reduce[\s\S]*\.connect-button-glow[\s\S]*animation:\s*none/,
+    );
+  });
+
+  it("fills connection progress inside the action button", () => {
+    expect(css).toMatch(
+      /\.connection-action-fill-clip[\s\S]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(/\.connection-action-fill[\s\S]*transition:\s*width/);
+    expect(css).toMatch(
+      /prefers-reduced-motion: reduce[\s\S]*\.connection-action-fill[\s\S]*transition:\s*none/,
+    );
+  });
+
+  it("draws a square 3px connection glow that sits on the window edges", () => {
+    expect(css).toMatch(
+      /\.connection-glow::after[\s\S]*border-radius:\s*0[\s\S]*border:\s*3px solid/,
+    );
+    expect(css).toMatch(/inset 0 0 18px/);
+    expect(css).not.toMatch(
+      /\.connection-glow::after[\s\S]*border-radius:\s*0\.5rem/,
+    );
+  });
+
   it("prevents contextmenu events at runtime", () => {
     installContextMenuGuard();
     const event = new MouseEvent("contextmenu", {
@@ -39,5 +68,19 @@ describe("fixed desktop shell", () => {
     });
     document.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves text and number inputs free for the custom context menu", () => {
+    installContextMenuGuard();
+    const input = document.createElement("input");
+    input.type = "text";
+    document.body.append(input);
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    input.remove();
   });
 });

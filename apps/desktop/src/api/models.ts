@@ -1,3 +1,22 @@
+export type LifecycleBusy =
+  | "connecting"
+  | "disconnecting"
+  | "pausing"
+  | "resuming"
+  | "reconciling";
+
+export type OperationStage =
+  | "preparing"
+  | "starting_hiddify"
+  | "preparing_runtime"
+  | "validating_config"
+  | "starting_core"
+  | "checking_readiness"
+  | "stopping_core"
+  | "stopping_proxy"
+  | "cleaning_up"
+  | "recovering";
+
 export type StackPhase =
   | "uninitialized"
   | "stopped"
@@ -55,6 +74,8 @@ export interface AppError {
 export interface StackSnapshot {
   revision: number;
   phase: StackPhase;
+  busy?: LifecycleBusy | null;
+  operation_stage?: OperationStage | null;
   operation_id: string | null;
   helper: ComponentStatus;
   hiddify: ComponentStatus;
@@ -176,6 +197,11 @@ export interface BootstrapResult {
 
 export type InternetState = "checking" | "online" | "offline";
 
+export interface TrafficTotals {
+  sent: number;
+  received: number;
+}
+
 export interface NetworkStatus {
   state: InternetState;
   public_ip: string | null;
@@ -208,6 +234,9 @@ export interface UpdateStatus {
   available: boolean;
   version: string | null;
   notes: string | null;
+  app_available: boolean;
+  rules_available: boolean;
+  thirdparty_available: boolean;
 }
 
 export type UpdatePhase =
@@ -226,6 +255,9 @@ export interface UpdateProgress {
   percent: number | null;
   version: string | null;
   error: string | null;
+  app_available?: boolean;
+  rules_available?: boolean;
+  thirdparty_available?: boolean;
 }
 
 export interface CloudRuleSetStatus {

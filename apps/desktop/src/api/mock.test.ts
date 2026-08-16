@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_VERSION } from "../version";
 import { mockApi, resetMockState } from "./mock";
 
@@ -76,6 +76,35 @@ describe("mock transport", () => {
     unsubscribe();
     expect(phases).toContain("downloading");
     expect(phases.at(-1)).toBe("restarting");
+  });
+
+  it("publishes real start stages on the snapshot", async () => {
+    const stages: Array<string | null | undefined> = [];
+    const unsubscribe = mockApi.subscribe((snapshot) => {
+      stages.push(snapshot.operation_stage);
+    });
+    await mockApi.start();
+    await vi.waitFor(async () => {
+      const snapshot = await mockApi.getSnapshot();
+      expect(snapshot.phase).toBe("running");
+    });
+    unsubscribe();
+    expect(stages).toContain("preparing");
+    expect(stages).toContain("starting_hiddify");
+    expect(stages).toContain("starting_core");
+    expect(stages).toContain("checking_readiness");
+  });
+
+  it("rejects a second connection operation while one is running", async () => {
+    const first = mockApi.start();
+    await expect(mockApi.stop()).rejects.toThrow(/already in progress/);
+    await expect(mockApi.pause()).rejects.toThrow(/already in progress/);
+    await first;
+    await vi.waitFor(async () => {
+      const snapshot = await mockApi.getSnapshot();
+      expect(snapshot.phase).toBe("running");
+      expect(snapshot.busy).toBeNull();
+    });
   });
 
   it("fails mock install when signature verification is forced to fail", async () => {
