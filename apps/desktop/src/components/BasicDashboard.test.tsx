@@ -38,6 +38,7 @@ describe("BasicDashboard", () => {
     const connect = screen.getByRole("button", { name: "Start Hiddify" });
     expect(connect).toBeDisabled();
     expect(connect).toHaveAttribute("data-progress", "25");
+    expect(connect).toHaveAttribute("data-connect-glow", "off");
     expect(screen.queryByText("%")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
   });

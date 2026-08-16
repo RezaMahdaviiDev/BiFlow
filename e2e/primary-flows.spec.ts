@@ -109,18 +109,33 @@ test.describe("primary BiFlow flows", () => {
     });
     await installButtons.nth(0).click();
     await page.getByRole("button", { name: "Install", exact: true }).click();
-    const connect = connectButton(page);
+    const connect = page.locator("[data-connection-action='connect']");
+    await expect(connect).toHaveAttribute("data-connect-glow", "available");
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      const record = () => {
+        const label = document.querySelector(
+          "[data-connection-action='connect'] .connection-action-label",
+        );
+        const text = label?.textContent?.trim();
+        if (text && seen.at(-1) !== text) {
+          seen.push(text);
+        }
+      };
+      record();
+      const observer = new MutationObserver(record);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+      window.__BIFLOW_STAGE_SEEN = seen;
+      window.__BIFLOW_STAGE_STOP = () => observer.disconnect();
+    });
     await connect.click();
     await expect(connect).toBeDisabled();
-    await expect(
-      page.getByRole("button", { name: "Start Hiddify" }),
-    ).toBeDisabled();
-    await expect(
-      page.getByRole("button", { name: "Start Mihomo" }),
-    ).toBeDisabled();
-    await expect(
-      page.locator("[data-connection-action='connect']"),
-    ).toHaveAttribute("data-processing", "true");
+    await expect(connect).toHaveAttribute("data-processing", "true");
+    await expect(connect).toHaveAttribute("data-connect-glow", "off");
     await connect.click({ force: true });
     await expect(
       page.getByRole("heading", { name: "Protected split routing is active" }),
@@ -129,6 +144,13 @@ test.describe("primary BiFlow flows", () => {
     await expect(
       page.getByRole("button", { name: "Disconnect" }),
     ).toBeEnabled();
+    const stages = await page.evaluate(() => {
+      window.__BIFLOW_STAGE_STOP?.();
+      return window.__BIFLOW_STAGE_SEEN ?? [];
+    });
+    expect(stages).toEqual(
+      expect.arrayContaining(["Start Hiddify", "Start Mihomo"]),
+    );
   });
 
   test("connect installs missing apps before starting the stack", async ({

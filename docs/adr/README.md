@@ -56,3 +56,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0050](./0050-connection-operation-lock.md)              | Connection operation lock                   | Accepted   |
 | [0051](./0051-button-icons.md)                           | Icons on every button                       | Accepted   |
 | [0052](./0052-in-button-connection-progress.md)          | In-button connection progress               | Accepted   |
+| [0053](./0053-connect-button-glow.md)                    | Connect button availability glow            | Accepted   |

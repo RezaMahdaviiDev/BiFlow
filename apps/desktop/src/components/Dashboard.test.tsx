@@ -51,6 +51,7 @@ describe("Dashboard", () => {
     expect(screen.getAllByText("stopped")).toHaveLength(5);
     const connect = screen.getByRole("button", { name: "Connect" });
     expect(connect.querySelector("svg")).not.toBeNull();
+    expect(connect).toHaveAttribute("data-connect-glow", "available");
     await userEvent.click(connect);
     expect(useAppStore.getState().actionPending).toBe(true);
   });
@@ -69,6 +70,7 @@ describe("Dashboard", () => {
     const connecting = screen.getByRole("button", { name: "Start Hiddify" });
     expect(connecting).toBeDisabled();
     expect(connecting).toHaveAttribute("data-progress", "25");
+    expect(connecting).toHaveAttribute("data-connect-glow", "off");
     expect(
       screen.getByRole("button", { name: "Cancel operation" }),
     ).toBeEnabled();

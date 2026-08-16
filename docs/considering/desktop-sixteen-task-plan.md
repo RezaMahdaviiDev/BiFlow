@@ -40,7 +40,7 @@ requested tasks. Runtime changes land in numbered commits on this branch.
 17. **Connection lock** — One shared lifecycle lock (`connecting` / `disconnecting` / `pausing` / `resuming`) in the engine, tray, and UI. Reject conflicting operations; restore controls after success, failure, or timeout.
 18. **Button icons** — Lucide icons on every button; icon-only controls keep a tooltip and accessible name.
 19. **In-button progress** — Done: `operation_stage` on the snapshot, standalone card removed, fill and stage label live on the active connection button.
-20. **Connect glow** — Subtle available-state glow on Connect; off while disabled/processing; honor `prefers-reduced-motion`.
+20. **Connect glow** — Done: `.connect-button-glow` on idle enabled Connect only; off while processing; reduced-motion is static.
 
 ## Platform notes
 

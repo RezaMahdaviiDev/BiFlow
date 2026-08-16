@@ -1950,7 +1950,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-cli"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-config"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "hex",
  "rand 0.9.5",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-core"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-desktop"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "chrono",
  "dirs 6.0.0",
@@ -2029,7 +2029,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-helper"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "clap",
  "hex",
@@ -2050,7 +2050,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-helper-winacl"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "tokio",
  "windows",
@@ -2058,7 +2058,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-ipc"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-mihomo"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "chrono",
  "futures-util",
@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-platform-linux"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-platform-win"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "iran-split-rules"
-version = "3.3.0"
+version = "3.3.1"
 dependencies = [
  "async-trait",
  "chrono",

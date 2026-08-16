@@ -33,6 +33,7 @@ export function ConnectionActionButton({
     actionPending,
   );
   const label = t(progress.labelKey);
+  const glow = action === "connect" && !disabled && !progress.processing;
 
   return (
     <button
@@ -40,12 +41,13 @@ export function ConnectionActionButton({
       data-connection-action={action}
       data-progress={String(progress.percent)}
       data-processing={progress.processing ? "true" : "false"}
+      data-connect-glow={glow ? "available" : "off"}
       aria-busy={progress.processing}
       disabled={disabled}
       onClick={onClick}
       className={`connection-action connection-action-${variant} ${
         progress.processing ? "connection-action-processing" : ""
-      } ${
+      } ${glow ? "connect-button-glow" : ""} ${
         variant === "primary"
           ? "bg-brand text-white shadow-lg shadow-brand/20"
           : "border border-ink/15 bg-surface"

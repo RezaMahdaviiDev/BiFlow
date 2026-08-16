@@ -31,6 +31,15 @@ describe("fixed desktop shell", () => {
     );
   });
 
+  it("pulses a Connect glow only when the button is available", () => {
+    expect(css).toMatch(
+      /\.connect-button-glow[\s\S]*connect-button-glow-pulse/,
+    );
+    expect(css).toMatch(
+      /prefers-reduced-motion: reduce[\s\S]*\.connect-button-glow[\s\S]*animation:\s*none/,
+    );
+  });
+
   it("fills connection progress inside the action button", () => {
     expect(css).toMatch(
       /\.connection-action-fill-clip[\s\S]*overflow:\s*hidden/,
