@@ -12,8 +12,11 @@ the labels did not follow the live stack phase.
 
 ## Decision
 
-- The tray always shows exactly three actions: Connect or Disconnect, Pause or
-  Resume, and Quit, with a separator between each item.
+- The tray always shows Dashboard first (always enabled), then Connect or
+  Disconnect, Pause or Resume, and Quit, with a separator between each item.
+- Dashboard shows, unminimizes, and focuses the window, then emits
+  `app-navigate` with `"dashboard"` so Basic and Advanced land on the same
+  page. Left-click on the icon still only shows the window.
 - Labels come from `StackPhase`: a live stack (`running`, `degraded`, `paused`)
   shows Disconnect; only `paused` shows Resume; every other phase shows Connect
   and Pause.

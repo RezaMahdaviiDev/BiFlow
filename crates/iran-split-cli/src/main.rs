@@ -47,13 +47,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .lines()
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
                 .map(|line| line.trim_start_matches("+.").to_owned());
+            let catalog = include_str!("../../../resources/rules/iran-business-domains.txt")
+                .lines()
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|line| line.trim_start_matches("+.").to_owned());
             let cidrs = include_str!("../../../resources/rules/private.txt")
                 .lines()
                 .chain(include_str!("../../../resources/rules/iran-networks.txt").lines())
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
                 .map(str::parse)
                 .collect::<Result<Vec<_>, _>>()?;
-            let rules = RuleSet::from_sources(&DirectRulesDocument::default(), domains, cidrs);
+            let rules =
+                RuleSet::from_sources(&DirectRulesDocument::default(), domains, cidrs, catalog);
             println!("{}", serde_json::to_string_pretty(&rules.decide(&target)?)?);
         }
     }

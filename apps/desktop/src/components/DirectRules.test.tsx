@@ -76,11 +76,30 @@ describe("DirectRules", () => {
       addRule,
     });
     render(<DirectRules rules={rules} />);
-    await userEvent.type(
-      screen.getByLabelText("Exact domain or IP"),
-      "aparat.com",
-    );
+    await userEvent.type(screen.getByLabelText("Domain or IP"), "aparat.com");
     await userEvent.click(screen.getByRole("button", { name: /^Add rule$/ }));
     expect(addRule).toHaveBeenCalledWith("aparat.com");
+  });
+
+  it("keeps the input when adding a rule fails", async () => {
+    const addRule = vi.fn().mockRejectedValue(new Error("rules changed"));
+    useAppStore.setState({
+      rules,
+      actionPending: false,
+      cloudRules: {
+        domain_count: 1,
+        ip_count: 1,
+        last_synced_at: null,
+        source: "bundled",
+        snapshot_revision: null,
+        sets: [],
+      },
+      addRule,
+    });
+    render(<DirectRules rules={rules} />);
+    await userEvent.type(screen.getByLabelText("Domain or IP"), "aparat.com");
+    await userEvent.click(screen.getByRole("button", { name: /^Add rule$/ }));
+    expect(addRule).toHaveBeenCalledWith("aparat.com");
+    expect(screen.getByLabelText("Domain or IP")).toHaveValue("aparat.com");
   });
 });

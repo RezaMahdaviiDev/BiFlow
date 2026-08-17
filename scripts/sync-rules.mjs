@@ -46,6 +46,17 @@ const catalog = [
   },
 ];
 
+const curatedCatalog = [
+  {
+    id: "iran-business-domains",
+    localName: "iran-business-domains.txt",
+    kind: "domain",
+    minimumEntries: 10,
+    source: "curated",
+    sourcesFile: "iran-business-domains.sources.json",
+  },
+];
+
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -204,7 +215,10 @@ export function checkSnapshot() {
   assert.equal(manifest.license, UPSTREAM_LICENSE);
   assert.equal(manifest.runtime_repository, RUNTIME_REPOSITORY);
   assert.match(manifest.commit, /^[0-9a-f]{40}$/u);
-  assert.equal(manifest.rules.length, catalog.length);
+  const upstreamRules = manifest.rules.filter((rule) =>
+    catalog.some((entry) => entry.id === rule.id),
+  );
+  assert.equal(upstreamRules.length, catalog.length);
 
   const snapshotMd = readFileSync(snapshotPath, "utf8");
   assert.match(snapshotMd, /devlifeX\/BiFlow/);
@@ -222,9 +236,43 @@ export function checkSnapshot() {
     assert.equal(recorded.entry_count, validateEntry(entry, bytes));
     assert.match(snapshotMd, new RegExp(recorded.sha256, "u"));
   }
+  checkCuratedCatalog(manifest, snapshotMd);
   process.stdout.write(
     `verified ${catalog.length} bundled rule sets from ${manifest.commit.slice(0, 12)}\n`,
   );
+}
+
+export function checkCuratedCatalog(manifest, snapshotMd) {
+  for (const entry of curatedCatalog) {
+    const recorded = manifest.rules.find((rule) => rule.id === entry.id);
+    assert.ok(recorded, `manifest is missing curated ${entry.id}`);
+    assert.equal(recorded.file, entry.localName);
+    assert.equal(recorded.kind, entry.kind);
+    assert.equal(recorded.source, "curated");
+    assert.notEqual(recorded.upstream_file, recorded.file);
+    const bytes = readFileSync(join(rulesDir, entry.localName));
+    assert.equal(recorded.sha256, sha256(bytes));
+    assert.equal(recorded.entry_count, validateEntry(entry, bytes));
+    assert.match(snapshotMd, new RegExp(recorded.sha256, "u"));
+    const sources = JSON.parse(
+      readFileSync(join(rulesDir, entry.sourcesFile), "utf8"),
+    );
+    assert.equal(sources.source, "curated");
+    const domains = bytes
+      .toString("utf8")
+      .split(/\n/u)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("+."))
+      .map((line) => line.slice(2));
+    assert.equal(sources.entries.length, domains.length);
+    for (const item of sources.entries) {
+      assert.ok(domains.includes(item.domain), `missing ${item.domain}`);
+      assert.ok(!item.domain.endsWith(".ir"), `${item.domain} is already +.ir`);
+      assert.ok(item.official_url, `${item.domain} needs official_url`);
+      assert.ok(item.verified_at, `${item.domain} needs verified_at`);
+      assert.ok(item.status, `${item.domain} needs status`);
+    }
+  }
 }
 
 async function fetchBytes(url) {
@@ -288,6 +336,12 @@ async function updateSnapshot() {
       writeFileSync(join(temporary, entry.localName), normalized);
       rules.push(next);
     }
+    const curated = previous.rules.filter(
+      (rule) =>
+        rule.source === "curated" ||
+        curatedCatalog.some((entry) => entry.id === rule.id),
+    );
+    rules.push(...curated);
     const manifest = {
       schema_version: 1,
       repository,

@@ -157,6 +157,9 @@ export const desktop = {
   checkUpdate(): Promise<UpdateStatus> {
     return native ? invoke("check_for_update") : mockApi.checkUpdate();
   },
+  getUpdateState(): Promise<UpdateProgress> {
+    return native ? invoke("get_update_state") : mockApi.getUpdateState();
+  },
   installUpdate(): Promise<OperationAccepted> {
     return native ? invoke("install_update") : mockApi.installUpdate();
   },

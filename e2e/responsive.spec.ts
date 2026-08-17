@@ -8,7 +8,19 @@ const viewports = [
   { name: "small-desktop", width: 1024, height: 768 },
 ] as const;
 
-const screenshotDir = "/opt/cursor/artifacts/screenshots";
+function resolveScreenshotDir(): string {
+  const preferred = "/opt/cursor/artifacts/screenshots";
+  try {
+    mkdirSync(preferred, { recursive: true });
+    return preferred;
+  } catch {
+    const fallback = join(process.cwd(), "test-results/responsive-screenshots");
+    mkdirSync(fallback, { recursive: true });
+    return fallback;
+  }
+}
+
+const screenshotDir = resolveScreenshotDir();
 
 async function openAdvanced(page: Page) {
   await page.goto("/");

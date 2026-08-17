@@ -215,7 +215,7 @@ test.describe("primary BiFlow flows", () => {
       page.getByText("63,104").or(page.getByText("63104")),
     ).toBeVisible();
 
-    await page.getByLabel("Exact domain or IP").fill("aparat.com");
+    await page.getByLabel("Domain or IP").fill("aparat.com");
     await page.getByRole("button", { name: "Add rule" }).click();
     await expect(page.getByText("aparat.com")).toBeVisible();
   });
@@ -299,9 +299,9 @@ test.describe("primary BiFlow flows", () => {
 
     // The pin shows on the rules page with a VPN badge.
     await page.getByRole("button", { name: "Direct rules" }).click();
-    const pinned = page
-      .getByRole("listitem")
-      .filter({ hasText: "www.rade.ir" });
+    const pinned = page.getByRole("listitem").filter({
+      has: page.getByText("rade.ir", { exact: true }),
+    });
     await expect(pinned).toContainText("VPN");
 
     // Moving it back leaves the bundled list to decide again.
@@ -479,5 +479,24 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByText(/Version 9\.9\.9 is available/i)).toBeVisible();
     await page.getByRole("button", { name: /Install update 9\.9\.9/i }).click();
     await expect(page.getByRole("progressbar")).toBeVisible();
+    await expect(
+      page.getByText("an update is already in progress"),
+    ).toHaveCount(0);
+  });
+
+  test("pins a subdomain to the registrable root while connected", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Direct rules" }).click();
+    await page.getByLabel("Domain or IP").fill("api.shop.example.com");
+    await page.getByRole("button", { name: "Add rule" }).click();
+    await expect(page.getByText("example.com").first()).toBeVisible();
+    await expect(page.getByText("api.shop.example.com")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    await page.getByLabel("Test IP or domain").fill("www.technolife.com");
+    await page.getByRole("button", { name: "Test flow" }).click();
+    await expect(page.getByText("www.technolife.com → DIRECT")).toBeVisible();
   });
 });

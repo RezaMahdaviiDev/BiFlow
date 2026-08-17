@@ -151,12 +151,15 @@ fn validate_manifest(manifest: &RemoteManifest) -> Result<(), CloudSyncError> {
             "manifest commit is not a 40-character hex SHA".into(),
         ));
     }
-    if manifest.rules.len() != CATALOG.len() {
-        return Err(CloudSyncError::Fetch(format!(
-            "manifest lists {} rules; expected {}",
-            manifest.rules.len(),
-            CATALOG.len()
-        )));
+    if !CATALOG.iter().all(|entry| {
+        manifest
+            .rules
+            .iter()
+            .any(|rule| rule.file == entry.local_name)
+    }) {
+        return Err(CloudSyncError::Fetch(
+            "manifest is missing an upstream provider file".into(),
+        ));
     }
     Ok(())
 }
@@ -607,14 +610,21 @@ const EMBEDDED_BUNDLED_RULES: &[(&str, &str)] = &[
         "private.txt",
         include_str!("../../../resources/rules/private.txt"),
     ),
+    (
+        "iran-business-domains.txt",
+        include_str!("../../../resources/rules/iran-business-domains.txt"),
+    ),
 ];
 
-/// Returns whether `dir` contains every bundled Iran/private rule file.
+const CURATED_FILES: [&str; 1] = ["iran-business-domains.txt"];
+
+/// Returns whether `dir` contains every bundled Iran/private/curated rule file.
 #[must_use]
 pub fn bundled_snapshot_is_complete(dir: &Path) -> bool {
     CATALOG
         .iter()
         .all(|entry| dir.join(entry.local_name).is_file())
+        && CURATED_FILES.iter().all(|name| dir.join(name).is_file())
 }
 
 /// Uses `packaged` when it already has the snapshot; otherwise writes the
@@ -709,6 +719,11 @@ mod tests {
         fs::write(bundled.join("iran-domains.txt"), "+.old.ir\n").expect("domains");
         fs::write(bundled.join("iran-networks.txt"), "1.2.3.0/24\n").expect("networks");
         fs::write(bundled.join("private.txt"), "10.0.0.0/8\n").expect("private");
+        fs::write(
+            bundled.join("iran-business-domains.txt"),
+            "+.technolife.com\n",
+        )
+        .expect("business");
     }
 
     #[test]
@@ -858,6 +873,74 @@ mod tests {
         assert_eq!(kept.snapshot_revision, Some(commit.clone()));
         assert_eq!(failing.cached_revision(), Some(commit.clone()));
         assert_eq!(store.peek_remote_revision().await.expect("peek"), commit);
+    }
+
+    #[tokio::test]
+    async fn sync_does_not_touch_direct_rules_or_overwrite_curated_catalog() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let bundled = directory.path().join("bundled");
+        let cache = directory.path().join("cache");
+        seed_bundled(&bundled);
+        let pins = directory.path().join("direct-rules.json");
+        fs::write(&pins, br#"{"revision":3,"rules":[],"vpn_rules":[]}"#).expect("pins");
+        let curated_before = fs::read(bundled.join("iran-business-domains.txt")).expect("curated");
+        let pins_before = fs::read(&pins).expect("pins bytes");
+
+        let commit = "c".repeat(40);
+        let domain_bytes = domain_payload(1_000);
+        let network_bytes = cidr_payload(100);
+        let private_bytes = cidr_payload(8);
+        let manifest = manifest_for(
+            &commit,
+            &[
+                (
+                    "iran-domains.txt",
+                    ProviderKind::Domain,
+                    1_000,
+                    &sha256_hex(&domain_bytes),
+                ),
+                (
+                    "iran-networks.txt",
+                    ProviderKind::IpCidr,
+                    100,
+                    &sha256_hex(&network_bytes),
+                ),
+                (
+                    "private.txt",
+                    ProviderKind::IpCidr,
+                    8,
+                    &sha256_hex(&private_bytes),
+                ),
+            ],
+        );
+        let mut responses = HashMap::new();
+        responses.insert(
+            manifest_fetch_url().to_owned(),
+            Ok(serde_json::to_vec(&manifest).expect("manifest json")),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-domains.txt"),
+            Ok(domain_bytes),
+        );
+        responses.insert(
+            snapshot_file_url(&commit, "iran-networks.txt"),
+            Ok(network_bytes),
+        );
+        responses.insert(snapshot_file_url(&commit, "private.txt"), Ok(private_bytes));
+
+        let store = CloudRuleStore::with_fetcher(
+            bundled.clone(),
+            cache.clone(),
+            Arc::new(MapFetcher { responses }),
+        );
+        store.sync().await.expect("sync");
+        assert_eq!(fs::read(&pins).expect("pins after"), pins_before);
+        assert_eq!(
+            fs::read(bundled.join("iran-business-domains.txt")).expect("curated after"),
+            curated_before
+        );
+        assert!(!cache.join("iran-business-domains.txt").is_file());
+        assert!(!cache.join("direct-rules.json").is_file());
     }
 
     #[tokio::test]

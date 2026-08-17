@@ -21,10 +21,11 @@ use uuid::Uuid;
 const PROCESS_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const MIHOMO_STAY_ALIVE: Duration = Duration::from_millis(400);
 const MAX_LOG_ENTRIES: usize = 2_000;
-const GENERATION_FILES: [&str; 8] = [
+const GENERATION_FILES: [&str; 9] = [
     "config.yaml",
     "private.txt",
     "iran-domains.txt",
+    "iran-business-domains.txt",
     "iran-networks.txt",
     "custom-direct-domains.txt",
     "custom-direct-ips.txt",

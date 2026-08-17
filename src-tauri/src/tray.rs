@@ -88,5 +88,13 @@ mod tests {
         assert!(!actions_enabled(Some(LifecycleBusy::Disconnecting)));
         assert!(!actions_enabled(Some(LifecycleBusy::Pausing)));
         assert!(!actions_enabled(Some(LifecycleBusy::Resuming)));
+        assert!(!actions_enabled(Some(LifecycleBusy::ApplyingRules)));
+    }
+
+    #[test]
+    fn dashboard_navigation_is_not_gated_by_lifecycle_busy() {
+        assert!(actions_enabled(None));
+        assert!(!actions_enabled(Some(LifecycleBusy::ApplyingRules)));
+        assert!(!actions_enabled(Some(LifecycleBusy::Connecting)));
     }
 }

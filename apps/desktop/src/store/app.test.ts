@@ -20,7 +20,10 @@ vi.mock("../api/desktop", () => ({
     syncCloudRules: vi.fn(),
     getNetworkStatus: vi.fn(),
     getTrafficTotals: vi.fn(),
+    addRule: vi.fn(),
+    pinRoute: vi.fn(),
     checkUpdate: vi.fn(),
+    getUpdateState: vi.fn(),
     installUpdate: vi.fn(),
     openUrl: vi.fn(),
   },
@@ -460,6 +463,18 @@ describe("app store", () => {
     });
     await first;
     expect(useAppStore.getState().update.phase).toBe("current");
+  });
+
+  it("rethrows addRule failures after recording the store error", async () => {
+    useAppStore.setState({
+      rules: { revision: 1, rules: [], vpn_rules: [] },
+      error: null,
+    });
+    vi.mocked(desktop.addRule).mockRejectedValue(new Error("rules changed"));
+    await expect(useAppStore.getState().addRule("example.com")).rejects.toThrow(
+      /rules changed/,
+    );
+    expect(useAppStore.getState().error).toMatch(/rules changed/);
   });
 
   it("retries install after a failed update when a version is known", async () => {

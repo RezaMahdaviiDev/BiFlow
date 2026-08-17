@@ -1,6 +1,6 @@
 {
   "name": "iran-split-desktop-workspace",
-  "version": "3.3.3",
+  "version": "3.4.0",
   "private": true,
   "packageManager": "pnpm@9.0.1",
   "engines": {

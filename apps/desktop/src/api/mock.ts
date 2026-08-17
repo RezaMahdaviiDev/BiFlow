@@ -234,6 +234,8 @@ function detectedDependencies(): DependencyStatus[] {
 
 let snapshot = initialSnapshot();
 let trafficTotals: TrafficTotals = { sent: 1_048_576, received: 2_097_152 };
+let lastSessionSent = 0;
+let lastSessionReceived = 0;
 let settings = initialSettings();
 let directRules = initialDirectRules();
 let cloudRules = initialCloudRules();
@@ -247,6 +249,59 @@ function isPrivateHost(value: string): boolean {
     /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(value) ||
     value === "::1"
   );
+}
+
+const PRIVATE_SUFFIXES = ["github.io"];
+const IRAN_BUSINESS_DOMAINS = [
+  "technolife.com",
+  "azkivam.com",
+  "azkisarmayeh.com",
+  "nextpay.com",
+  "payping.io",
+  "tomanpay.com",
+  "kifpool.me",
+  "safarmarket.com",
+  "arazcloud.com",
+  "excoino.com",
+  "hitobit.com",
+  "karboom.io",
+  "ewano.app",
+];
+
+function canonicalTarget(input: string): {
+  kind: "ip" | "domain";
+  value: string;
+} {
+  const value = input.trim().toLowerCase().replace(/\.$/u, "");
+  if (/^\d{1,3}(\.\d{1,3}){3}$/u.test(value) || value.includes(":")) {
+    return { kind: "ip", value };
+  }
+  const labels = value.split(".").filter(Boolean);
+  if (labels.length < 2) {
+    throw new Error("domain must have a registrable root");
+  }
+  const lastTwo = labels.slice(-2).join(".");
+  if (PRIVATE_SUFFIXES.includes(lastTwo)) {
+    if (labels.length < 3) {
+      throw new Error("public suffixes cannot be pinned");
+    }
+    return { kind: "domain", value: labels.slice(-3).join(".") };
+  }
+  if (labels.at(-1) === "uk" && labels.at(-2) === "co" && labels.length >= 3) {
+    return { kind: "domain", value: labels.slice(-3).join(".") };
+  }
+  return { kind: "domain", value: lastTwo };
+}
+
+function domainMatchesPin(host: string, pin: string): boolean {
+  return host === pin || host.endsWith(`.${pin}`);
+}
+
+function ruleMatchesHost(item: DirectRule, host: string): boolean {
+  if (item.target.kind === "ip") {
+    return item.target.value === host;
+  }
+  return domainMatchesPin(host, item.target.value);
 }
 
 function route(
@@ -336,6 +391,13 @@ function mockDebugLogStatus(): DebugLogStatus {
 
 const listeners = new Set<(next: StackSnapshot) => void>();
 const updateListeners = new Set<(progress: UpdateProgress) => void>();
+let lastUpdateProgress: UpdateProgress = {
+  phase: "idle",
+  percent: null,
+  version: null,
+  error: null,
+  operation_id: null,
+};
 
 function mockUpdateAvailable(): boolean {
   return (
@@ -352,6 +414,7 @@ function mockUpdateShouldFail(): boolean {
 }
 
 function emitUpdateProgress(progress: UpdateProgress) {
+  lastUpdateProgress = structuredClone(progress);
   for (const listener of updateListeners) {
     listener(structuredClone(progress));
   }
@@ -474,12 +537,22 @@ export const mockApi = {
     return mockNetworkStatus();
   },
   async getTrafficTotals(): Promise<TrafficTotals> {
-    if (snapshot.phase === "running" || snapshot.phase === "degraded") {
-      trafficTotals = {
-        sent: trafficTotals.sent + 4_096,
-        received: trafficTotals.received + 8_192,
-      };
+    const connected =
+      snapshot.phase === "running" || snapshot.phase === "degraded";
+    if (!connected) {
+      lastSessionSent = 0;
+      lastSessionReceived = 0;
+      return { ...trafficTotals };
     }
+    const sessionSent = lastSessionSent + 4_096;
+    const sessionReceived = lastSessionReceived + 8_192;
+    trafficTotals = {
+      sent: trafficTotals.sent + (sessionSent - lastSessionSent),
+      received:
+        trafficTotals.received + (sessionReceived - lastSessionReceived),
+    };
+    lastSessionSent = sessionSent;
+    lastSessionReceived = sessionReceived;
     return { ...trafficTotals };
   },
   async start(): Promise<OperationAccepted> {
@@ -632,26 +705,22 @@ export const mockApi = {
   ) {
     if (expectedRevision !== directRules.revision)
       throw new Error("Rules changed in another window");
-    const value = input.trim().toLowerCase();
-    const kind = /^\d{1,3}(\.\d{1,3}){3}$/.test(value) ? "ip" : "domain";
-    if (outbound === "vpn" && isPrivateHost(value)) {
+    const parsed = canonicalTarget(input);
+    if (outbound === "vpn" && isPrivateHost(parsed.value)) {
       throw new Error(
         "private, loopback, and carrier-grade NAT addresses cannot be sent through the VPN",
       );
     }
     const rule: DirectRule = {
-      target: { kind, value },
-      resolved_ips: kind === "ip" ? [value] : ["203.0.113.9"],
+      target: parsed,
+      resolved_ips: parsed.kind === "ip" ? [parsed.value] : [],
       created_at: now(),
       refreshed_at: now(),
     };
-    // A host lives in exactly one user list, matching RuleManager::pin.
-    const rules = directRules.rules.filter(
-      (item) => item.target.value !== value,
-    );
-    const vpnRules = directRules.vpn_rules.filter(
-      (item) => item.target.value !== value,
-    );
+    const sameTarget = (item: DirectRule) =>
+      item.target.kind === parsed.kind && item.target.value === parsed.value;
+    const rules = directRules.rules.filter((item) => !sameTarget(item));
+    const vpnRules = directRules.vpn_rules.filter((item) => !sameTarget(item));
     if (outbound === "direct") rules.push(rule);
     else vpnRules.push(rule);
     directRules = {
@@ -753,14 +822,31 @@ export const mockApi = {
     if (isPrivateHost(target)) {
       return route(target, "direct", "private_or_local", target);
     }
-    if (directRules.vpn_rules.some((item) => item.target.value === target)) {
-      return route(target, "vpn", "vpn_rule", target);
+    if (directRules.vpn_rules.some((item) => ruleMatchesHost(item, target))) {
+      const pin = directRules.vpn_rules.find((item) =>
+        ruleMatchesHost(item, target),
+      );
+      return route(target, "vpn", "vpn_rule", pin?.target.value ?? target);
     }
-    if (directRules.rules.some((item) => item.target.value === target)) {
-      return route(target, "direct", "custom_rule", target);
+    if (directRules.rules.some((item) => ruleMatchesHost(item, target))) {
+      const pin = directRules.rules.find((item) =>
+        ruleMatchesHost(item, target),
+      );
+      return route(
+        target,
+        "direct",
+        "custom_rule",
+        pin?.target.value ?? target,
+      );
     }
-    if (target.endsWith(".ir")) {
+    if (target.endsWith(".ir") || target === "ir") {
       return route(target, "direct", "iran_domain", "ir");
+    }
+    const business = IRAN_BUSINESS_DOMAINS.find((pin) =>
+      domainMatchesPin(target, pin),
+    );
+    if (business) {
+      return route(target, "direct", "iran_domain", business);
     }
     return route(target, "vpn", "default_proxy", "MATCH");
   },
@@ -809,6 +895,9 @@ export const mockApi = {
         "debug.log",
       ],
     };
+  },
+  async getUpdateState(): Promise<UpdateProgress> {
+    return structuredClone(lastUpdateProgress);
   },
   async checkUpdate(): Promise<UpdateStatus> {
     if (mockUpdateShouldFail()) {
@@ -870,6 +959,8 @@ export function resetMockState() {
   lifecycleBusy = null;
   snapshot = initialSnapshot();
   trafficTotals = { sent: 1_048_576, received: 2_097_152 };
+  lastSessionSent = 0;
+  lastSessionReceived = 0;
   settings = initialSettings();
   directRules = initialDirectRules();
   cloudRules = initialCloudRules();

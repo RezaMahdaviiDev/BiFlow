@@ -58,10 +58,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
         <h1 id="rules-title" className="text-2xl font-semibold tracking-tight">
           Direct rules
         </h1>
-        <p className="mt-1 text-sm text-muted">
-          Exact domains and literal IPs added here take precedence and apply
-          without restarting the tunnel.
-        </p>
+        <p className="mt-1 text-sm text-muted">{t("directRulesHelp")}</p>
       </header>
 
       <div className="rounded-2xl border border-ink/10 bg-surface p-5">
@@ -104,18 +101,20 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
         onSubmit={(event) => {
           event.preventDefault();
           if (!input.trim()) return;
-          void addRule(input).then(() => setInput(""));
+          void addRule(input)
+            .then(() => setInput(""))
+            .catch(() => undefined);
         }}
       >
         <label className="sr-only" htmlFor="rule-input">
-          Exact domain or IP
+          {t("directRuleInput")}
         </label>
         <input
           id="rule-input"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           required
-          placeholder="example.ir or 203.0.113.8"
+          placeholder={t("directRulePlaceholder")}
           className="min-w-0 flex-1 rounded-xl border-ink/15 bg-canvas"
         />
         <button
@@ -189,7 +188,7 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
                       void pinRoute(
                         rule.target.value,
                         outbound === "vpn" ? "direct" : "vpn",
-                      )
+                      ).catch(() => undefined)
                     }
                     className="rounded-lg border border-ink/15 p-2 text-muted hover:text-brand"
                     title={

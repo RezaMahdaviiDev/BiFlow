@@ -53,12 +53,42 @@ struct AppServices {
     network: network::NetworkMonitor,
     paths: AppPaths,
     updates: Arc<UpdateCoordinator>,
-    traffic_lock: tokio::sync::Mutex<()>,
+    traffic: tokio::sync::Mutex<traffic::SessionAccumulator>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UpdateSnapshot {
+    operation_id: Option<Uuid>,
+    initiator: Option<String>,
+    phase: String,
+    percent: Option<u8>,
+    version: Option<String>,
+    error: Option<String>,
+    app_available: bool,
+    rules_available: bool,
+    thirdparty_available: bool,
+}
+
+impl Default for UpdateSnapshot {
+    fn default() -> Self {
+        Self {
+            operation_id: None,
+            initiator: None,
+            phase: "idle".into(),
+            percent: None,
+            version: None,
+            error: None,
+            app_available: false,
+            rules_available: false,
+            thirdparty_available: false,
+        }
+    }
 }
 
 struct UpdateCoordinator {
     lock: tokio::sync::Mutex<()>,
     cancel: AtomicBool,
+    snapshot: std::sync::Mutex<UpdateSnapshot>,
 }
 
 impl std::fmt::Debug for UpdateCoordinator {
@@ -75,6 +105,7 @@ impl UpdateCoordinator {
         Self {
             lock: tokio::sync::Mutex::new(()),
             cancel: AtomicBool::new(false),
+            snapshot: std::sync::Mutex::new(UpdateSnapshot::default()),
         }
     }
 
@@ -82,22 +113,40 @@ impl UpdateCoordinator {
         self.cancel.store(true, Ordering::SeqCst);
     }
 
-    fn begin(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, String> {
-        let guard = self
-            .lock
-            .try_lock()
-            .map_err(|_| update_in_progress_message())?;
+    fn snapshot(&self) -> UpdateSnapshot {
+        self.snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn store(&self, snapshot: UpdateSnapshot) {
+        *self
+            .snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
+    }
+
+    fn try_begin(
+        &self,
+        initiator: &'static str,
+        phase: &str,
+    ) -> Option<(tokio::sync::MutexGuard<'_, ()>, Uuid)> {
+        let guard = self.lock.try_lock().ok()?;
         self.cancel.store(false, Ordering::SeqCst);
-        Ok(guard)
+        let operation_id = Uuid::new_v4();
+        self.store(UpdateSnapshot {
+            operation_id: Some(operation_id),
+            initiator: Some(initiator.into()),
+            phase: phase.into(),
+            ..UpdateSnapshot::default()
+        });
+        Some((guard, operation_id))
     }
 
     fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
-}
-
-fn update_in_progress_message() -> String {
-    "an update is already in progress".into()
 }
 
 fn update_check_cancelled(app: &AppHandle) -> bool {
@@ -444,6 +493,10 @@ struct UpdateProgress {
     percent: Option<u8>,
     version: Option<String>,
     error: Option<String>,
+    operation_id: Option<Uuid>,
+    app_available: Option<bool>,
+    rules_available: Option<bool>,
+    thirdparty_available: Option<bool>,
 }
 
 fn update_download_percent(downloaded: usize, total: Option<u64>) -> Option<u8> {
@@ -456,8 +509,53 @@ fn update_download_percent(downloaded: usize, total: Option<u64>) -> Option<u8> 
     Some(u8::try_from((downloaded.saturating_mul(100) / total).min(100)).unwrap_or(100))
 }
 
-fn emit_update_progress<R: Runtime>(app: &AppHandle<R>, progress: UpdateProgress) {
-    if let Err(cause) = app.emit("update-progress", progress) {
+fn progress_from_snapshot(snapshot: &UpdateSnapshot) -> UpdateProgress {
+    UpdateProgress {
+        phase: snapshot.phase.clone(),
+        percent: snapshot.percent,
+        version: snapshot.version.clone(),
+        error: snapshot.error.clone(),
+        operation_id: snapshot.operation_id,
+        app_available: Some(snapshot.app_available),
+        rules_available: Some(snapshot.rules_available),
+        thirdparty_available: Some(snapshot.thirdparty_available),
+    }
+}
+
+fn status_from_snapshot(snapshot: &UpdateSnapshot) -> UpdateStatus {
+    UpdateStatus {
+        available: snapshot.app_available
+            || snapshot.rules_available
+            || snapshot.thirdparty_available,
+        version: snapshot.version.clone(),
+        notes: None,
+        app_available: snapshot.app_available,
+        rules_available: snapshot.rules_available,
+        thirdparty_available: snapshot.thirdparty_available,
+    }
+}
+
+fn emit_update_progress<R: Runtime>(app: &AppHandle<R>, mut progress: UpdateProgress) {
+    if let Ok(services) = services(app) {
+        let current = services.updates.snapshot();
+        if progress.operation_id.is_none() {
+            progress.operation_id = current.operation_id;
+        }
+        services.updates.store(UpdateSnapshot {
+            operation_id: progress.operation_id,
+            initiator: current.initiator,
+            phase: progress.phase.clone(),
+            percent: progress.percent,
+            version: progress.version.clone(),
+            error: progress.error.clone(),
+            app_available: progress.app_available.unwrap_or(current.app_available),
+            rules_available: progress.rules_available.unwrap_or(current.rules_available),
+            thirdparty_available: progress
+                .thirdparty_available
+                .unwrap_or(current.thirdparty_available),
+        });
+    }
+    if let Err(cause) = app.emit("update-progress", &progress) {
         warn!(
             event = "update.progress_emit_failed",
             section = "updates",
@@ -502,6 +600,10 @@ fn open_linux_deb_release(
             percent: None,
             version: None,
             error: None,
+            operation_id: None,
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
         },
     );
     Ok(OperationAccepted {
@@ -539,6 +641,29 @@ fn services<R: Runtime>(app: &AppHandle<R>) -> Result<&AppServices, String> {
 async fn bootstrap_app(app: AppHandle) -> Result<BootstrapResult, String> {
     diagnostics::trace_action("startup", "tauri_command", "bootstrap_app", async move {
         let services = services(&app)?;
+        if let Err(cause) = verify_direct_rules_after_upgrade(&services.paths.data) {
+            error!(
+                event = "update.rules_lost",
+                section = "updates",
+                initiator = "bootstrap_app",
+                cause = cause.as_str(),
+                trace_route = "bootstrap->direct_rules_guard",
+                "custom route pins were missing after an application update"
+            );
+            emit_update_progress(
+                &app,
+                UpdateProgress {
+                    phase: "failed".into(),
+                    percent: None,
+                    version: None,
+                    error: Some(cause),
+                    operation_id: None,
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
+                },
+            );
+        }
         services.engine.refresh_health().await;
         let settings = services
             .config_store
@@ -584,9 +709,7 @@ async fn get_traffic_totals(app: AppHandle) -> Result<traffic::TrafficTotals, St
         "get_traffic_totals",
         async move {
             let services = services(&app)?;
-            let _guard = services.traffic_lock.lock().await;
-            let path = services.paths.data.join("traffic-totals.json");
-            let mut store = traffic::load(&path);
+            let mut store = services.traffic.lock().await;
             let connected = matches!(
                 services.engine.snapshot().phase,
                 StackPhase::Running | StackPhase::Degraded
@@ -603,24 +726,18 @@ async fn get_traffic_totals(app: AppHandle) -> Result<traffic::TrafficTotals, St
                             trace_route = "tauri_command->mihomo_controller",
                             "session traffic totals were unavailable; using last known session"
                         );
-                        (store.last_session_sent, store.last_session_received)
+                        store.last_generation()
                     }
                 }
             } else {
                 (0, 0)
             };
-            let totals = traffic::accumulate(&mut store, session_sent, session_received, connected);
-            if let Err(cause) = traffic::save(&path, &store) {
-                warn!(
-                    event = "traffic.persist_failed",
-                    section = "traffic",
-                    initiator = "get_traffic_totals",
-                    cause = %cause,
-                    trace_route = "tauri_command->traffic_totals_file",
-                    "lifetime traffic totals could not be written"
-                );
-            }
-            Ok(totals)
+            Ok(traffic::accumulate(
+                &mut store,
+                session_sent,
+                session_received,
+                connected,
+            ))
         },
     )
     .await
@@ -916,11 +1033,13 @@ async fn pin_route(
             },
             "pinning a host to one outbound without logging its value"
         );
-        services(&app)?
+        let services = services(&app)?;
+        let previous = services.rules.list().await;
+        let next = services
             .rules
             .pin(&input, outbound, expected_revision)
-            .await
-            .map_err(|error| error.to_string())
+            .await;
+        persist_and_apply_rules(&app, previous, next).await
     })
     .await
 }
@@ -941,11 +1060,10 @@ async fn add_direct_rule(
             },
             "adding direct rule without logging its value"
         );
-        services(&app)?
-            .rules
-            .add(&input, expected_revision)
-            .await
-            .map_err(|error| error.to_string())
+        let services = services(&app)?;
+        let previous = services.rules.list().await;
+        let next = services.rules.add(&input, expected_revision).await;
+        persist_and_apply_rules(&app, previous, next).await
     })
     .await
 }
@@ -961,13 +1079,38 @@ async fn remove_direct_rule(
             expected_revision,
             "removing direct rule without logging its value"
         );
-        services(&app)?
-            .rules
-            .remove(&input, expected_revision)
-            .await
-            .map_err(|error| error.to_string())
+        let services = services(&app)?;
+        let previous = services.rules.list().await;
+        let next = services.rules.remove(&input, expected_revision).await;
+        persist_and_apply_rules(&app, previous, next).await
     })
     .await
+}
+
+async fn persist_and_apply_rules(
+    app: &AppHandle,
+    previous: DirectRulesDocument,
+    next: Result<DirectRulesDocument, iran_split_rules::RuleError>,
+) -> Result<DirectRulesDocument, String> {
+    let next = next.map_err(|error| error.to_string())?;
+    let services = services(app)?;
+    if let Err(cause) = services.engine.apply_user_rules().await {
+        warn!(
+            event = "rules.apply_failed",
+            section = "rules",
+            initiator = "tauri_command",
+            cause = %cause,
+            trace_route = "tauri_command->engine->apply_user_rules",
+            "live rule apply failed; restoring the previous document"
+        );
+        services
+            .rules
+            .restore(previous)
+            .await
+            .map_err(|error| error.to_string())?;
+        return Err(cause.to_string());
+    }
+    Ok(next)
 }
 
 #[tauri::command]
@@ -1113,11 +1256,16 @@ async fn test_route(target: String, app: AppHandle) -> Result<RouteTestResult, S
     diagnostics::trace_action("routing", "tauri_command", "test_route", async move {
         let services = services(&app)?;
         let document = services.rules.list().await;
-        let domains = read_snapshot_lines(&services.cloud_rules.resolve("iran-domains.txt"))?;
-        let domains = domains
+        let domains = read_snapshot_lines(&services.cloud_rules.resolve("iran-domains.txt"))?
             .into_iter()
             .map(|line| line.trim_start_matches("+.").to_owned())
             .collect::<Vec<_>>();
+        let business =
+            read_snapshot_lines(&services.cloud_rules.resolve("iran-business-domains.txt"))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|line| line.trim_start_matches("+.").to_owned())
+                .collect::<Vec<_>>();
         let cidrs = read_snapshot_lines(&services.cloud_rules.resolve("private.txt"))?
             .into_iter()
             .chain(read_snapshot_lines(
@@ -1128,7 +1276,7 @@ async fn test_route(target: String, app: AppHandle) -> Result<RouteTestResult, S
                     .map_err(|error| format!("invalid bundled CIDR: {error}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let decision = RuleSet::from_sources(&document, domains, cidrs)
+        let decision = RuleSet::from_sources(&document, domains, cidrs, business)
             .decide(&target)
             .map_err(|error| error.to_string())?;
         info!(
@@ -1369,8 +1517,10 @@ const UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const UPDATE_BACKGROUND_DELAY: Duration = Duration::from_secs(90);
 const UPDATE_BACKGROUND_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
-async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
-    let update = tokio::time::timeout(UPDATE_CHECK_ATTEMPT_TIMEOUT, async {
+async fn check_update_once(
+    app: &AppHandle,
+) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    tokio::time::timeout(UPDATE_CHECK_ATTEMPT_TIMEOUT, async {
         app.updater()
             .map_err(|error| error.to_string())?
             .check()
@@ -1378,8 +1528,11 @@ async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
             .map_err(|error| error.to_string())
     })
     .await
-    .map_err(|_| "update check timed out".to_owned())??;
-    Ok(update.map_or(
+    .map_err(|_| "update check timed out".to_owned())?
+}
+
+fn status_from_signed_update(update: Option<&tauri_plugin_updater::Update>) -> UpdateStatus {
+    update.map_or(
         UpdateStatus {
             available: false,
             version: None,
@@ -1396,7 +1549,7 @@ async fn check_update_once(app: &AppHandle) -> Result<UpdateStatus, String> {
             rules_available: false,
             thirdparty_available: false,
         },
-    ))
+    )
 }
 
 fn merge_update_channels(
@@ -1440,7 +1593,8 @@ async fn collect_update_status(
     app: &AppHandle,
     initiator: &'static str,
 ) -> Result<UpdateStatus, String> {
-    let mut status = check_update_with_retry(app, initiator).await?;
+    let found = fetch_signed_update(app, initiator).await?;
+    let mut status = status_from_signed_update(found.as_ref());
     enrich_update_channels(app, &mut status).await;
     Ok(status)
 }
@@ -1463,6 +1617,10 @@ async fn apply_sidecar_updates(app: &AppHandle, operation_id: Uuid) -> Result<()
             percent: Some(10),
             version: None,
             error: None,
+            operation_id: None,
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
         },
     );
     if let Err(cause) = services.cloud_rules.sync().await {
@@ -1498,17 +1656,17 @@ fn update_check_backoff(attempt: u32) -> Duration {
     UPDATE_CHECK_FIRST_BACKOFF.saturating_mul(1 << attempt.min(4))
 }
 
-async fn check_update_with_retry(
+async fn fetch_signed_update(
     app: &AppHandle,
     initiator: &'static str,
-) -> Result<UpdateStatus, String> {
+) -> Result<Option<tauri_plugin_updater::Update>, String> {
     let mut last_error = String::new();
     for attempt in 0..UPDATE_CHECK_ATTEMPTS {
         if update_check_cancelled(app) {
             return Err("update check cancelled".into());
         }
         match check_update_once(app).await {
-            Ok(status) => {
+            Ok(update) => {
                 if attempt > 0 {
                     info!(
                         event = "update.check_recovered",
@@ -1520,7 +1678,7 @@ async fn check_update_with_retry(
                         "update check succeeded after a transient failure"
                     );
                 }
-                return Ok(status);
+                return Ok(update);
             }
             Err(error) => {
                 last_error = error;
@@ -1556,10 +1714,72 @@ async fn check_update_with_retry(
 }
 
 #[tauri::command]
+async fn get_update_state(app: AppHandle) -> Result<UpdateProgress, String> {
+    Ok(progress_from_snapshot(&services(&app)?.updates.snapshot()))
+}
+
+#[tauri::command]
 async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     diagnostics::trace_action("updates", "tauri_command", "check_for_update", async move {
-        let _guard = services(&app)?.updates.begin()?;
-        collect_update_status(&app, "tauri_command").await
+        let Some((_guard, operation_id)) = services(&app)?
+            .updates
+            .try_begin("tauri_command", "checking")
+        else {
+            let snapshot = services(&app)?.updates.snapshot();
+            emit_update_progress(&app, progress_from_snapshot(&snapshot));
+            return Ok(status_from_snapshot(&snapshot));
+        };
+        emit_update_progress(
+            &app,
+            UpdateProgress {
+                phase: "checking".into(),
+                percent: None,
+                version: None,
+                error: None,
+                operation_id: Some(operation_id),
+                app_available: None,
+                rules_available: None,
+                thirdparty_available: None,
+            },
+        );
+        match collect_update_status(&app, "tauri_command").await {
+            Ok(status) => {
+                emit_update_progress(
+                    &app,
+                    UpdateProgress {
+                        phase: if status.available {
+                            "available".into()
+                        } else {
+                            "current".into()
+                        },
+                        percent: None,
+                        version: status.version.clone(),
+                        error: None,
+                        operation_id: Some(operation_id),
+                        app_available: Some(status.app_available),
+                        rules_available: Some(status.rules_available),
+                        thirdparty_available: Some(status.thirdparty_available),
+                    },
+                );
+                Ok(status)
+            }
+            Err(cause) => {
+                emit_update_progress(
+                    &app,
+                    UpdateProgress {
+                        phase: "failed".into(),
+                        percent: None,
+                        version: None,
+                        error: Some(cause.clone()),
+                        operation_id: Some(operation_id),
+                        app_available: None,
+                        rules_available: None,
+                        thirdparty_available: None,
+                    },
+                );
+                Err(cause)
+            }
+        }
     })
     .await
 }
@@ -1576,7 +1796,9 @@ fn spawn_background_update_checks(app: &AppHandle) {
                 tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
                 continue;
             };
-            let Ok(_guard) = services.updates.begin() else {
+            let Some((_guard, _)) = services.updates.try_begin("background_poll", "checking")
+            else {
+                emit_update_progress(&app, progress_from_snapshot(&services.updates.snapshot()));
                 tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
                 continue;
             };
@@ -1598,6 +1820,10 @@ fn spawn_background_update_checks(app: &AppHandle) {
                             percent: None,
                             version: status.version,
                             error: None,
+                            operation_id: None,
+                            app_available: None,
+                            rules_available: None,
+                            thirdparty_available: None,
                         },
                     );
                 }
@@ -1608,12 +1834,12 @@ fn spawn_background_update_checks(app: &AppHandle) {
     });
 }
 
-async fn download_and_install_signed_update(
+async fn download_signed_update_bytes(
     app: &AppHandle,
-    update: tauri_plugin_updater::Update,
+    mut update: tauri_plugin_updater::Update,
     operation_id: Uuid,
     target_version: &str,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     emit_update_progress(
         app,
         UpdateProgress {
@@ -1621,12 +1847,42 @@ async fn download_and_install_signed_update(
             percent: Some(0),
             version: Some(target_version.to_owned()),
             error: None,
+            operation_id: Some(operation_id),
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
         },
     );
+    match download_update_once(app, &update, operation_id, target_version).await {
+        Ok(bytes) => Ok(bytes),
+        Err(first) => {
+            info!(
+                event = "update.download_retry_direct",
+                section = "updates",
+                initiator = "install_update",
+                cause = "proxy_aware_download_failed",
+                trace_route = "tauri_command->updater_plugin->download_no_proxy",
+                trace_id = %operation_id,
+                "retrying the signed update download without a proxy"
+            );
+            update.no_proxy = true;
+            download_update_once(app, &update, operation_id, target_version)
+                .await
+                .map_err(|_| first)
+        }
+    }
+}
+
+async fn download_update_once(
+    app: &AppHandle,
+    update: &tauri_plugin_updater::Update,
+    operation_id: Uuid,
+    target_version: &str,
+) -> Result<Vec<u8>, String> {
     let mut downloaded = 0usize;
     let app_for_progress = app.clone();
     let version_for_progress = target_version.to_owned();
-    let download = update.download_and_install(
+    let download = update.download(
         move |chunk_length, content_length| {
             downloaded = downloaded.saturating_add(chunk_length);
             emit_update_progress(
@@ -1636,20 +1892,14 @@ async fn download_and_install_signed_update(
                     percent: update_download_percent(downloaded, content_length),
                     version: Some(version_for_progress.clone()),
                     error: None,
+                    operation_id: None,
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
                 },
             );
         },
-        || {
-            emit_update_progress(
-                app,
-                UpdateProgress {
-                    phase: "installing".into(),
-                    percent: Some(100),
-                    version: Some(target_version.to_owned()),
-                    error: None,
-                },
-            );
-        },
+        || {},
     );
     tokio::time::timeout(UPDATE_INSTALL_TIMEOUT, download)
         .await
@@ -1663,20 +1913,80 @@ async fn download_and_install_signed_update(
                     percent: None,
                     version: Some(target_version.to_owned()),
                     error: Some(message.clone()),
+                    operation_id: Some(operation_id),
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
                 },
             );
             error!(
-                event = "update.install_failed",
+                event = "update.download_failed",
                 section = "updates",
                 initiator = "install_update",
-                cause = "download_or_install_error",
-                trace_route = "tauri_command->updater_plugin",
+                cause = "download_or_verify_error",
+                trace_route = "tauri_command->updater_plugin->download",
                 trace_id = %operation_id,
                 update_version = target_version,
-                "application update could not be installed"
+                "application update could not be downloaded"
             );
             message
         })
+}
+
+const DIRECT_RULES_UPGRADE_GUARD: &str = "direct-rules.upgrade-guard";
+
+fn record_direct_rules_upgrade_guard(data: &Path) {
+    let marker = if data.join("direct-rules.json").is_file() {
+        "present"
+    } else {
+        "absent"
+    };
+    if let Err(cause) = fs::write(data.join(DIRECT_RULES_UPGRADE_GUARD), marker) {
+        warn!(
+            event = "update.rules_guard_write_failed",
+            section = "updates",
+            initiator = "install_update",
+            cause = %cause,
+            trace_route = "install_update->direct_rules_guard",
+            "could not record whether custom route pins existed before the upgrade"
+        );
+    }
+}
+
+fn verify_direct_rules_after_upgrade(data: &Path) -> Result<(), String> {
+    let guard = data.join(DIRECT_RULES_UPGRADE_GUARD);
+    let Ok(marker) = fs::read_to_string(&guard) else {
+        return Ok(());
+    };
+    if let Err(cause) = fs::remove_file(&guard) {
+        warn!(
+            event = "update.rules_guard_clear_failed",
+            section = "updates",
+            initiator = "bootstrap_app",
+            cause = %cause,
+            trace_route = "bootstrap->direct_rules_guard",
+            "upgrade guard file could not be removed"
+        );
+    }
+    if marker.trim() == "present" && !data.join("direct-rules.json").is_file() {
+        return Err("custom route pins were lost during the update".into());
+    }
+    Ok(())
+}
+
+async fn restore_stack_after_failed_install(services: &AppServices) {
+    if matches!(services.engine.snapshot().phase, StackPhase::Paused) {
+        if let Err(cause) = services.engine.resume_stack().await {
+            warn!(
+                event = "update.stack_restore_failed",
+                section = "updates",
+                initiator = "install_update",
+                cause = %cause,
+                trace_route = "install_update->resume_stack",
+                "paused stack could not be restored after a failed install"
+            );
+        }
+    }
 }
 
 fn schedule_update_restart(app: &AppHandle, operation_id: Uuid) -> OperationAccepted {
@@ -1697,8 +2007,14 @@ async fn perform_complete_update_install(
     operation_id: Uuid,
 ) -> Result<OperationAccepted, String> {
     apply_sidecar_updates(app, operation_id).await?;
-    let status = collect_update_status(app, "install_update").await?;
-    if !status.app_available {
+    #[cfg(target_os = "linux")]
+    if !linux_updater_self_replace_supported() {
+        return open_linux_deb_release(app, operation_id);
+    }
+    let update = fetch_signed_update(app, "install_update").await?;
+    let mut status = status_from_signed_update(update.as_ref());
+    enrich_update_channels(app, &mut status).await;
+    let Some(update) = update else {
         emit_update_progress(
             app,
             UpdateProgress {
@@ -1710,36 +2026,25 @@ async fn perform_complete_update_install(
                 percent: Some(100),
                 version: status.version,
                 error: None,
+                operation_id: Some(operation_id),
+                app_available: Some(status.app_available),
+                rules_available: Some(status.rules_available),
+                thirdparty_available: Some(status.thirdparty_available),
             },
         );
         return Ok(OperationAccepted {
             operation_id,
             already_complete: true,
         });
-    }
-    perform_signed_update_install(app, operation_id).await
+    };
+    perform_signed_update_install(app, operation_id, update).await
 }
 
 async fn perform_signed_update_install(
     app: &AppHandle,
     operation_id: Uuid,
+    update: tauri_plugin_updater::Update,
 ) -> Result<OperationAccepted, String> {
-    pause_stack_for_update(services(app)?).await?;
-    #[cfg(target_os = "linux")]
-    if !linux_updater_self_replace_supported() {
-        return open_linux_deb_release(app, operation_id);
-    }
-    let update = match check_update_with_retry(app, "install_update").await {
-        Ok(status) if status.app_available => app
-            .updater()
-            .map_err(|error| error.to_string())?
-            .check()
-            .await
-            .map_err(|error| error.to_string())?
-            .ok_or("no update is available")?,
-        Ok(_) => return Err("no update is available".into()),
-        Err(error) => return Err(error),
-    };
     let target_version = update.version.clone();
     info!(
         event = "update.download_started",
@@ -1751,7 +2056,45 @@ async fn perform_signed_update_install(
         update_version = %target_version,
         "application update download started"
     );
-    download_and_install_signed_update(app, update, operation_id, &target_version).await?;
+    let bytes =
+        download_signed_update_bytes(app, update.clone(), operation_id, &target_version).await?;
+    record_direct_rules_upgrade_guard(&services(app)?.paths.data);
+    pause_stack_for_update(services(app)?).await?;
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "installing".into(),
+            percent: Some(100),
+            version: Some(target_version.clone()),
+            error: None,
+            operation_id: Some(operation_id),
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
+        },
+    );
+    let install = tokio::task::spawn_blocking(move || update.install(bytes));
+    if let Err(cause) = install
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+    {
+        restore_stack_after_failed_install(services(app)?).await;
+        emit_update_progress(
+            app,
+            UpdateProgress {
+                phase: "failed".into(),
+                percent: None,
+                version: Some(target_version),
+                error: Some(cause.clone()),
+                operation_id: Some(operation_id),
+                app_available: None,
+                rules_available: None,
+                thirdparty_available: None,
+            },
+        );
+        return Err(cause);
+    }
     info!(
         event = "update.install_succeeded",
         section = "updates",
@@ -1769,6 +2112,10 @@ async fn perform_signed_update_install(
             percent: Some(100),
             version: Some(target_version),
             error: None,
+            operation_id: Some(operation_id),
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
         },
     );
     Ok(schedule_update_restart(app, operation_id))
@@ -1777,8 +2124,18 @@ async fn perform_signed_update_install(
 #[tauri::command]
 async fn install_update(app: AppHandle) -> Result<OperationAccepted, String> {
     diagnostics::trace_action("updates", "tauri_command", "install_update", async move {
-        let _guard = services(&app)?.updates.begin()?;
-        perform_complete_update_install(&app, Uuid::new_v4()).await
+        let Some((_guard, operation_id)) = services(&app)?
+            .updates
+            .try_begin("install_update", "downloading")
+        else {
+            let snapshot = services(&app)?.updates.snapshot();
+            emit_update_progress(&app, progress_from_snapshot(&snapshot));
+            return Ok(OperationAccepted {
+                operation_id: snapshot.operation_id.unwrap_or_else(Uuid::nil),
+                already_complete: false,
+            });
+        };
+        perform_complete_update_install(&app, operation_id).await
     })
     .await
 }
@@ -1908,7 +2265,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
         network,
         paths,
         updates: Arc::new(UpdateCoordinator::new()),
-        traffic_lock: tokio::sync::Mutex::new(()),
+        traffic: tokio::sync::Mutex::new(traffic::SessionAccumulator::default()),
     })
 }
 
@@ -2059,6 +2416,7 @@ fn handle_tray_menu<R: Runtime>(app: &AppHandle<R>, event: &MenuEvent) {
             );
             app.exit(0);
         }
+        "dashboard" => open_dashboard_from_tray(app),
         unknown => warn!(
             event = "tray.unknown_action",
             section = "tray",
@@ -2078,6 +2436,7 @@ fn build_tray_menu<R: Runtime>(
 ) -> tauri::Result<Menu<R>> {
     let labels = tray::labels_for(phase);
     let enabled = tray::actions_enabled(busy);
+    let dashboard = MenuItem::with_id(app, "dashboard", "Dashboard", true, None::<&str>)?;
     let connection = MenuItem::with_id(
         app,
         labels.connection_id,
@@ -2093,11 +2452,14 @@ fn build_tray_menu<R: Runtime>(
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let dashboard_separator = PredefinedMenuItem::separator(app)?;
     let first_separator = PredefinedMenuItem::separator(app)?;
     let second_separator = PredefinedMenuItem::separator(app)?;
     Menu::with_items(
         app,
         &[
+            &dashboard,
+            &dashboard_separator,
             &connection,
             &first_separator,
             &pause,
@@ -2156,6 +2518,16 @@ fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
 
 fn show_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
+        if let Err(cause) = window.unminimize() {
+            warn!(
+                event = "window.unminimize_failed",
+                section = "window",
+                initiator = "show_main",
+                cause = %cause,
+                trace_route = "show_main->window.unminimize",
+                "main window could not be restored from minimized"
+            );
+        }
         if let Err(cause) = window.show() {
             error!(
                 event = "window.show_failed",
@@ -2184,6 +2556,20 @@ fn show_main<R: Runtime>(app: &AppHandle<R>) {
             cause = "main_window_not_found",
             trace_route = "show_main->get_webview_window",
             "main window is unavailable"
+        );
+    }
+}
+
+fn open_dashboard_from_tray<R: Runtime>(app: &AppHandle<R>) {
+    show_main(app);
+    if let Err(cause) = app.emit("app-navigate", "dashboard") {
+        warn!(
+            event = "tray.navigate_failed",
+            section = "tray",
+            initiator = "tray_menu",
+            cause = %cause,
+            trace_route = "tray_menu->app_navigate",
+            "dashboard navigation event could not be emitted"
         );
     }
 }
@@ -2488,6 +2874,7 @@ pub fn run() {
             export_support_bundle,
             fresh_hiddify_start,
             check_for_update,
+            get_update_state,
             install_update,
         ]);
 
@@ -2514,10 +2901,24 @@ mod tests {
     fn update_check_attempt_timeout_bounds_a_hang() {
         assert_eq!(super::UPDATE_CHECK_ATTEMPT_TIMEOUT, Duration::from_secs(8));
         assert_eq!(super::UPDATE_INSTALL_TIMEOUT, Duration::from_secs(10 * 60));
-        assert_eq!(
-            super::update_in_progress_message(),
-            "an update is already in progress"
-        );
+        let coordinator = super::UpdateCoordinator::new();
+        let first = coordinator.try_begin("test", "checking");
+        assert!(first.is_some());
+        assert!(coordinator.try_begin("test", "checking").is_none());
+        assert_eq!(coordinator.snapshot().phase, "checking");
+        drop(first);
+    }
+
+    #[test]
+    fn missing_direct_rules_after_upgrade_is_a_failure() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let data = directory.path();
+        fs::write(data.join("direct-rules.upgrade-guard"), "present").expect("guard");
+        let error = super::verify_direct_rules_after_upgrade(data).expect_err("lost");
+        assert!(error.contains("lost"));
+        fs::write(data.join("direct-rules.json"), "{}").expect("pins");
+        fs::write(data.join("direct-rules.upgrade-guard"), "present").expect("guard");
+        super::verify_direct_rules_after_upgrade(data).expect("kept");
     }
 
     #[test]
@@ -2557,7 +2958,12 @@ mod tests {
             .join("resources")
             .join("rules");
         fs::create_dir_all(&nested).expect("nested rules");
-        for name in ["iran-domains.txt", "iran-networks.txt", "private.txt"] {
+        for name in [
+            "iran-domains.txt",
+            "iran-networks.txt",
+            "private.txt",
+            "iran-business-domains.txt",
+        ] {
             fs::write(nested.join(name), b"ok").expect("rule file");
         }
         assert_eq!(packaged_rule_snapshot_dir(directory.path()), nested);
@@ -2629,6 +3035,10 @@ mod tests {
             percent: Some(42),
             version: Some("1.2.0".into()),
             error: None,
+            operation_id: None,
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
         };
         let json = serde_json::to_value(progress).expect("serialize update progress");
         assert_eq!(json["phase"], "downloading");

@@ -3,7 +3,8 @@ export type LifecycleBusy =
   | "disconnecting"
   | "pausing"
   | "resuming"
-  | "reconciling";
+  | "reconciling"
+  | "applying_rules";
 
 export type OperationStage =
   | "preparing"
@@ -255,6 +256,7 @@ export interface UpdateProgress {
   percent: number | null;
   version: string | null;
   error: string | null;
+  operation_id?: string | null;
   app_available?: boolean;
   rules_available?: boolean;
   thirdparty_available?: boolean;

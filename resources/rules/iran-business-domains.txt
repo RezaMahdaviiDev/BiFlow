@@ -1,0 +1,15 @@
+# Curated Iranian business domains (not from Chocolate4U).
+# Official first-party roots only; .ir names are covered by +.ir.
++.technolife.com
++.azkivam.com
++.azkisarmayeh.com
++.nextpay.com
++.payping.io
++.tomanpay.com
++.kifpool.me
++.safarmarket.com
++.arazcloud.com
++.excoino.com
++.hitobit.com
++.karboom.io
++.ewano.app

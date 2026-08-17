@@ -48,6 +48,7 @@ pub enum Platform {
 pub struct RuntimePaths {
     pub private_networks: PathBuf,
     pub iran_domains: PathBuf,
+    pub iran_business_domains: PathBuf,
     pub iran_networks: PathBuf,
     pub custom_direct_domains: PathBuf,
     pub custom_direct_ips: PathBuf,
@@ -206,6 +207,7 @@ pub fn generate_config(
         "RULE-SET,custom-direct-domains,DIRECT".into(),
         "RULE-SET,custom-direct-ips,DIRECT,no-resolve".into(),
         "RULE-SET,iran-domains,DIRECT".into(),
+        "RULE-SET,iran-business-domains,DIRECT".into(),
         "RULE-SET,iran-networks,DIRECT,no-resolve".into(),
         "MATCH,VPN".into(),
     ]);
@@ -338,6 +340,11 @@ fn providers() -> BTreeMap<String, RuleProvider> {
     [
         ("private-networks", "ipcidr", "private.txt"),
         ("iran-domains", "domain", "iran-domains.txt"),
+        (
+            "iran-business-domains",
+            "domain",
+            "iran-business-domains.txt",
+        ),
         ("iran-networks", "ipcidr", "iran-networks.txt"),
         (
             "custom-direct-domains",
@@ -783,6 +790,7 @@ mod tests {
         RuntimePaths {
             private_networks: "/runtime/private.txt".into(),
             iran_domains: "/runtime/iran-domains.txt".into(),
+            iran_business_domains: "/runtime/iran-business-domains.txt".into(),
             iran_networks: "/runtime/iran-networks.txt".into(),
             custom_direct_domains: "/runtime/custom-direct-domains.txt".into(),
             custom_direct_ips: "/runtime/custom-direct-ips.txt".into(),
@@ -821,6 +829,10 @@ mod tests {
         assert!(generated.yaml.contains("ipv6: true"));
         assert!(!generated.yaml.contains("dns-query#VPN"));
         assert!(generated.yaml.contains("path: private.txt"));
+        assert!(generated.yaml.contains("path: iran-business-domains.txt"));
+        assert!(generated
+            .yaml
+            .contains("RULE-SET,iran-business-domains,DIRECT"));
         assert!(!generated.yaml.contains("/runtime/"));
         assert_eq!(generated.sha256.len(), 64);
     }
@@ -946,12 +958,19 @@ mod tests {
 
         let generation = tempfile::tempdir().expect("tempdir");
         let rules = workspace.join("resources/rules");
-        for name in ["private.txt", "iran-domains.txt", "iran-networks.txt"] {
+        for name in [
+            "private.txt",
+            "iran-domains.txt",
+            "iran-networks.txt",
+            "iran-business-domains.txt",
+        ] {
             std::fs::copy(rules.join(name), generation.path().join(name)).expect("rule file");
         }
         std::fs::write(generation.path().join("custom-direct-domains.txt"), "")
             .expect("custom domains");
         std::fs::write(generation.path().join("custom-direct-ips.txt"), "").expect("custom ips");
+        std::fs::write(generation.path().join("custom-vpn-domains.txt"), "").expect("vpn domains");
+        std::fs::write(generation.path().join("custom-vpn-ips.txt"), "").expect("vpn ips");
 
         let generated = generate_config(
             &AppConfig::default(),

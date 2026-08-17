@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { InputContextMenu } from "./InputContextMenu";
 
@@ -37,10 +38,20 @@ describe("InputContextMenu", () => {
     expect(field).toHaveProperty("selectionEnd", "example.ir".length);
   });
 
-  it("pastes clipboard text into the focused field", async () => {
+  it("pastes clipboard text into a controlled React field", async () => {
+    function ControlledHost() {
+      const [value, setValue] = useState("");
+      return (
+        <input
+          aria-label="Host"
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+        />
+      );
+    }
     render(
       <div>
-        <input aria-label="Host" defaultValue="" />
+        <ControlledHost />
         <InputContextMenu />
       </div>,
     );

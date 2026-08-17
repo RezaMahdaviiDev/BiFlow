@@ -1,3 +1,4 @@
+mod canonical;
 mod cloud;
 
 use async_trait::async_trait;
@@ -11,12 +12,12 @@ use std::{
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+pub use canonical::{canonical_target, domain_matches_pin, registrable_domain};
 pub use cloud::{
     bundled_snapshot_is_complete, ensure_bundled_snapshot, provider_entry_count,
     resolve_provider_path, CloudRuleSetStatus, CloudRuleStore, CloudRulesStatus, CloudSyncError,
@@ -54,11 +55,7 @@ impl DirectTarget {
     /// Returns [`RuleError::InvalidRule`] when the input is not a valid IP
     /// address or normalized domain.
     pub fn parse(input: &str) -> Result<Self, RuleError> {
-        let input = input.trim();
-        if let Ok(address) = input.parse::<IpAddr>() {
-            return Ok(Self::Ip(address));
-        }
-        normalize_domain(input).map(Self::Domain)
+        canonical_target(input)
     }
 
     #[must_use]
@@ -210,19 +207,6 @@ fn unique_addresses(values: impl IntoIterator<Item = IpAddr>) -> Vec<IpAddr> {
     values
 }
 
-/// A pin is a UI action, and `DohResolver` needs two HTTPS round trips to
-/// Cloudflare. Those stall for seconds while the tunnel is coming up or the
-/// upstream is unreachable, so the pin is applied on a budget: the rule always
-/// matches by name, and `refresh()` fills the addresses in later.
-const RESOLVE_BUDGET: Duration = Duration::from_secs(3);
-
-async fn resolve_within_budget(resolver: &dyn Resolver, domain: &str) -> Vec<IpAddr> {
-    match tokio::time::timeout(RESOLVE_BUDGET, resolver.resolve(domain)).await {
-        Ok(Ok(addresses)) => addresses,
-        Ok(Err(_)) | Err(_) => Vec::new(),
-    }
-}
-
 #[derive(Clone)]
 pub struct RuleManager {
     path: PathBuf,
@@ -248,7 +232,14 @@ impl RuleManager {
     pub fn load(path: impl Into<PathBuf>, resolver: Arc<dyn Resolver>) -> Result<Self, RuleError> {
         let path = path.into();
         let document = if path.exists() {
-            serde_json::from_slice(&fs::read(&path)?)?
+            let bytes = fs::read(&path)?;
+            let original: DirectRulesDocument = serde_json::from_slice(&bytes)?;
+            let migrated = canonicalize_document(original.clone());
+            if migrated != original {
+                backup_last_good(&path)?;
+                publish(&path, &migrated)?;
+            }
+            migrated
         } else {
             DirectRulesDocument::default()
         };
@@ -306,9 +297,7 @@ impl RuleManager {
             }
         }
         let resolved_ips = match &target {
-            DirectTarget::Domain(domain) => {
-                resolve_within_budget(self.resolver.as_ref(), domain).await
-            }
+            DirectTarget::Domain(_) => Vec::new(),
             DirectTarget::Ip(address) => vec![*address],
         };
         let mut document = self.document.lock().await;
@@ -412,6 +401,64 @@ impl RuleManager {
         publish(&self.path, &document)?;
         Ok(document.clone())
     }
+
+    /// Replaces the in-memory document and publishes it. Used to roll a failed
+    /// live apply back to the last-good pins.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuleError`] when the document cannot be written atomically.
+    pub async fn restore(
+        &self,
+        document: DirectRulesDocument,
+    ) -> Result<DirectRulesDocument, RuleError> {
+        let mut current = self.document.lock().await;
+        *current = document;
+        publish(&self.path, &current)?;
+        Ok(current.clone())
+    }
+}
+
+fn canonicalize_document(mut document: DirectRulesDocument) -> DirectRulesDocument {
+    let before = document.clone();
+    document.rules = merge_canonical_rules(document.rules);
+    document.vpn_rules = merge_canonical_rules(document.vpn_rules);
+    if document.rules != before.rules || document.vpn_rules != before.vpn_rules {
+        document.revision = document.revision.saturating_add(1);
+    }
+    document
+}
+
+fn merge_canonical_rules(rules: Vec<DirectRule>) -> Vec<DirectRule> {
+    let mut merged: Vec<DirectRule> = Vec::new();
+    for rule in rules {
+        let target = match &rule.target {
+            DirectTarget::Domain(domain) => {
+                canonical_target(domain).unwrap_or_else(|_| rule.target.clone())
+            }
+            DirectTarget::Ip(_) => rule.target.clone(),
+        };
+        if let Some(existing) = merged.iter_mut().find(|item| item.target == target) {
+            if rule.created_at < existing.created_at {
+                existing.created_at = rule.created_at;
+            }
+            continue;
+        }
+        merged.push(DirectRule {
+            target,
+            resolved_ips: Vec::new(),
+            created_at: rule.created_at,
+            refreshed_at: rule.refreshed_at,
+        });
+    }
+    merged.sort_by_key(|rule| rule.target.display_value());
+    merged
+}
+
+fn backup_last_good(path: &Path) -> Result<(), RuleError> {
+    let backup = path.with_extension("json.last-good");
+    fs::copy(path, backup)?;
+    Ok(())
 }
 
 fn ensure_revision(
@@ -469,6 +516,7 @@ pub struct RuleSet {
     custom_domains: HashSet<String>,
     custom_ips: HashSet<IpAddr>,
     iran_domains: HashSet<String>,
+    business_domains: HashSet<String>,
     iran_cidrs: Vec<IpNet>,
 }
 
@@ -477,9 +525,11 @@ impl RuleSet {
         custom: &DirectRulesDocument,
         iran_domains: impl IntoIterator<Item = String>,
         iran_cidrs: impl IntoIterator<Item = IpNet>,
+        business_domains: impl IntoIterator<Item = String>,
     ) -> Self {
         let mut set = Self {
             iran_domains: iran_domains.into_iter().collect(),
+            business_domains: business_domains.into_iter().collect(),
             iran_cidrs: iran_cidrs.into_iter().collect(),
             ..Self::default()
         };
@@ -492,7 +542,6 @@ impl RuleSet {
                     set.custom_ips.insert(*address);
                 }
             }
-            set.custom_ips.extend(rule.resolved_ips.iter().copied());
         }
         for rule in &custom.vpn_rules {
             match &rule.target {
@@ -503,7 +552,6 @@ impl RuleSet {
                     set.vpn_ips.insert(*address);
                 }
             }
-            set.vpn_ips.extend(rule.resolved_ips.iter().copied());
         }
         set
     }
@@ -519,20 +567,36 @@ impl RuleSet {
             return Ok(self.decide_ip(address));
         }
         let domain = normalize_domain(target)?;
-        if self.vpn_domains.contains(&domain) {
+        let canonical = registrable_domain(&domain).unwrap_or_else(|_| domain.clone());
+        if let Some(pin) = self
+            .vpn_domains
+            .iter()
+            .find(|pin| domain_matches_pin(&domain, pin) || *pin == &canonical)
+        {
             return Ok(RouteDecision {
                 outbound: Outbound::Vpn,
                 reason: DecisionReason::VpnRule,
-                matched_rule: Some(domain),
+                matched_rule: Some(pin.clone()),
             });
         }
-        if self.custom_domains.contains(&domain) {
-            return Ok(direct(DecisionReason::CustomRule, Some(domain)));
+        if let Some(pin) = self
+            .custom_domains
+            .iter()
+            .find(|pin| domain_matches_pin(&domain, pin) || *pin == &canonical)
+        {
+            return Ok(direct(DecisionReason::CustomRule, Some(pin.clone())));
         }
         if let Some(rule) = self
             .iran_domains
             .iter()
             .find(|rule| domain == **rule || domain.ends_with(&format!(".{rule}")))
+        {
+            return Ok(direct(DecisionReason::IranDomain, Some(rule.clone())));
+        }
+        if let Some(rule) = self
+            .business_domains
+            .iter()
+            .find(|pin| domain_matches_pin(&domain, pin) || *pin == &canonical)
         {
             return Ok(direct(DecisionReason::IranDomain, Some(rule.clone())));
         }
@@ -626,7 +690,7 @@ mod tests {
     }
 
     fn iran_rule_set(custom: &DirectRulesDocument) -> RuleSet {
-        RuleSet::from_sources(custom, ["ir".to_owned()], [])
+        RuleSet::from_sources(custom, ["ir".to_owned()], [], [])
     }
 
     #[tokio::test]
@@ -766,7 +830,7 @@ mod tests {
         .expect("manager");
         let added = manager.add("example.com", 0).await.expect("add");
         assert_eq!(added.revision, 1);
-        assert_eq!(added.rules[0].resolved_ips.len(), 1);
+        assert!(added.rules[0].resolved_ips.is_empty());
         assert!(manager.remove("example.com", 0).await.is_err());
         let removed = manager.remove("example.com", 1).await.expect("remove");
         assert!(removed.rules.is_empty());
@@ -788,6 +852,18 @@ mod tests {
             &custom,
             ["digikala.com".into()],
             ["5.22.0.0/16".parse().expect("CIDR")],
+            ["technolife.com".into()],
+        );
+        assert_eq!(
+            set.decide("www.technolife.com").expect("catalog").reason,
+            DecisionReason::IranDomain
+        );
+        assert_eq!(
+            set.decide("www.technolife.com")
+                .expect("catalog")
+                .matched_rule
+                .as_deref(),
+            Some("technolife.com")
         );
         assert_eq!(
             set.decide("example.com").expect("decision").reason,
@@ -813,5 +889,125 @@ mod tests {
             set.decide("openai.com").expect("decision").outbound,
             Outbound::Vpn
         );
+    }
+
+    #[tokio::test]
+    async fn a_subdomain_pin_stores_the_registrable_root_and_covers_siblings() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+        let added = manager.add("api.shop.example.com", 0).await.expect("add");
+        assert_eq!(added.rules.len(), 1);
+        assert_eq!(
+            added.rules[0].target,
+            DirectTarget::Domain("example.com".into())
+        );
+        let set = iran_rule_set(&added);
+        assert_eq!(
+            set.decide("www.example.com").expect("www").reason,
+            DecisionReason::CustomRule
+        );
+        assert_eq!(
+            set.decide("api.shop.example.com").expect("nested").reason,
+            DecisionReason::CustomRule
+        );
+        assert_eq!(
+            set.decide("notexample.com").expect("sibling").outbound,
+            Outbound::Vpn
+        );
+        let moved = manager
+            .pin("www.example.com", Outbound::Vpn, added.revision)
+            .await
+            .expect("move");
+        assert!(moved.rules.is_empty());
+        assert_eq!(moved.vpn_rules.len(), 1);
+        assert_eq!(
+            iran_rule_set(&moved)
+                .decide("cdn.example.com")
+                .expect("cdn")
+                .outbound,
+            Outbound::Vpn
+        );
+    }
+
+    #[tokio::test]
+    async fn a_private_suffix_tenant_does_not_pin_the_whole_suffix() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+        let added = manager.add("user.github.io", 0).await.expect("pages");
+        let set = iran_rule_set(&added);
+        assert_eq!(
+            set.decide("user.github.io").expect("self").reason,
+            DecisionReason::CustomRule
+        );
+        assert_eq!(
+            set.decide("other.github.io").expect("other").outbound,
+            Outbound::Vpn
+        );
+    }
+
+    #[tokio::test]
+    async fn pin_does_not_wait_for_dns() {
+        struct SlowResolver;
+        #[async_trait]
+        impl Resolver for SlowResolver {
+            async fn resolve(&self, _domain: &str) -> Result<Vec<IpAddr>, RuleError> {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                Ok(Vec::new())
+            }
+        }
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(SlowResolver),
+        )
+        .expect("manager");
+        let started = std::time::Instant::now();
+        manager.add("example.com", 0).await.expect("add");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "pin must not wait on DNS"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_migrates_exact_hosts_to_the_registrable_root() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("direct-rules.json");
+        let original = DirectRulesDocument {
+            revision: 4,
+            rules: vec![
+                DirectRule {
+                    target: DirectTarget::Domain("www.example.com".into()),
+                    resolved_ips: vec!["203.0.113.9".parse().expect("ip")],
+                    created_at: Utc::now(),
+                    refreshed_at: None,
+                },
+                DirectRule {
+                    target: DirectTarget::Domain("api.example.com".into()),
+                    resolved_ips: vec![],
+                    created_at: Utc::now(),
+                    refreshed_at: None,
+                },
+            ],
+            vpn_rules: Vec::new(),
+        };
+        fs::write(&path, serde_json::to_vec_pretty(&original).expect("json")).expect("write");
+        let manager = RuleManager::load(&path, Arc::new(FixedResolver)).expect("load");
+        let loaded = manager.list().await;
+        assert_eq!(loaded.rules.len(), 1);
+        assert_eq!(
+            loaded.rules[0].target,
+            DirectTarget::Domain("example.com".into())
+        );
+        assert_eq!(loaded.revision, 5);
+        assert!(path.with_extension("json.last-good").is_file());
     }
 }

@@ -78,7 +78,8 @@ describe("Tauri frontend contract", () => {
       rust,
       /TrayIconBuilder::with_id\("main"\)[\s\S]*?\.icon\(icon\)[\s\S]*?\.menu\(&menu\)/,
     );
-    assert.match(rust, /PredefinedMenuItem::separator/);
+    assert.match(rust, /MenuItem::with_id\(\s*app,\s*"dashboard"/);
+    assert.match(rust, /app.emit\("app-navigate", "dashboard"\)/);
     assert.match(rust, /apply_tray_menu/);
     const tray = readFileSync(join(root, "src-tauri/src/tray.rs"), "utf8");
     assert.match(tray, /fn labels_for/);
@@ -200,6 +201,7 @@ describe("Tauri frontend contract", () => {
       "private.txt",
       "iran-domains.txt",
       "iran-networks.txt",
+      "iran-business-domains.txt",
       "custom-direct-domains.txt",
       "custom-direct-ips.txt",
       "custom-vpn-domains.txt",
@@ -285,7 +287,7 @@ describe("Tauri frontend contract", () => {
     );
     assert.match(
       rust,
-      /async fn collect_update_status\([\s\S]*?check_update_with_retry\(app, initiator\)/,
+      /async fn collect_update_status\([\s\S]*?fetch_signed_update\(app, initiator\)/,
     );
     assert.match(rust, /fn spawn_background_update_checks\(/);
     assert.match(rust, /spawn_background_update_checks\(app\.handle\(\)\)/);
@@ -297,15 +299,10 @@ describe("Tauri frontend contract", () => {
     assert.ok(poll, "background update poll is missing");
     assert.doesNotMatch(poll[0], /phase: "failed"/);
     // Signed self-replacement, not a browser link.
-    assert.match(rust, /update\s*\.download_and_install\(/);
-    assert.match(rust, /fn schedule_update_restart\(/);
-    assert.match(rust, /fn perform_complete_update_install\(/);
-    assert.match(rust, /fn apply_sidecar_updates\(/);
-    assert.match(rust, /fn merge_update_channels\(/);
-    assert.match(rust, /const UPDATE_CHECK_ATTEMPT_TIMEOUT/);
-    assert.match(rust, /const UPDATE_INSTALL_TIMEOUT/);
-    assert.match(rust, /fn update_in_progress_message\(/);
-    assert.match(rust, /updates\.begin\(\)/);
+    assert.match(rust, /fn fetch_signed_update\(/);
+    assert.match(rust, /fn download_signed_update_bytes\(/);
+    assert.match(rust, /updates\.try_begin\(/);
+    assert.doesNotMatch(rust, /an update is already in progress/);
   });
 
   it("never reports a previous attempt's Windows install reason", () => {

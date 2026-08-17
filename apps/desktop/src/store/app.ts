@@ -253,6 +253,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ rules: next, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });
+      throw error;
     }
   },
   pinRoute: async (input, outbound) => {
@@ -264,6 +265,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ rules: next, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });
+      throw error;
     }
   },
   removeRule: async (input) => {
@@ -275,6 +277,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       set({ rules: next, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });
+      throw error;
     }
   },
   refreshRules: async () => {
@@ -367,7 +370,18 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
   applyUpdateProgress: (progress) => {
-    set({ update: progress });
+    const current = get().update;
+    if (
+      progress.operation_id &&
+      current.operation_id &&
+      progress.operation_id !== current.operation_id &&
+      (current.phase === "downloading" ||
+        current.phase === "installing" ||
+        current.phase === "restarting")
+    ) {
+      return;
+    }
+    set({ update: { ...current, ...progress, error: progress.error ?? null } });
   },
   checkForUpdate: async () => {
     const phase = get().update.phase;

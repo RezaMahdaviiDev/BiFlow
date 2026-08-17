@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TrafficTotals {
@@ -7,69 +6,68 @@ pub struct TrafficTotals {
     pub received: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct PersistedTraffic {
-    pub lifetime_sent: u64,
-    pub lifetime_received: u64,
-    pub last_session_sent: u64,
-    pub last_session_received: u64,
+/// In-memory session counters. Lifetime is the desktop process, not a file.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionAccumulator {
+    sent: u64,
+    received: u64,
+    last_generation_sent: Option<u64>,
+    last_generation_received: Option<u64>,
 }
 
-/// Folds a Mihomo session into lifetime totals so disconnect does not zero the bar.
+impl SessionAccumulator {
+    #[must_use]
+    pub fn last_generation(&self) -> (u64, u64) {
+        (
+            self.last_generation_sent.unwrap_or(0),
+            self.last_generation_received.unwrap_or(0),
+        )
+    }
+}
+
+/// Folds Mihomo `/connections` deltas into process-scoped totals.
+///
+/// A repeated poll of the same snapshot adds nothing. A counter decrease is a
+/// new generation: the previous snapshot is already in the total, so only the
+/// new baseline is added. Disconnect keeps the displayed total and clears the
+/// generation cursor so the next connect starts a fresh delta.
 #[must_use]
 pub fn accumulate(
-    store: &mut PersistedTraffic,
+    store: &mut SessionAccumulator,
     session_sent: u64,
     session_received: u64,
     connected: bool,
 ) -> TrafficTotals {
-    if connected {
-        if session_sent < store.last_session_sent || session_received < store.last_session_received
+    if !connected {
+        store.last_generation_sent = None;
+        store.last_generation_received = None;
+        return TrafficTotals {
+            sent: store.sent,
+            received: store.received,
+        };
+    }
+    match (store.last_generation_sent, store.last_generation_received) {
+        (Some(previous_sent), Some(previous_received))
+            if session_sent >= previous_sent && session_received >= previous_received =>
         {
-            store.lifetime_sent = store.lifetime_sent.saturating_add(store.last_session_sent);
-            store.lifetime_received = store
-                .lifetime_received
-                .saturating_add(store.last_session_received);
+            store.sent = store
+                .sent
+                .saturating_add(session_sent.saturating_sub(previous_sent));
+            store.received = store
+                .received
+                .saturating_add(session_received.saturating_sub(previous_received));
         }
-        store.last_session_sent = session_sent;
-        store.last_session_received = session_received;
-    } else if store.last_session_sent > 0 || store.last_session_received > 0 {
-        store.lifetime_sent = store.lifetime_sent.saturating_add(store.last_session_sent);
-        store.lifetime_received = store
-            .lifetime_received
-            .saturating_add(store.last_session_received);
-        store.last_session_sent = 0;
-        store.last_session_received = 0;
+        _ => {
+            store.sent = store.sent.saturating_add(session_sent);
+            store.received = store.received.saturating_add(session_received);
+        }
     }
+    store.last_generation_sent = Some(session_sent);
+    store.last_generation_received = Some(session_received);
     TrafficTotals {
-        sent: store.lifetime_sent.saturating_add(store.last_session_sent),
-        received: store
-            .lifetime_received
-            .saturating_add(store.last_session_received),
+        sent: store.sent,
+        received: store.received,
     }
-}
-
-pub fn load(path: &Path) -> PersistedTraffic {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-
-/// Writes persisted totals. Failures are logged by the caller.
-///
-/// # Errors
-///
-/// Returns an I/O or encode error when the file cannot be replaced.
-pub fn save(path: &Path, store: &PersistedTraffic) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(store).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -77,8 +75,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disconnect_keeps_the_displayed_total() {
-        let mut store = PersistedTraffic::default();
+    fn disconnect_keeps_the_displayed_session_total() {
+        let mut store = SessionAccumulator::default();
         let connected = accumulate(&mut store, 1_000, 2_000, true);
         assert_eq!(
             connected,
@@ -100,8 +98,23 @@ mod tests {
     }
 
     #[test]
-    fn a_mihomo_restart_folds_the_previous_session() {
-        let mut store = PersistedTraffic::default();
+    fn a_repeated_poll_of_the_same_snapshot_adds_nothing() {
+        let mut store = SessionAccumulator::default();
+        let first = accumulate(&mut store, 500, 800, true);
+        let again = accumulate(&mut store, 500, 800, true);
+        assert_eq!(first, again);
+        assert_eq!(
+            first,
+            TrafficTotals {
+                sent: 500,
+                received: 800
+            }
+        );
+    }
+
+    #[test]
+    fn a_mihomo_restart_folds_only_the_new_generation() {
+        let mut store = SessionAccumulator::default();
         let first = accumulate(&mut store, 500, 500, true);
         assert_eq!(
             first,
@@ -121,20 +134,19 @@ mod tests {
     }
 
     #[test]
-    fn save_replaces_the_totals_file_atomically_enough_to_reload() {
+    fn a_legacy_totals_file_is_not_loaded() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("traffic-totals.json");
-        let store = PersistedTraffic {
-            lifetime_sent: 9_000,
-            lifetime_received: 8_000,
-            last_session_sent: 100,
-            last_session_received: 200,
-        };
-        save(&path, &store).expect("save");
-        assert_eq!(load(&path), store);
+        std::fs::write(
+            &path,
+            br#"{"lifetime_sent":9000,"lifetime_received":8000,"last_session_sent":100,"last_session_received":200}"#,
+        )
+        .expect("legacy");
+        assert!(path.is_file());
+        let mut store = SessionAccumulator::default();
         assert_eq!(
-            load(directory.path().join("missing.json").as_path()),
-            PersistedTraffic::default()
+            accumulate(&mut store, 0, 0, false),
+            TrafficTotals::default()
         );
     }
 }

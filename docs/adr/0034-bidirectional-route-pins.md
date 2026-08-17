@@ -14,9 +14,14 @@ no-op and the UI had to explain that exclusions were unsupported.
 
 ## Decision
 
-- A user pin is an exact domain or literal IP, the same grammar as the existing
-  DIRECT rules. Pinning `iran.ir` to the VPN does not touch `ir` in the bundled
-  list, and wildcards remain unsupported.
+- A user pin is a **registrable domain** (eTLD+1, including the PSL private
+  section) or a literal IP. `api.shop.example.com` stores `example.com` and
+  matches every subdomain; `user.github.io` stays a tenant and cannot pin all
+  of `github.io`. `notexample.com` does not match `example.com`.
+- Writers emit `+.example.com` in custom domain providers and never copy
+  `resolved_ips` into IP providers (CDN addresses must not leak onto DIRECT).
+- `RuleManager::load` migrates exact-host documents to canonical roots, merges
+  duplicates, bumps `revision` once, and keeps `direct-rules.json.last-good`.
 - `DirectRulesDocument.vpn_rules` holds VPN pins, `#[serde(default)]` so
   documents written before this change still load.
 - A host lives in at most one user list. `RuleManager::pin(input, outbound,
@@ -28,7 +33,8 @@ revision)` adds to one list and drops the target from the other;
   2. user VPN pins
   3. user DIRECT pins
   4. bundled Iran domains and CIDRs → DIRECT
-  5. `MATCH` → VPN
+  5. curated `iran-business-domains` → DIRECT
+  6. `MATCH` → VPN
 - Private, loopback, and CGNAT addresses are rejected from the VPN list with a
   clear error rather than silently ignored: routing them through the tunnel
   cuts the machine off from its own network. `decide_ip` checks that range
@@ -45,11 +51,10 @@ revision)` adds to one list and drops the target from the other;
 
 ## Consequences
 
-- The two staging helpers now emit eight generation files; the script contract
-  test pins that list for both platforms.
-- A pinned host bypasses the Iran list entirely, including subdomains of the
-  pinned name only if they are pinned individually — exact hosts, by design.
-- Removing a VPN pin restores whatever the bundled list decides, so the action
-  is reversible without editing the snapshot.
+- The two staging helpers now emit nine generation files (the eighth pair is
+  custom VPN providers; the ninth is the curated Iranian business catalog);
+  the script contract test pins that list for both platforms.
+- A pinned registrable domain covers its subdomains. Removing a VPN pin restores
+  whatever the bundled list and catalog decide.
 - The mock API implements the same precedence and mutual exclusivity, so the
   e2e flow exercises the real ordering rather than a simplified one.

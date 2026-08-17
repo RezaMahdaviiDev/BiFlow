@@ -33,6 +33,15 @@
       "entry_count": 18,
       "sha256": "aed134cc43c2414cb3df5a10fcb3e215e64fac0249579a112c163674df4ddd36",
       "source": "https://raw.githubusercontent.com/Chocolate4U/Iran-clash-rules/767ef8bf56739c436f72e7489cc86b5f79a926e6/private.txt"
+    },
+    {
+      "id": "iran-business-domains",
+      "file": "iran-business-domains.txt",
+      "upstream_file": "curated",
+      "kind": "domain",
+      "entry_count": 13,
+      "sha256": "4b3e50a8900ffc625617abbce195bcc00063d75cc780dec1c29396d3587717b4",
+      "source": "curated"
     }
   ]
 }

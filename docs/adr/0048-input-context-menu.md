@@ -15,8 +15,12 @@ paste from a right-click.
 - Keep blocking `contextmenu` on chrome.
 - Allow the event on text, number, and textarea fields, then show a custom
   menu: Select All, Copy, Cut, Paste.
-- Disable Copy/Cut when there is no selection, and disable Cut/Paste on
-  read-only or disabled fields.
+- Paste captures the field **before** the async clipboard read, uses the native
+  `HTMLInputElement`/`HTMLTextAreaElement` value setter, and dispatches a
+  bubbling `InputEvent` with `inputType` so controlled React inputs update.
+  Unmount or disable after the read is a no-op.
+- `addRule` / `pinRoute` rethrow after recording the store error so Direct
+  Rules clears the input only on success.
 
 ## Consequences
 

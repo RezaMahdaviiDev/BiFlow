@@ -50,6 +50,52 @@ describe("mock transport", () => {
     });
   });
 
+  it("canonicalizes subdomain pins to the registrable root", async () => {
+    const first = await mockApi.addRule("api.shop.example.com", 1);
+    expect(first.rules.map((item) => item.target.value)).toEqual(
+      expect.arrayContaining(["example.ir", "example.com"]),
+    );
+    expect(
+      first.rules.find((item) => item.target.value === "example.com")
+        ?.resolved_ips,
+    ).toEqual([]);
+    const moved = await mockApi.pinRoute(
+      "www.example.com",
+      "vpn",
+      first.revision,
+    );
+    expect(moved.rules.map((item) => item.target.value)).toEqual([
+      "example.ir",
+    ]);
+    expect(moved.vpn_rules[0]?.target.value).toBe("example.com");
+    await expect(
+      mockApi.testRoute("api.shop.example.com"),
+    ).resolves.toMatchObject({ outbound: "vpn", matched_rule: "example.com" });
+    await expect(mockApi.testRoute("notexample.com")).resolves.toMatchObject({
+      outbound: "vpn",
+      matched_rule: "MATCH",
+    });
+  });
+
+  it("keeps github.io tenants separate and routes curated businesses direct", async () => {
+    const pinned = await mockApi.addRule("user.github.io", 1);
+    expect(
+      pinned.rules.some((item) => item.target.value === "user.github.io"),
+    ).toBe(true);
+    await expect(mockApi.addRule("github.io", pinned.revision)).rejects.toThrow(
+      /public suffixes/i,
+    );
+    await expect(
+      mockApi.testRoute("www.technolife.com"),
+    ).resolves.toMatchObject({
+      outbound: "direct",
+      matched_rule: "technolife.com",
+    });
+    await expect(
+      mockApi.testRoute("selleracademy.technolife.com"),
+    ).resolves.toMatchObject({ outbound: "direct" });
+  });
+
   it("resyncs cloud rule counts from the BiFlow snapshot", async () => {
     const synced = await mockApi.syncCloudRules();
     expect(synced.source).toBe("devlifeX/BiFlow");

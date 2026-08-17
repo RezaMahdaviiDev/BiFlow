@@ -144,10 +144,36 @@ async function cutSelection(
 async function pasteInto(
   field: HTMLInputElement | HTMLTextAreaElement,
 ): Promise<void> {
+  const target = field;
+  if (!fieldIsEditable(target)) {
+    return;
+  }
+  const start = target.selectionStart ?? target.value.length;
+  const end = target.selectionEnd ?? target.value.length;
   const text = await navigator.clipboard.readText();
-  const start = field.selectionStart ?? field.value.length;
-  const end = field.selectionEnd ?? field.value.length;
-  replaceRange(field, start, end, text);
+  if (!fieldIsEditable(target)) {
+    return;
+  }
+  replaceRange(target, start, end, text);
+}
+
+function fieldIsEditable(
+  field: HTMLInputElement | HTMLTextAreaElement,
+): boolean {
+  return field.isConnected && !field.disabled && !field.readOnly;
+}
+
+function nativeValueSetter(
+  field: HTMLInputElement | HTMLTextAreaElement,
+): ((value: string) => void) | undefined {
+  const prototype =
+    field instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+  return descriptor?.set
+    ? (value: string) => descriptor.set?.call(field, value)
+    : undefined;
 }
 
 function replaceRange(
@@ -157,8 +183,18 @@ function replaceRange(
   insert: string,
 ): void {
   const next = field.value.slice(0, start) + insert + field.value.slice(end);
-  field.value = next;
-  field.dispatchEvent(new Event("input", { bubbles: true }));
+  const setValue = nativeValueSetter(field);
+  if (setValue) {
+    setValue(next);
+  } else {
+    field.value = next;
+  }
+  field.dispatchEvent(
+    new InputEvent("input", {
+      bubbles: true,
+      inputType: insert ? "insertFromPaste" : "deleteContentBackward",
+    }),
+  );
   const caret = start + insert.length;
   field.setSelectionRange(caret, caret);
 }

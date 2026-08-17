@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "source": "curated",
+  "verified_on": "2026-08-17",
+  "entries": [
+    {
+      "domain": "technolife.com",
+      "category": "retail",
+      "official_url": "https://www.technolife.com/",
+      "discovered_from": "https://tehranindex.com/sectors/ecommerce",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "azkivam.com",
+      "category": "lendtech",
+      "official_url": "https://azkivam.com/",
+      "discovered_from": "https://tehranindex.com/sectors/fintech",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "azkisarmayeh.com",
+      "category": "investment",
+      "official_url": "https://azkisarmayeh.com/",
+      "discovered_from": "https://tehranindex.com/sectors/fintech",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "nextpay.com",
+      "category": "payments",
+      "official_url": "https://www.nextpay.com/",
+      "discovered_from": "https://tehranindex.com/sectors/fintech",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "payping.io",
+      "category": "payments",
+      "official_url": "https://payping.io/",
+      "discovered_from": "https://tehranindex.com/sectors/fintech",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "tomanpay.com",
+      "category": "payments",
+      "official_url": "https://tomanpay.com/",
+      "discovered_from": "https://tehranindex.com/sectors/fintech",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "kifpool.me",
+      "category": "digital_assets",
+      "official_url": "https://kifpool.me/",
+      "discovered_from": "https://tehranindex.com/sectors/crypto",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "safarmarket.com",
+      "category": "travel",
+      "official_url": "https://safarmarket.com/",
+      "discovered_from": "https://tehranindex.com/sectors/ecommerce",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "arazcloud.com",
+      "category": "cloud",
+      "official_url": "https://arazcloud.com/",
+      "discovered_from": "https://tehranindex.com/sectors/cloud",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "excoino.com",
+      "category": "digital_assets",
+      "official_url": "https://excoino.com/",
+      "discovered_from": "https://tehranindex.com/sectors/crypto",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "hitobit.com",
+      "category": "digital_assets",
+      "official_url": "https://hitobit.com/fa",
+      "discovered_from": "https://tehranindex.com/sectors/crypto",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "karboom.io",
+      "category": "jobs",
+      "official_url": "https://karboom.io/",
+      "discovered_from": "https://tehranindex.com/sectors/ecommerce",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "ewano.app",
+      "category": "fintech",
+      "official_url": "https://ewano.app/",
+      "discovered_from": "https://tehranindex.com/sectors/fintech",
+      "verified_at": "2026-08-17",
+      "status": "active"
+    }
+  ]
+}

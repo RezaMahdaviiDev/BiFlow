@@ -705,6 +705,7 @@ impl PlatformBackend for WindowsBackend {
         let runtime_paths = RuntimePaths {
             private_networks: PathBuf::from("private.txt"),
             iran_domains: PathBuf::from("iran-domains.txt"),
+            iran_business_domains: PathBuf::from("iran-business-domains.txt"),
             iran_networks: PathBuf::from("iran-networks.txt"),
             custom_direct_domains: PathBuf::from("custom-direct-domains.txt"),
             custom_direct_ips: PathBuf::from("custom-direct-ips.txt"),
@@ -720,7 +721,12 @@ impl PlatformBackend for WindowsBackend {
         };
         let generated = generate_config(&config, Platform::Windows, &runtime_paths, &custom)
             .map_err(|error| CoreError::ConfigInvalid(error.to_string()))?;
-        for name in ["private.txt", "iran-domains.txt", "iran-networks.txt"] {
+        for name in [
+            "private.txt",
+            "iran-domains.txt",
+            "iran-networks.txt",
+            "iran-business-domains.txt",
+        ] {
             copy_rule_file(
                 &self.paths.resources_dir,
                 &self.paths.rules_cache_dir,
@@ -1047,11 +1053,8 @@ fn split_targets(rules: &[iran_split_rules::DirectRule]) -> (Vec<String>, Vec<St
     let mut ips = Vec::new();
     for rule in rules {
         match &rule.target {
-            DirectTarget::Domain(domain) => domains.push(domain.clone()),
+            DirectTarget::Domain(domain) => domains.push(format!("+.{domain}")),
             DirectTarget::Ip(address) => ips.push(host_cidr(*address)),
-        }
-        for address in &rule.resolved_ips {
-            ips.push(host_cidr(*address));
         }
     }
     domains.sort();
@@ -1108,7 +1111,12 @@ mod tests {
     fn paths(root: &std::path::Path) -> WindowsPaths {
         let resources = root.join("resources");
         fs::create_dir_all(&resources).expect("resources");
-        for name in ["private.txt", "iran-domains.txt", "iran-networks.txt"] {
+        for name in [
+            "private.txt",
+            "iran-domains.txt",
+            "iran-networks.txt",
+            "iran-business-domains.txt",
+        ] {
             fs::write(resources.join(name), "example\n").expect("fixture");
         }
         WindowsPaths {
@@ -1191,8 +1199,8 @@ mod tests {
             .map(|entry| entry.expect("entry").file_name())
             .collect::<std::collections::HashSet<_>>();
 
-        // config.yaml, three bundled providers, two custom-direct, two custom-vpn.
-        assert_eq!(names.len(), 8);
+        // config.yaml, four bundled providers, two custom-direct, two custom-vpn.
+        assert_eq!(names.len(), 9);
         assert!(names.contains(std::ffi::OsStr::new("custom-vpn-domains.txt")));
         assert!(names.contains(std::ffi::OsStr::new("custom-vpn-ips.txt")));
         assert!(names.contains(std::ffi::OsStr::new("config.yaml")));

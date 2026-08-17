@@ -1,4 +1,4 @@
 # Bundled rule snapshots are byte-verified (SHA-256). Do not normalize line endings.
 resources/rules/*.txt -text
-resources/rules/manifest.json -text
+resources/rules/*.json -text
 resources/rules/SNAPSHOT.md -text

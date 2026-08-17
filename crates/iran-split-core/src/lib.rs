@@ -134,6 +134,7 @@ pub enum LifecycleBusy {
     Pausing,
     Resuming,
     Reconciling,
+    ApplyingRules,
 }
 
 impl LifecycleBusy {
@@ -144,6 +145,7 @@ impl LifecycleBusy {
             Self::Disconnecting => OperationKind::Stop,
             Self::Pausing => OperationKind::Pause,
             Self::Resuming => OperationKind::Resume,
+            Self::ApplyingRules => OperationKind::ApplyRules,
         }
     }
 }
@@ -472,6 +474,7 @@ enum OperationKind {
     Stop,
     Pause,
     Resume,
+    ApplyRules,
 }
 
 impl OperationKind {
@@ -482,13 +485,14 @@ impl OperationKind {
             Self::Stop => LifecycleBusy::Disconnecting,
             Self::Pause => LifecycleBusy::Pausing,
             Self::Resume => LifecycleBusy::Resuming,
+            Self::ApplyRules => LifecycleBusy::ApplyingRules,
         }
     }
 
     const fn initial_stage(self) -> OperationStage {
         match self {
             Self::Reconcile => OperationStage::Recovering,
-            Self::Start | Self::Resume => OperationStage::Preparing,
+            Self::Start | Self::Resume | Self::ApplyRules => OperationStage::Preparing,
             Self::Stop | Self::Pause => OperationStage::StoppingCore,
         }
     }
@@ -709,6 +713,68 @@ impl<B: PlatformBackend> Engine<B> {
         self.accept(OperationKind::Resume).await
     }
 
+    /// Regenerates and reloads Mihomo rule providers while the stack is live.
+    ///
+    /// Stopped or paused stacks only need the persisted document; the next
+    /// start consumes that revision. A conflicting lifecycle lock is retryable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::OperationInProgress`] when Connect/Disconnect/Pause
+    /// is reserved, or a platform/readiness error when the live reload fails.
+    pub async fn apply_user_rules(&self) -> Result<(), CoreError> {
+        if !matches!(
+            self.snapshot().phase,
+            StackPhase::Running | StackPhase::Degraded
+        ) {
+            return Ok(());
+        }
+        self.reserve_lifecycle(LifecycleBusy::ApplyingRules).await?;
+        let cancel = CancellationToken::new();
+        let result = tokio::time::timeout(Duration::from_secs(5), self.run_apply_rules(&cancel))
+            .await
+            .unwrap_or(Err(CoreError::OperationTimeout));
+        self.release_lifecycle(LifecycleBusy::ApplyingRules).await;
+        result
+    }
+
+    async fn run_apply_rules(&self, cancel: &CancellationToken) -> Result<(), CoreError> {
+        info!(
+            event = "rules.apply_started",
+            section = "rules",
+            initiator = "engine",
+            cause = "user_pin",
+            trace_route = "tauri_command->engine->apply_user_rules",
+            "applying persisted pins to the live runtime generation"
+        );
+        let generation = self.backend.prepare_runtime().await?;
+        check_cancelled(cancel)?;
+        self.backend.validate_runtime(&generation).await?;
+        check_cancelled(cancel)?;
+        self.backend.start_core(&generation).await?;
+        check_cancelled(cancel)?;
+        let readiness = self.backend.check_readiness(cancel.clone()).await?;
+        if !readiness.controller_ready {
+            return Err(CoreError::ControllerTimeout);
+        }
+        if readiness.providers.total == 0 || readiness.providers.ready != readiness.providers.total
+        {
+            return Err(CoreError::ProviderNotReady);
+        }
+        self.update(|snapshot| {
+            snapshot.providers = readiness.providers;
+        });
+        info!(
+            event = "rules.apply_succeeded",
+            section = "rules",
+            initiator = "engine",
+            cause = "providers_ready",
+            trace_route = "engine->apply_user_rules->readiness",
+            "live rule providers are ready"
+        );
+        Ok(())
+    }
+
     /// Reserves the shared lifecycle lock before a long prepare step.
     ///
     /// # Errors
@@ -807,6 +873,7 @@ impl<B: PlatformBackend> Engine<B> {
             OperationKind::Reconcile | OperationKind::Start | OperationKind::Resume => {
                 self.timeouts.start
             }
+            OperationKind::ApplyRules => Duration::from_secs(5),
         }
     }
 
@@ -818,6 +885,7 @@ impl<B: PlatformBackend> Engine<B> {
                 OperationKind::Stop => self.run_stop(item.id).await,
                 OperationKind::Pause => self.run_pause(item.id).await,
                 OperationKind::Resume => self.run_resume(item.id, &item.cancel).await,
+                OperationKind::ApplyRules => self.run_apply_rules(&item.cancel).await,
             }
         };
         if let Ok(result) = tokio::time::timeout(self.timeout_for(item.kind), work).await {
@@ -1899,6 +1967,22 @@ mod tests {
         let engine = Engine::new(Arc::new(FakeBackend::default()), runtime.handle());
 
         assert_eq!(engine.snapshot().phase, StackPhase::Uninitialized);
+    }
+
+    #[tokio::test]
+    async fn apply_user_rules_is_a_no_op_until_the_stack_is_live() {
+        let backend = Arc::new(FakeBackend::default());
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.apply_user_rules().await.expect("stopped");
+        assert_eq!(backend.starts.load(Ordering::SeqCst), 0);
+        engine.start_stack().await.expect("start");
+        engine
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(2))
+            .await
+            .expect("running");
+        let starts = backend.starts.load(Ordering::SeqCst);
+        engine.apply_user_rules().await.expect("live apply");
+        assert_eq!(backend.starts.load(Ordering::SeqCst), starts + 1);
     }
 
     #[test]

@@ -318,7 +318,7 @@ describe("release artifact names", () => {
   it("pins bundled rule bytes so Windows checkout does not rewrite line endings", () => {
     const attributes = readFileSync(join(root, ".gitattributes"), "utf8");
     assert.match(attributes, /resources\/rules\/\*\.txt -text/);
-    assert.match(attributes, /resources\/rules\/manifest\.json -text/);
+    assert.match(attributes, /resources\/rules\/\*\.json -text/);
     const release = readFileSync(
       join(root, ".github/workflows/release.yml"),
       "utf8",

@@ -121,6 +121,10 @@ const resources = {
       updateFromCloud: "Update from cloud",
       syncing: "Syncing…",
       customRules: "Your extra DIRECT rules",
+      directRulesHelp:
+        "A domain pin covers that registrable root and every subdomain. Literal IPs stay exact. Changes apply to a live tunnel without restarting Hiddify.",
+      directRuleInput: "Domain or IP",
+      directRulePlaceholder: "example.com or 203.0.113.8",
       testFlow: "Test IP or domain",
       testFlowHelp: "See whether a host would go DIRECT or through the VPN.",
       testFlowPlaceholder: "digikala.com or 5.22.12.1",
@@ -284,6 +288,10 @@ const resources = {
       updateFromCloud: "به‌روزرسانی از ابر",
       syncing: "در حال همگام‌سازی…",
       customRules: "قوانین مستقیم اضافی شما",
+      directRulesHelp:
+        "سنجاق دامنه ریشهٔ ثبت‌پذیر و همهٔ زیردامنه‌ها را پوشش می‌دهد. آی‌پی تحت‌اللفظی دقیق می‌ماند. روی تونل زنده بدون راه‌اندازی مجدد هیدیفای اعمال می‌شود.",
+      directRuleInput: "دامنه یا آی‌پی",
+      directRulePlaceholder: "example.com یا 203.0.113.8",
       testFlow: "آزمایش آی‌پی یا دامنه",
       testFlowHelp: "ببینید میزبان مستقیم می‌رود یا از وی‌پی‌ان.",
       testFlowPlaceholder: "digikala.com یا 5.22.12.1",
