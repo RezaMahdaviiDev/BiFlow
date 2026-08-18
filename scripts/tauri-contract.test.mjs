@@ -102,6 +102,18 @@ describe("Tauri frontend contract", () => {
     assert.match(desktop, /generation_staging_dir/);
     assert.match(helper, /root\.join\("staging"\)/);
     assert.match(helper, /fn grant_users_modify/);
+    const windows = readFileSync(
+      join(root, "crates/iran-split-platform-win/src/lib.rs"),
+      "utf8",
+    );
+    // `#![cfg(windows)]` hides this crate from Linux `cargo test`. Scan the
+    // production half so a source-contract `!contains` cannot match itself.
+    const production = windows.split("mod tests {")[0];
+    assert.match(production, /\.generation_staging_dir/);
+    assert.doesNotMatch(
+      production,
+      /user_data_dir\.join\("runtime"\)\.join\("generations"\)/,
+    );
   });
 
   it("keeps a resizable main window with a 390x640 minimum", () => {
