@@ -26,6 +26,18 @@ function rustSources(directory) {
   return files;
 }
 
+function requiredPlatformBackendMethods(traitSource) {
+  return traitSource
+    .split("async fn ")
+    .slice(1)
+    .filter((chunk) => {
+      const semicolon = chunk.indexOf(";");
+      const brace = chunk.indexOf("{");
+      return semicolon !== -1 && (brace === -1 || semicolon < brace);
+    })
+    .map((chunk) => /^(\w+)/.exec(chunk)[1]);
+}
+
 describe("Tauri frontend contract", () => {
   it("registers every Rust command invoked by the production UI", () => {
     const frontend = readFileSync(
@@ -269,15 +281,7 @@ describe("Tauri frontend contract", () => {
     // A signature ending in `;` has no default body, so every implementor must
     // provide it. Methods with a default (`stop_user_proxy`,
     // `verify_not_intercepting`) are checked separately.
-    const required = trait[0]
-      .split("async fn ")
-      .slice(1)
-      .filter((chunk) => {
-        const semicolon = chunk.indexOf(";");
-        const brace = chunk.indexOf("{");
-        return semicolon !== -1 && (brace === -1 || semicolon < brace);
-      })
-      .map((chunk) => /^(\w+)/.exec(chunk)[1]);
+    const required = requiredPlatformBackendMethods(trait[0]);
     assert.ok(required.length > 8, "trait parse found too few methods");
 
     const impl = windows.match(
@@ -295,6 +299,28 @@ describe("Tauri frontend contract", () => {
     assert.match(impl[0], /async fn restore_hiddify_system_proxy\(/);
     // The pre-2.2.0 stub answered every call with one canned platform error.
     assert.doesNotMatch(windows, /fn unavailable<T>\(\)/);
+  });
+
+  it("implements every required PlatformBackend method on the CLI demo", () => {
+    const core = readFileSync(
+      join(root, "crates/iran-split-core/src/lib.rs"),
+      "utf8",
+    );
+    const cli = readFileSync(
+      join(root, "crates/iran-split-cli/src/main.rs"),
+      "utf8",
+    );
+    const trait = core.match(/pub trait PlatformBackend[\s\S]*?\n\}/);
+    assert.ok(trait, "PlatformBackend trait is missing");
+    const required = requiredPlatformBackendMethods(trait[0]);
+    const impl = cli.match(
+      /impl PlatformBackend for DemoBackend \{[\s\S]*?\n\}\n/,
+    );
+    assert.ok(impl, "DemoBackend does not implement PlatformBackend");
+    const missing = required.filter(
+      (name) => !new RegExp(`async fn ${name}\\(`).test(impl[0]),
+    );
+    assert.deepEqual(missing, [], "CLI DemoBackend is missing trait methods");
   });
 
   it("checks GitHub Releases from About and never polls in the background", () => {

@@ -41,4 +41,7 @@ must not write the OS proxy; Hiddify already does.
   Hiddify `shared_preferences.json` unless a later session proves that is the
   only fix.
 - Core FakeBackend tests cover pause-clears-without-stop, stop-clears,
-  resume-restores, and connect-does-not-set.
+  resume-restores, and connect-does-not-set. CLI `DemoBackend` no-ops both
+  methods; it has no OS proxy. A source contract must require those methods
+  on `DemoBackend` as well as the Windows backend, because Windows workspace
+  Clippy compiles `iran-split-cli` and a missing impl fails there first.

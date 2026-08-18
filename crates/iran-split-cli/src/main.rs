@@ -203,4 +203,12 @@ impl PlatformBackend for DemoBackend {
             warnings: vec![],
         })
     }
+
+    async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
+
+    async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
 }
