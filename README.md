@@ -28,6 +28,10 @@
 </p>
 
 <p align="center">
+  <img src="docs/screenshots/diagnostics.png" alt="Diagnostics with the live connections table grouped by domain, sortable columns, and route-switch actions" width="800" />
+</p>
+
+<p align="center">
   <img src="docs/screenshots/mobile.png" alt="BiFlow on a phone-sized window with bottom navigation" width="280" />
 </p>
 
@@ -38,8 +42,11 @@
 - **Split routing** — Iranian sites, Iranian IP ranges, and private/LAN traffic stay **DIRECT**. Everything else uses the Hiddify connection you already have.
 - **Connect, Pause, Resume, Disconnect** — One operation at a time. The active button shows the real stage (Start Hiddify, Start Mihomo, and so on) with an in-button progress fill.
 - **Basic and Advanced** — First launch opens Basic. Advanced adds component health, live traffic routes, and extra tools.
-- **Direct rules** — Pin hosts to DIRECT or VPN. Refresh the bundled Iran domain and IP lists from the BiFlow cloud snapshot.
+- **Direct rules** — Pin hosts to DIRECT or VPN in a sortable table with one-click route switching. Refresh the bundled Iran domain and IP lists from the BiFlow cloud snapshot.
+- **Live connections** — One row per domain with a connection count, resolved IPs, route, and matched rule. Sort any column and send a host to the opposite route without leaving the table.
 - **Diagnostics** — Test whether a host would go DIRECT or through the VPN, then move it. Export or clear the local `debug.log`. Fresh Hiddify start repairs a blank Hiddify window without touching subscriptions.
+- **DIRECT DNS presets** — Fake-ip by default; Shecan, Electro, Radar, Mokhaberat, or custom resolvers are one Settings choice away for DIRECT domains. DIRECT domains always resolve to their real addresses.
+- **Browser-friendly routing** — Clears a Hiddify-owned system proxy while connected so browsers actually use the split routing, and rejects VPN-bound QUIC so pages fall back to working TCP instead of hanging.
 - **Status bar** — Internet reachability, public IP, approximate country, and lifetime sent/received totals.
 - **In-app install** — Connect can install the privileged helper, Hiddify, and the bundled Mihomo build when they are missing.
 - **English and Persian** — Built-in UI languages, with a tray menu for Connect/Disconnect, Pause/Resume, and Quit.

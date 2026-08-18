@@ -51,6 +51,18 @@ test.describe("readme screenshots", () => {
       animations: "disabled",
     });
 
+    // Diagnostics with the grouped, sortable live-connections table.
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    const connections = page.getByTestId("live-connections");
+    await expect(connections).toBeVisible();
+    await expect(connections.getByText("digikala.ir")).toBeVisible();
+    await connections.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: join(screenshotDir, "diagnostics.png"),
+      animations: "disabled",
+    });
+
+    await page.getByRole("button", { name: "Dashboard" }).click();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(page.getByTestId("bottom-nav")).toBeVisible();
     await page.screenshot({
