@@ -14,7 +14,11 @@ export function SortHeader<K extends string>({
   onToggle: (key: K) => void;
 }) {
   const active = state.key === sortKey;
-  const Icon = active ? (state.dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  const Icon = active
+    ? state.dir === "asc"
+      ? ArrowUp
+      : ArrowDown
+    : ArrowUpDown;
   return (
     <th
       className="px-3 py-2 text-start font-medium"

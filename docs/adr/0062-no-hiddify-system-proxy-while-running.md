@@ -18,7 +18,7 @@ through the TUN and through Mihomo's mixed port, but timed out or failed TLS
 through the Hiddify proxy the desktop was configured to use.
 
 The engine only cleared the Hiddify system proxy on Stop and Pause, never on
-Start — and Resume actively *restored* it, re-breaking DIRECT domains after
+Start — and Resume actively _restored_ it, re-breaking DIRECT domains after
 every Pause → Resume cycle.
 
 ## Decision

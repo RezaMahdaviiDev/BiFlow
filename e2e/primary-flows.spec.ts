@@ -311,15 +311,15 @@ test.describe("primary BiFlow flows", () => {
       .click();
     await expect(page.getByText("www.rade.ir → VPN")).toBeVisible();
 
-    // The pin shows on the rules page with a VPN badge.
+    // The pin shows on the rules page as a table row with a VPN badge.
     await page.getByRole("button", { name: "Direct rules" }).click();
-    const pinned = page.getByRole("listitem").filter({
+    const pinned = page.getByRole("row").filter({
       has: page.getByText("rade.ir", { exact: true }),
     });
     await expect(pinned).toContainText("VPN");
 
     // Moving it back leaves the bundled list to decide again.
-    await pinned.getByRole("button", { name: /to direct/ }).click();
+    await pinned.getByTitle(/to direct/).click();
     await page.getByRole("button", { name: "Diagnostics" }).click();
     await page.getByLabel("Test IP or domain").fill("www.rade.ir");
     await page.getByRole("button", { name: "Test flow" }).click();
@@ -499,10 +499,18 @@ test.describe("primary BiFlow flows", () => {
     await page.getByRole("button", { name: "Diagnostics" }).click();
     const card = page.getByTestId("live-connections");
     await expect(card).toBeVisible();
-    await expect(card.getByText("digikala.ir")).toBeVisible();
-    await expect(card.getByRole("cell", { name: "DIRECT" })).toBeVisible();
-    await expect(card.getByText("openai.com")).toBeVisible();
-    await expect(card.getByRole("cell", { name: "VPN" })).toBeVisible();
+    // The actions column renders the opposite route as a button label, so
+    // assert the route badge inside each host's own row: the DIRECT row's
+    // only "DIRECT" cell is its badge (its action reads "VPN"), and vice
+    // versa for the VPN row.
+    const directRow = card.getByRole("row").filter({
+      has: page.getByText("digikala.ir"),
+    });
+    await expect(directRow.getByRole("cell", { name: "DIRECT" })).toBeVisible();
+    const vpnRow = card.getByRole("row").filter({
+      has: page.getByText("openai.com"),
+    });
+    await expect(vpnRow.getByRole("cell", { name: "VPN" })).toBeVisible();
   });
 
   test("blocks the document context menu", async ({ page }) => {
