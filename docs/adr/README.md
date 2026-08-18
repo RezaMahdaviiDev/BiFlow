@@ -67,3 +67,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0061](./0061-direct-domains-always-skip-fake-ip.md)     | DIRECT domains always skip fake-ip          | Accepted   |
 | [0062](./0062-no-hiddify-system-proxy-while-running.md)  | No Hiddify system proxy while running       | Accepted   |
 | [0063](./0063-reject-quic-toward-vpn.md)                 | Reject QUIC toward the VPN                  | Accepted   |
+| [0064](./0064-windows-machine-wide-helper-staging.md)    | Windows machine-wide helper staging         | Accepted   |

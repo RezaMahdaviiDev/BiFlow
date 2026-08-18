@@ -27,11 +27,11 @@ attempts across three sessions each failed instantly at `ensure_hiddify`.
   is synchronous, so the retry loop lives inside a timeout and retries only
   `ERROR_PIPE_BUSY`. A `NotFound` / `ConnectionRefused` / timeout on the pipe
   reports an uninstalled helper rather than an error banner.
-- Runtime generations stage into `<data>/runtime/generations/<id>` — the same
-  root the elevated installer records as `staging_dir` in `helper.toml`, so a
-  generation staged by the app is the one SYSTEM is allowed to publish.
-  `generate_config` is called with `Platform::Windows`, which is what sets
-  `strict-route`.
+- Runtime generations for packaged Windows stage into
+  `C:\ProgramData\iran-split\staging\<id>` — the same root the elevated
+  installer records as `staging_dir` in `helper.toml` (ADR 0064). Tests pass a
+  temp `generation_staging_dir`. `generate_config` is called with
+  `Platform::Windows`, which is what sets `strict-route`.
 - TUN state is read from Mihomo's own `/configs`, not from the adapter list.
   Enumerating adapters needs `GetAdaptersAddresses`, and this crate is under the
   workspace `unsafe_code = "forbid"`; Mihomo owns the Wintun adapter, so its

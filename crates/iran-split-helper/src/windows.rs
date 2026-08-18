@@ -17,6 +17,9 @@ use tracing::{info, warn};
 const PIPE_NAME: &str = r"\\.\pipe\iran-split-helper-v1";
 const INSTALL_ROOT: &str = r"C:\ProgramData\iran-split";
 const INSTALL_LOG: &str = r"C:\ProgramData\iran-split\install.log";
+/// Builtin\Users. Medium-integrity desktop processes can then write generations
+/// that the SYSTEM helper later publishes. `(OI)(CI)M` is modify, inherited.
+const USERS_MODIFY_ACE: &str = "*S-1-5-32-545:(OI)(CI)M";
 const TASK_NAME: &str = "BiFlowHelper";
 const PIPE_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const PIPE_READY_POLL: Duration = Duration::from_millis(100);
@@ -106,7 +109,7 @@ pub fn install(
 
 fn install_inner(
     mihomo_src: &Path,
-    staging_dir: &Path,
+    requested_staging_dir: &Path,
     tun_name: &str,
 ) -> Result<(), HelperServiceError> {
     let helper_src = std::env::current_exe()?;
@@ -115,9 +118,25 @@ fn install_inner(
     let helper_dest = bin.join("iran-split-helper.exe");
     let mihomo_dest = bin.join("mihomo.exe");
     let config_dest = root.join("helper.toml");
+    // NSIS perMachine `SetShellVarContext all` makes `$LOCALAPPDATA` expand to
+    // `C:\ProgramData`, and an elevated in-app Install can record an admin
+    // profile. The helper always stages beside `runtime`, never inside a user
+    // profile and never inside `runtime_dir` (those two must not nest).
+    let staging_dir = root.join("staging");
+    if requested_staging_dir != staging_dir {
+        warn!(
+            event = "helper.staging_dir_overridden",
+            section = "helper_install",
+            initiator = "elevated_installer",
+            cause = "machine_wide_staging",
+            trace_route = "elevated_helper->helper.toml",
+            "Windows helper staging is always ProgramData\\iran-split\\staging"
+        );
+    }
     fs::create_dir_all(&bin)?;
     fs::create_dir_all(root.join("runtime"))?;
-    fs::create_dir_all(staging_dir)?;
+    fs::create_dir_all(&staging_dir)?;
+    grant_users_modify(&staging_dir)?;
     stop_previous_helper();
     super::copy_file_unless_same(&helper_src, &helper_dest)?;
     super::copy_file_unless_same(mihomo_src, &mihomo_dest)?;
@@ -131,7 +150,7 @@ fn install_inner(
         authorized_uid: 0,
         authorized_gid: 0,
         socket_path: PathBuf::from(PIPE_NAME),
-        staging_dir: staging_dir.to_path_buf(),
+        staging_dir,
         runtime_dir: root.join("runtime"),
         mihomo_binary: mihomo_dest,
         mihomo_sha256,
@@ -160,6 +179,37 @@ fn install_inner(
         "windows helper scheduled task installed"
     );
     Ok(())
+}
+
+/// Lets the unelevated desktop write generation files that SYSTEM later copies
+/// into `runtime_dir`. `icacls /grant` adds Builtin\Users modify without
+/// replacing SYSTEM or Administrators inherited from `ProgramData`.
+fn grant_users_modify(path: &Path) -> Result<(), HelperServiceError> {
+    let output = Command::new("icacls")
+        .arg(path)
+        .arg("/grant")
+        .arg(USERS_MODIFY_ACE)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    if output.status.success() {
+        info!(
+            event = "helper.staging_acl_granted",
+            section = "helper_install",
+            initiator = "elevated_installer",
+            cause = "users_modify",
+            trace_route = "elevated_helper->staging_acl",
+            "Users can write helper staging generations"
+        );
+        return Ok(());
+    }
+    let mut detail = super::single_line(&super::decode_console_output(&output.stderr));
+    if detail.is_empty() {
+        detail = super::single_line(&super::decode_console_output(&output.stdout));
+    }
+    Err(HelperServiceError::Install(format!(
+        "could not grant Users modify on the helper staging directory: {}",
+        detail.chars().take(300).collect::<String>()
+    )))
 }
 
 fn register_and_start_task(helper: &Path, config: &Path) -> Result<(), HelperServiceError> {

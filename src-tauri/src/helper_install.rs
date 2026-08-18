@@ -37,6 +37,11 @@ const UAC_CANCELLED: i32 = 1223;
 pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(target_os = "windows")]
 const WINDOWS_INSTALL_LOG: &str = r"C:\ProgramData\iran-split\install.log";
+/// Machine-wide generation root. NSIS `perMachine` `$LOCALAPPDATA` is
+/// `C:\ProgramData`, not the user's profile, so a user-profile staging path
+/// recorded at install time never matches what the desktop writes later.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const WINDOWS_HELPER_STAGING: &str = r"C:\ProgramData\iran-split\staging";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallHelperResult {
@@ -66,10 +71,6 @@ pub async fn install_helper<R: Runtime>(app: &AppHandle<R>) -> Result<InstallHel
         .map_err(|error| error.to_string())?
         .mihomo
         .tun_name;
-    let staging_dir = services.paths.data.join("runtime").join("generations");
-    fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
-    #[cfg(target_os = "linux")]
-    let payload_dir = services.paths.data.join("runtime").join("helper-install");
     info!(
         event = "helper.install_started",
         section = "helper_install",
@@ -79,19 +80,27 @@ pub async fn install_helper<R: Runtime>(app: &AppHandle<R>) -> Result<InstallHel
         "privileged helper installation requested"
     );
     #[cfg(target_os = "linux")]
-    install_linux(
-        &resource_root,
-        &exe_dir,
-        &payload_dir,
-        &staging_dir,
-        &tun_name,
-    )
-    .await?;
+    {
+        let staging_dir = services.paths.data.join("runtime").join("generations");
+        fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
+        let payload_dir = services.paths.data.join("runtime").join("helper-install");
+        install_linux(
+            &resource_root,
+            &exe_dir,
+            &payload_dir,
+            &staging_dir,
+            &tun_name,
+        )
+        .await?;
+    }
     #[cfg(target_os = "windows")]
-    install_windows(&resource_root, &exe_dir, &staging_dir, &tun_name).await?;
+    {
+        let staging_dir = PathBuf::from(WINDOWS_HELPER_STAGING);
+        install_windows(&resource_root, &exe_dir, &staging_dir, &tun_name).await?;
+    }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
-        let _ = (resource_root, exe_dir, staging_dir, tun_name);
+        let _ = (resource_root, exe_dir, tun_name);
         return Err("helper installation is not supported on this platform".into());
     }
     wait_for_helper(app).await?;
@@ -825,11 +834,17 @@ mod tests {
     }
 
     #[test]
-    fn nsis_hook_stages_into_localappdata_generations() {
+    fn nsis_hook_stages_into_programdata_iran_split() {
         let hook = include_str!("../../packaging/windows/installer-hooks.nsh");
-        assert!(hook.contains(r"$LOCALAPPDATA\biflow\runtime\generations"));
-        assert!(!hook.contains(r"$PROGRAMDATA\iran-split\staging"));
+        assert!(hook.contains(r"$PROGRAMDATA\iran-split\staging"));
+        assert_eq!(
+            super::WINDOWS_HELPER_STAGING,
+            r"C:\ProgramData\iran-split\staging"
+        );
+        assert!(!hook.contains(r"$LOCALAPPDATA\biflow\runtime\generations"));
         assert!(!hook.contains("$COMMONPROGRAMDATA"));
+        let source = include_str!("helper_install.rs");
+        assert!(source.contains("PathBuf::from(WINDOWS_HELPER_STAGING)"));
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]

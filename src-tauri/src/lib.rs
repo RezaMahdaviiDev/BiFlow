@@ -2191,8 +2191,9 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
     #[cfg(target_os = "windows")]
     let backend = {
         let (pipe_name, system_runtime_dir) = windows_helper_paths();
-        // The helper installer records this same staging root in helper.toml,
-        // so a generation staged here is the one SYSTEM is allowed to publish.
+        // Packaged Connect stages here, and the elevated installer records the
+        // same root in helper.toml, so SYSTEM can publish the generation.
+        let generation_staging_dir = PathBuf::from(helper_install::WINDOWS_HELPER_STAGING);
         let mihomo_binary = deps::first_existing(&deps::mihomo_candidates(&paths.data))
             .unwrap_or_else(windows_programdata_mihomo);
         info!(
@@ -2203,6 +2204,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
             trace_route = "application_process->create_services->windows_backend",
             pipe_name = pipe_name.as_str(),
             runtime_path = %system_runtime_dir.display(),
+            staging_path = %generation_staging_dir.display(),
             mihomo_binary = %mihomo_binary.display(),
             "Windows helper paths selected"
         );
@@ -2212,6 +2214,7 @@ fn create_services(app: &AppHandle) -> Result<AppServices, String> {
                 pipe_name,
                 user_data_dir: paths.data.clone(),
                 system_runtime_dir,
+                generation_staging_dir,
                 resources_dir: bundled_rules.clone(),
                 rules_cache_dir: rules_cache.clone(),
                 mihomo_binary,
