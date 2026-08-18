@@ -55,3 +55,9 @@ staging ACL. Connect then stages where the helper already looks. A leftover
 4.2 helper that still points at `C:\ProgramData\biflow\runtime\generations`
 starts working only after that reinstall, because the 4.2 binary cannot see
 the new directory.
+
+A source contract must not `include_str!` the whole crate and then
+`!contains` a contiguous production snippet: that assertion matches itself.
+Scan the production half before `mod tests {`, and keep the same check in
+`scripts/tauri-contract.test.mjs` so Linux CI covers the `#![cfg(windows)]`
+crate.

@@ -1164,10 +1164,23 @@ mod tests {
 
     #[test]
     fn packaged_connect_stages_into_the_helper_generation_root() {
-        let source = include_str!("lib.rs");
-        assert!(source.contains("generation_staging_dir"));
-        assert!(source.contains(".generation_staging_dir"));
-        assert!(!source.contains(r#"user_data_dir.join("runtime").join("generations")"#));
+        let production = include_str!("lib.rs")
+            .split("mod tests {")
+            .next()
+            .expect("production source");
+        assert!(production.contains("generation_staging_dir"));
+        assert!(production.contains(".generation_staging_dir"));
+        // Split the needle so a whole-file `include_str!` cannot match this
+        // assertion. `#![cfg(windows)]` means Linux CI never runs this test.
+        let forbidden = [
+            "user_data_dir.join(",
+            r#""runtime""#,
+            ").join(",
+            r#""generations""#,
+            ")",
+        ]
+        .concat();
+        assert!(!production.contains(&forbidden));
     }
 
     #[test]
