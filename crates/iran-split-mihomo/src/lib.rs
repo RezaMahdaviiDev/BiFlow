@@ -212,24 +212,31 @@ pub fn generate_config(
         "RULE-SET,iran-domains,DIRECT".into(),
         "RULE-SET,iran-business-domains,DIRECT".into(),
         "RULE-SET,iran-networks,DIRECT,no-resolve".into(),
+        // QUIC through the Hiddify egress blackholes (packets go out, nothing
+        // returns), so browsers hang on HTTP/3 instead of falling back to
+        // TCP. Reject UDP 443 for VPN-bound traffic only: every DIRECT source
+        // sits above this line and keeps QUIC (ADR 0063).
+        "AND,((NETWORK,udp),(DST-PORT,443)),REJECT".into(),
         "MATCH,VPN".into(),
     ]);
 
     let direct_dns = app.mihomo.direct_dns_resolvers();
+    // `apply_direct_dns` only decides whether to pin DIRECT domains to an
+    // Iranian resolver (`nameserver-policy`/`direct-nameserver`). It must NOT
+    // gate `fake-ip-filter`: DIRECT domains have to skip fake-ip regardless of
+    // the resolver, otherwise the 198.18.0.0/15 fake IP collides with
+    // `private.txt` and the browser never reaches the real address. See
+    // ADR 0058 (witness: console.kavenegar.com) and ADR 0061.
     let apply_direct_dns =
         app.mihomo.direct_dns_preset.applies_direct_policy() && !direct_dns.is_empty();
-    let mut fake_ip_filter = vec![
+    let fake_ip_filter = vec![
         "+.lan".into(),
         "+.local".into(),
         "localhost.ptlogin2.qq.com".into(),
+        "rule-set:custom-direct-domains".into(),
+        "rule-set:iran-domains".into(),
+        "rule-set:iran-business-domains".into(),
     ];
-    if apply_direct_dns {
-        fake_ip_filter.extend([
-            "rule-set:custom-direct-domains".into(),
-            "rule-set:iran-domains".into(),
-            "rule-set:iran-business-domains".into(),
-        ]);
-    }
     let document = MihomoConfigDocument {
         mixed_port: app.mihomo.mixed_port,
         allow_lan: false,
@@ -936,6 +943,18 @@ mod tests {
             .yaml
             .contains("PROCESS-NAME,iran-split-desk,DIRECT"));
         assert!(generated.yaml.contains("MATCH,VPN"));
+        // QUIC reject must protect only VPN-bound traffic: after every DIRECT
+        // rule, immediately before MATCH (ADR 0063)
+        let quic_reject = generated
+            .yaml
+            .find("AND,((NETWORK,udp),(DST-PORT,443)),REJECT")
+            .expect("QUIC reject rule");
+        let iran_networks = generated
+            .yaml
+            .find("RULE-SET,iran-networks,DIRECT")
+            .expect("iran-networks rule");
+        let match_vpn = generated.yaml.find("MATCH,VPN").expect("match rule");
+        assert!(iran_networks < quic_reject && quic_reject < match_vpn);
         assert!(generated.yaml.contains("find-process-mode: always"));
         assert!(generated.yaml.contains("ipv6: true"));
         assert!(!generated.yaml.contains("dns-query#VPN"));
@@ -947,16 +966,25 @@ mod tests {
         let parsed: serde_yaml::Value =
             serde_yaml::from_str(&generated.yaml).expect("generated yaml");
         let dns = parsed.get("dns").expect("dns");
+        // fake-ip default keeps Cloudflare DoH: no Iranian resolver policy...
         assert!(dns.get("nameserver-policy").is_none());
         assert!(dns.get("direct-nameserver").is_none());
+        // ...but DIRECT domains must still skip fake-ip so the 198.18/15 fake
+        // IP never collides with private.txt (ADR 0058 / ADR 0061).
         let filter = dns
             .get("fake-ip-filter")
             .and_then(serde_yaml::Value::as_sequence)
             .expect("fake-ip-filter");
-        assert!(!filter.iter().any(|item| {
-            item.as_str() == Some("rule-set:iran-domains")
-                || item.as_str() == Some("rule-set:custom-direct-domains")
-        }));
+        for key in [
+            "rule-set:custom-direct-domains",
+            "rule-set:iran-domains",
+            "rule-set:iran-business-domains",
+        ] {
+            assert!(
+                filter.iter().any(|item| item.as_str() == Some(key)),
+                "fake-ip-filter missing {key}"
+            );
+        }
         assert!(!generated.yaml.contains("178.22.122.100"));
         assert!(!generated.yaml.contains("/runtime/"));
         assert_eq!(generated.sha256.len(), 64);
@@ -1008,6 +1036,45 @@ mod tests {
             "rule-set:iran-business-domains",
         ] {
             assert!(policy.get(key).is_some(), "DIRECT DNS policy missing {key}");
+        }
+    }
+
+    #[test]
+    fn fake_ip_default_still_excludes_direct_domains_from_fake_ip() {
+        // Regression for ADR 0061: the fake_ip default must not gate
+        // fake-ip-filter. Iranian/custom DIRECT domains have to resolve to a
+        // real address (witness: console.kavenegar.com, iran.ir), even though
+        // this preset keeps Cloudflare DoH and emits no nameserver-policy.
+        let app = AppConfig::default();
+        assert_eq!(
+            app.mihomo.direct_dns_preset,
+            iran_split_config::DirectDnsPreset::FakeIp
+        );
+        let generated = generate_config(
+            &app,
+            Platform::Linux,
+            &paths(),
+            &DirectRulesDocument::default(),
+        )
+        .expect("config");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&generated.yaml).expect("generated yaml");
+        let dns = parsed.get("dns").expect("dns");
+        assert!(dns.get("nameserver-policy").is_none());
+        assert!(dns.get("direct-nameserver").is_none());
+        let filter = dns
+            .get("fake-ip-filter")
+            .and_then(serde_yaml::Value::as_sequence)
+            .expect("fake-ip-filter");
+        for key in [
+            "rule-set:custom-direct-domains",
+            "rule-set:iran-domains",
+            "rule-set:iran-business-domains",
+        ] {
+            assert!(
+                filter.iter().any(|item| item.as_str() == Some(key)),
+                "fake-ip-filter missing {key}"
+            );
         }
     }
 

@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (amends [0058](./0058-direct-domain-nameserver-policy.md) and
-[0059](./0059-user-selected-direct-dns.md))
+[0059](./0059-user-selected-direct-dns.md); the `fake-ip-filter` change here is
+superseded by [0061](./0061-direct-domains-always-skip-fake-ip.md))
 
 ## Context
 
@@ -14,8 +15,9 @@ fix became the regression.
 ## Decision
 
 - Default `direct_dns_preset` is `fake_ip`: Mihomo fake-ip plus Cloudflare DoH.
-  Do not emit `nameserver-policy`, `direct-nameserver`, or DIRECT rule-sets in
-  `fake-ip-filter`.
+  Do not emit `nameserver-policy` or `direct-nameserver`. (ADR 0061 overrides
+  the original "no DIRECT rule-sets in `fake-ip-filter`" clause: those rule-sets
+  are always emitted so DIRECT domains skip fake-ip.)
 - Shecan, Electro, Radar, Mokhaberat, and Custom stay in Settings as opt-in.
   They still apply ADR 0058 policy only when selected.
 - Schema 2 rewrites a stored `shecan` value from 3.9.0–3.9.1 (the implicit

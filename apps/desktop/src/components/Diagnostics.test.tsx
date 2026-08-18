@@ -270,7 +270,18 @@ describe("Diagnostics", () => {
     ).toBeVisible();
     expect(await screen.findByText("digikala.ir")).toBeVisible();
     expect(screen.getByText("openai.com")).toBeVisible();
-    expect(screen.getByRole("cell", { name: "DIRECT" })).toBeVisible();
-    expect(screen.getByRole("cell", { name: "VPN" })).toBeVisible();
+    // Route badges; the actions column also renders DIRECT/VPN as the
+    // switch-route button label, so scope to the badge spans.
+    const direct = screen
+      .getAllByRole("cell", { name: "DIRECT" })
+      .filter((cell) => cell.querySelector("span"));
+    const vpn = screen
+      .getAllByRole("cell", { name: "VPN" })
+      .filter((cell) => cell.querySelector("span"));
+    expect(direct).toHaveLength(1);
+    expect(vpn).toHaveLength(1);
+    // Each row offers a button that moves the host to the opposite route.
+    expect(screen.getByTitle("Add digikala.ir to VPN")).toBeVisible();
+    expect(screen.getByTitle("Add openai.com to direct")).toBeVisible();
   });
 });

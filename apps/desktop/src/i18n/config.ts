@@ -149,6 +149,9 @@ const resources = {
       liveConnectionsEmpty:
         "No active connections yet. Browse a site, then watch this list.",
       liveConnectionsHost: "Host",
+      liveConnectionsCount: "Conns",
+      tableActions: "Actions",
+      ruleKind: "Type",
       liveConnectionsIp: "IP",
       liveConnectionsOutbound: "Route",
       liveConnectionsRule: "Matched rule",
@@ -340,6 +343,9 @@ const resources = {
       liveConnectionsEmpty:
         "هنوز اتصالی نیست. یک سایت باز کنید و این فهرست را ببینید.",
       liveConnectionsHost: "میزبان",
+      liveConnectionsCount: "تعداد",
+      tableActions: "عملیات",
+      ruleKind: "نوع",
       liveConnectionsIp: "آی‌پی",
       liveConnectionsOutbound: "مسیر",
       liveConnectionsRule: "قانون منطبق",

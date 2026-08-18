@@ -204,8 +204,8 @@ impl PlatformBackend for DemoBackend {
         })
     }
 
-    async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError> {
-        Ok(())
+    async fn clear_hiddify_system_proxy(&self) -> Result<bool, CoreError> {
+        Ok(false)
     }
 
     async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError> {

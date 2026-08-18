@@ -1,4 +1,5 @@
 import {
+  ArrowLeftRight,
   CloudDownload,
   LoaderCircle,
   Minus,
@@ -11,8 +12,27 @@ import {
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { desktop } from "../api/desktop";
-import type { DirectRulesDocument, RouteTestResult } from "../api/models";
+import type {
+  DirectRule,
+  DirectRulesDocument,
+  RouteTestResult,
+} from "../api/models";
+import type { SortState } from "../lib/tableSort";
+import { sortRows, toggleSort } from "../lib/tableSort";
 import { useAppStore } from "../store/app";
+import { SortHeader } from "./SortHeader";
+
+type PinnedRow = { rule: DirectRule; outbound: "direct" | "vpn" };
+type PinnedSortKey = "target" | "kind" | "outbound";
+
+const PINNED_SORT_ACCESSORS: Record<
+  PinnedSortKey,
+  (row: PinnedRow) => string | number
+> = {
+  target: (row) => row.rule.target.value,
+  kind: (row) => row.rule.target.kind,
+  outbound: (row) => row.outbound,
+};
 
 export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   const { t } = useTranslation();
@@ -29,13 +49,18 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   const [search, setSearch] = useState("");
   const [route, setRoute] = useState<RouteTestResult | null>(null);
   const [testing, setTesting] = useState(false);
+  const [sort, setSort] = useState<SortState<PinnedSortKey>>({
+    key: "target",
+    dir: "asc",
+  });
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return [
+    const rows: PinnedRow[] = [
       ...rules.rules.map((rule) => ({ rule, outbound: "direct" as const })),
       ...rules.vpn_rules.map((rule) => ({ rule, outbound: "vpn" as const })),
     ].filter(({ rule }) => rule.target.value.includes(needle));
-  }, [rules.rules, rules.vpn_rules, search]);
+    return sortRows(rows, sort, PINNED_SORT_ACCESSORS);
+  }, [rules.rules, rules.vpn_rules, search, sort]);
   const synced = cloudRules?.last_synced_at
     ? new Date(cloudRules.last_synced_at).toLocaleString()
     : t("neverSynced");
@@ -156,82 +181,110 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
             No matching direct rules.
           </p>
         ) : (
-          <ul className="divide-y divide-ink/10">
-            {filtered.map(({ rule, outbound }) => (
-              <li
-                key={`${outbound}:${rule.target.kind}:${rule.target.value}`}
-                className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
-              >
-                <div className="min-w-0">
-                  <p className="flex items-center gap-2 truncate font-semibold">
-                    <span className="truncate">{rule.target.value}</span>
-                    <span
-                      className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold ${
-                        outbound === "vpn"
-                          ? "bg-brand/10 text-brand"
-                          : "bg-success/10 text-success"
-                      }`}
-                    >
-                      {outbound === "vpn" ? t("vpn") : t("direct")}
-                    </span>
-                  </p>
-                  <p className="mt-1 truncate text-sm text-muted">
-                    {rule.target.kind.toUpperCase()} ·{" "}
-                    {rule.resolved_ips.join(", ") || "No resolved IP"}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={actionPending}
-                    onClick={() =>
-                      void pinRoute(
-                        rule.target.value,
-                        outbound === "vpn" ? "direct" : "vpn",
-                      ).catch(() => undefined)
-                    }
-                    className="rounded-lg border border-ink/15 p-2 text-muted hover:text-brand"
-                    title={
-                      outbound === "vpn"
-                        ? t("moveToDirect", { target: rule.target.value })
-                        : t("moveToVpn", { target: rule.target.value })
-                    }
-                    aria-label={
-                      outbound === "vpn"
-                        ? t("moveToDirect", { target: rule.target.value })
-                        : t("moveToVpn", { target: rule.target.value })
-                    }
+          <div className="overflow-x-auto rounded-2xl">
+            <table className="w-full min-w-[36rem] text-start text-sm">
+              <thead>
+                <tr className="bg-canvas text-muted">
+                  <SortHeader
+                    label={t("liveConnectionsHost")}
+                    sortKey="target"
+                    state={sort}
+                    onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
+                  />
+                  <SortHeader
+                    label={t("ruleKind")}
+                    sortKey="kind"
+                    state={sort}
+                    onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
+                  />
+                  <SortHeader
+                    label={t("liveConnectionsOutbound")}
+                    sortKey="outbound"
+                    state={sort}
+                    onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
+                  />
+                  <th className="px-3 py-2 text-start font-medium">
+                    {t("liveConnectionsIp")}
+                  </th>
+                  <th className="px-3 py-2 text-start font-medium">
+                    {t("tableActions")}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink/10">
+                {filtered.map(({ rule, outbound }) => (
+                  <tr
+                    key={`${outbound}:${rule.target.kind}:${rule.target.value}`}
+                    className="hover:bg-canvas/60"
                   >
-                    {outbound === "vpn" ? (
-                      <Minus size={18} aria-hidden />
-                    ) : (
-                      <Plus size={18} aria-hidden />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={testing}
-                    onClick={() => void test(rule.target.value)}
-                    className="rounded-lg border border-ink/15 p-2 text-muted hover:text-brand"
-                    title={`Test route for ${rule.target.value}`}
-                    aria-label={`Test route for ${rule.target.value}`}
-                  >
-                    <Route size={18} aria-hidden />
-                  </button>
-                  <button
-                    type="button"
-                    disabled={actionPending}
-                    onClick={() => void removeRule(rule.target.value)}
-                    className="rounded-lg border border-ink/15 p-2 text-muted hover:text-danger"
-                    title={`Remove ${rule.target.value}`}
-                    aria-label={`Remove ${rule.target.value}`}
-                  >
-                    <Trash2 size={18} aria-hidden />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
+                    <td className="px-3 py-2 font-medium break-all">
+                      {rule.target.value}
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-muted">
+                      {rule.target.kind.toUpperCase()}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                          outbound === "vpn"
+                            ? "bg-brand/10 text-brand"
+                            : "bg-success/10 text-success"
+                        }`}
+                      >
+                        {outbound === "vpn" ? t("vpn") : t("direct")}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-muted break-all">
+                      {rule.resolved_ips.join(", ") || "—"}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          disabled={actionPending}
+                          onClick={() =>
+                            void pinRoute(
+                              rule.target.value,
+                              outbound === "vpn" ? "direct" : "vpn",
+                            ).catch(() => undefined)
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-ink/15 px-2 py-1 text-xs font-semibold text-muted hover:text-brand disabled:opacity-50"
+                          title={
+                            outbound === "vpn"
+                              ? t("moveToDirect", { target: rule.target.value })
+                              : t("moveToVpn", { target: rule.target.value })
+                          }
+                        >
+                          <ArrowLeftRight size={14} aria-hidden />
+                          {outbound === "vpn" ? t("direct") : t("vpn")}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={testing}
+                          onClick={() => void test(rule.target.value)}
+                          className="rounded-lg border border-ink/15 p-1.5 text-muted hover:text-brand"
+                          title={`Test route for ${rule.target.value}`}
+                          aria-label={`Test route for ${rule.target.value}`}
+                        >
+                          <Route size={16} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actionPending}
+                          onClick={() => void removeRule(rule.target.value)}
+                          className="rounded-lg border border-ink/15 p-1.5 text-muted hover:text-danger"
+                          title={`Remove ${rule.target.value}`}
+                          aria-label={`Remove ${rule.target.value}`}
+                        >
+                          <Trash2 size={16} aria-hidden />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

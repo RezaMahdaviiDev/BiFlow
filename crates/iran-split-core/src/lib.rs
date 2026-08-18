@@ -449,7 +449,12 @@ pub trait PlatformBackend: Send + Sync + 'static {
     async fn stop_user_proxy(&self) -> Result<(), CoreError> {
         Ok(())
     }
-    async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError>;
+    /// Clears the desktop system proxy when it points at Hiddify.
+    ///
+    /// Returns `true` when a Hiddify proxy was found and cleared. A system
+    /// proxy at Hiddify sends browser traffic straight into the tunnel over
+    /// loopback, bypassing the TUN split routing, so DIRECT domains break.
+    async fn clear_hiddify_system_proxy(&self) -> Result<bool, CoreError>;
     async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError>;
     async fn core_process(&self) -> Result<ProcessStatus, CoreError>;
     async fn tun_status(&self) -> Result<TunStatus, CoreError>;
@@ -605,6 +610,34 @@ impl<B: PlatformBackend> Engine<B> {
         );
         let health = self.backend.runtime_health().await;
         self.update(|snapshot| apply_health(snapshot, health));
+        // Hiddify re-asserts the desktop system proxy whenever it reconnects.
+        // While the stack is up that proxy bypasses the TUN split routing and
+        // silently breaks DIRECT domains, so keep enforcing its removal and
+        // leave an evidence trail when it happens.
+        if matches!(
+            self.snapshot().phase,
+            StackPhase::Running | StackPhase::Degraded
+        ) {
+            match self.backend.clear_hiddify_system_proxy().await {
+                Ok(true) => warn!(
+                    event = "system_proxy.hijack_cleared",
+                    section = "system_proxy",
+                    initiator = "engine",
+                    cause = "hiddify_reasserted_system_proxy",
+                    trace_route = "engine->platform_backend->clear_hiddify_system_proxy",
+                    "system proxy pointed at Hiddify while running; cleared it so DIRECT domains keep working"
+                ),
+                Ok(false) => {}
+                Err(cause) => info!(
+                    event = "system_proxy.enforce_failed",
+                    section = "system_proxy",
+                    initiator = "engine",
+                    cause = %cause,
+                    trace_route = "engine->platform_backend->clear_hiddify_system_proxy",
+                    "could not verify the desktop system proxy during health refresh"
+                ),
+            }
+        }
         info!(
             event = "health.refresh_completed",
             section = "runtime_health",
@@ -1167,6 +1200,32 @@ impl<B: PlatformBackend> Engine<B> {
             return Err(CoreError::ProviderNotReady);
         }
         let tun = self.confirm_core_and_tun(cancel).await?;
+        // Hiddify sets the desktop system proxy to itself when it starts.
+        // While the stack runs, that proxy short-circuits browsers straight
+        // into the tunnel over loopback (TUN never sees the traffic), so
+        // DIRECT domains break. Clear it once the stack is up; the health
+        // refresh keeps enforcing it afterwards.
+        match self.backend.clear_hiddify_system_proxy().await {
+            Ok(true) => info!(
+                event = "system_proxy.cleared_on_start",
+                section = "system_proxy",
+                initiator = "start_steps",
+                cause = "hiddify_endpoint",
+                trace_id = %operation_id,
+                trace_route = "engine_operation->platform_backend->clear_hiddify_system_proxy",
+                "cleared a Hiddify system proxy so browsers use the TUN split routing"
+            ),
+            Ok(false) => {}
+            Err(cause) => warn!(
+                event = "operation.start_clear_proxy_failed",
+                section = "engine",
+                initiator = "start_steps",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->platform_backend->clear_hiddify_system_proxy",
+                "start continued after system proxy clear failure"
+            ),
+        }
         self.update(|snapshot| {
             snapshot.phase = StackPhase::Running;
             snapshot.operation_id = Some(operation_id);
@@ -1343,17 +1402,10 @@ impl<B: PlatformBackend> Engine<B> {
             self.set_paused(health);
             return Err(error);
         }
-        if let Err(cause) = self.backend.restore_hiddify_system_proxy().await {
-            warn!(
-                event = "operation.resume_restore_proxy_failed",
-                section = "engine",
-                initiator = "run_resume",
-                cause = %cause,
-                trace_id = %operation_id,
-                trace_route = "engine_operation->platform_backend->restore_hiddify_system_proxy",
-                "resume succeeded without restoring the previous system proxy"
-            );
-        }
+        // Deliberately no restore_hiddify_system_proxy here: the snapshot is
+        // only ever a Hiddify endpoint, and re-pointing the system proxy at
+        // Hiddify while the TUN runs bypasses the split routing (the bug that
+        // broke DIRECT domains after every Pause -> Resume).
         Ok(())
     }
 
@@ -1631,9 +1683,9 @@ mod tests {
             Ok(())
         }
 
-        async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+        async fn clear_hiddify_system_proxy(&self) -> Result<bool, CoreError> {
             self.proxy_clears.fetch_add(1, Ordering::SeqCst);
-            Ok(())
+            Ok(false)
         }
 
         async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError> {
@@ -1707,7 +1759,8 @@ mod tests {
         assert_eq!(engine.snapshot().hiddify.phase, ComponentPhase::Running);
         assert_eq!(backend.cleanups.load(Ordering::SeqCst), 1);
         assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 0);
-        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
+        // one clear when start completed, one during pause
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 2);
         assert!(
             engine
                 .pause_stack()
@@ -1738,8 +1791,11 @@ mod tests {
             .await
             .expect("running again");
         assert!(backend.tun.load(Ordering::SeqCst));
-        assert_eq!(backend.proxy_restores.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
+        // resume must never restore a Hiddify system proxy: it would bypass
+        // the TUN split routing and break DIRECT domains
+        assert_eq!(backend.proxy_restores.load(Ordering::SeqCst), 0);
+        // start, pause, and the resume's start steps each clear once
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
@@ -1790,7 +1846,8 @@ mod tests {
             .await
             .expect("running");
         assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
-        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 0);
+        // a completed start clears any Hiddify system proxy exactly once
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
         assert_eq!(backend.proxy_restores.load(Ordering::SeqCst), 0);
         assert!(
             engine
@@ -1806,7 +1863,8 @@ mod tests {
             .await
             .expect("stopped");
         assert!(!backend.tun.load(Ordering::SeqCst));
-        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
+        // one clear when start completed, one during stop
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 2);
         assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 1);
         assert!(
             engine
