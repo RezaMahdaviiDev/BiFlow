@@ -12,7 +12,8 @@ const resources = {
       settings: "Settings",
       settingsDns: {
         label: "DIRECT DNS",
-        help: "Used for Iranian and pinned DIRECT domains. Pause then Connect to apply a DNS change.",
+        help: "Default is Mihomo fake-ip. Pick an Iranian DNS only if a DIRECT site fails to open. Pause then Connect to apply.",
+        fake_ip: "Fake-ip",
         shecan: "Shecan",
         electro: "Electro",
         radar: "Radar Game",
@@ -202,7 +203,8 @@ const resources = {
       settings: "تنظیمات",
       settingsDns: {
         label: "DNS مستقیم",
-        help: "برای دامنه‌های ایران و پین‌های مستقیم. برای اعمال تغییر DNS، توقف موقت سپس اتصال.",
+        help: "پیش‌فرض فیک‌آی‌پی میهومو است. فقط اگر سایت مستقیم باز نشد DNS ایرانی انتخاب کنید. برای اعمال، توقف موقت سپس اتصال.",
+        fake_ip: "فیک‌آی‌پی",
         shecan: "شکن",
         electro: "الکترو",
         radar: "رادار گیم",

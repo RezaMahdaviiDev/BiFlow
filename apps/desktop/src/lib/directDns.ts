@@ -1,6 +1,7 @@
 import type { DirectDnsPreset, ValidationIssue } from "../api/models";
 
 export const DIRECT_DNS_PRESETS = [
+  "fake_ip",
   "shecan",
   "electro",
   "radar",
@@ -9,7 +10,7 @@ export const DIRECT_DNS_PRESETS = [
 ] as const;
 
 export const DIRECT_DNS_PRESET_SERVERS: Record<
-  Exclude<DirectDnsPreset, "custom">,
+  Exclude<DirectDnsPreset, "fake_ip" | "custom">,
   readonly string[]
 > = {
   shecan: ["178.22.122.100", "185.51.200.2"],
@@ -33,6 +34,7 @@ export function resolveDirectDnsServers(
   preset: DirectDnsPreset,
   customServers: string[],
 ): string[] {
+  if (preset === "fake_ip") return [];
   if (preset === "custom") {
     return customServers.map((server) => server.trim()).filter(Boolean);
   }
@@ -60,6 +62,7 @@ export function validateDirectDns(mihomo: {
   direct_dns_preset: DirectDnsPreset;
   direct_dns_servers: string[];
 }): ValidationIssue[] {
+  if (mihomo.direct_dns_preset === "fake_ip") return [];
   const servers = resolveDirectDnsServers(
     mihomo.direct_dns_preset,
     mihomo.direct_dns_servers,

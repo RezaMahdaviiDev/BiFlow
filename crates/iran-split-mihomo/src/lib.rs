@@ -112,7 +112,9 @@ struct DnsConfig {
     default_nameserver: Vec<String>,
     nameserver: Vec<String>,
     proxy_server_nameserver: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     direct_nameserver: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     nameserver_policy: BTreeMap<String, Vec<String>>,
 }
 
@@ -214,6 +216,20 @@ pub fn generate_config(
     ]);
 
     let direct_dns = app.mihomo.direct_dns_resolvers();
+    let apply_direct_dns =
+        app.mihomo.direct_dns_preset.applies_direct_policy() && !direct_dns.is_empty();
+    let mut fake_ip_filter = vec![
+        "+.lan".into(),
+        "+.local".into(),
+        "localhost.ptlogin2.qq.com".into(),
+    ];
+    if apply_direct_dns {
+        fake_ip_filter.extend([
+            "rule-set:custom-direct-domains".into(),
+            "rule-set:iran-domains".into(),
+            "rule-set:iran-business-domains".into(),
+        ]);
+    }
     let document = MihomoConfigDocument {
         mixed_port: app.mihomo.mixed_port,
         allow_lan: false,
@@ -243,19 +259,20 @@ pub fn generate_config(
             ipv6: platform != Platform::Windows,
             enhanced_mode: "fake-ip".into(),
             fake_ip_range: "198.18.0.1/16".into(),
-            fake_ip_filter: vec![
-                "+.lan".into(),
-                "+.local".into(),
-                "localhost.ptlogin2.qq.com".into(),
-                "rule-set:custom-direct-domains".into(),
-                "rule-set:iran-domains".into(),
-                "rule-set:iran-business-domains".into(),
-            ],
+            fake_ip_filter,
             default_nameserver: vec!["1.1.1.1".into(), "8.8.8.8".into()],
             nameserver: nameservers(platform),
             proxy_server_nameserver: vec!["8.8.8.8".into(), "1.1.1.1".into()],
-            direct_nameserver: direct_dns.clone(),
-            nameserver_policy: direct_nameserver_policy(&direct_dns),
+            direct_nameserver: if apply_direct_dns {
+                direct_dns.clone()
+            } else {
+                Vec::new()
+            },
+            nameserver_policy: if apply_direct_dns {
+                direct_nameserver_policy(&direct_dns)
+            } else {
+                BTreeMap::new()
+            },
         },
         sniffer: SnifferConfig {
             enable: true,
@@ -929,21 +946,18 @@ mod tests {
             .contains("RULE-SET,iran-business-domains,DIRECT"));
         let parsed: serde_yaml::Value =
             serde_yaml::from_str(&generated.yaml).expect("generated yaml");
-        let policy = parsed
-            .get("dns")
-            .and_then(|dns| dns.get("nameserver-policy"))
-            .expect("nameserver-policy");
-        for key in [
-            "rule-set:custom-direct-domains",
-            "rule-set:iran-domains",
-            "rule-set:iran-business-domains",
-        ] {
-            assert!(policy.get(key).is_some(), "DIRECT DNS policy missing {key}");
-        }
-        assert!(generated.yaml.contains("rule-set:custom-direct-domains"));
-        assert!(generated.yaml.contains("rule-set:iran-business-domains"));
-        assert!(generated.yaml.contains("178.22.122.100"));
-        assert!(generated.yaml.contains("185.51.200.2"));
+        let dns = parsed.get("dns").expect("dns");
+        assert!(dns.get("nameserver-policy").is_none());
+        assert!(dns.get("direct-nameserver").is_none());
+        let filter = dns
+            .get("fake-ip-filter")
+            .and_then(serde_yaml::Value::as_sequence)
+            .expect("fake-ip-filter");
+        assert!(!filter.iter().any(|item| {
+            item.as_str() == Some("rule-set:iran-domains")
+                || item.as_str() == Some("rule-set:custom-direct-domains")
+        }));
+        assert!(!generated.yaml.contains("178.22.122.100"));
         assert!(!generated.yaml.contains("/runtime/"));
         assert_eq!(generated.sha256.len(), 64);
     }
@@ -982,6 +996,19 @@ mod tests {
         .expect("config");
         assert!(generated.yaml.contains("5.200.200.200"));
         assert!(!generated.yaml.contains("178.22.122.100"));
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&generated.yaml).expect("generated yaml");
+        let policy = parsed
+            .get("dns")
+            .and_then(|dns| dns.get("nameserver-policy"))
+            .expect("nameserver-policy");
+        for key in [
+            "rule-set:custom-direct-domains",
+            "rule-set:iran-domains",
+            "rule-set:iran-business-domains",
+        ] {
+            assert!(policy.get(key).is_some(), "DIRECT DNS policy missing {key}");
+        }
     }
 
     #[test]

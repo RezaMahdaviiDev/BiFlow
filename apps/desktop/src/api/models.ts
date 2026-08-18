@@ -98,6 +98,7 @@ export interface OperationAccepted {
 export type ExecutableSetting = "auto" | { path: string };
 export type LogLevel = "error" | "warn" | "info" | "debug";
 export type DirectDnsPreset =
+  | "fake_ip"
   | "shecan"
   | "electro"
   | "radar"

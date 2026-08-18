@@ -20,6 +20,7 @@ describe("direct DNS helpers", () => {
   });
 
   it("keeps named presets including private Radar addresses", () => {
+    expect(resolveDirectDnsServers("fake_ip", ["1.1.1.1"])).toEqual([]);
     expect(resolveDirectDnsServers("shecan", [])).toEqual([
       ...DIRECT_DNS_PRESET_SERVERS.shecan,
     ]);
@@ -34,6 +35,12 @@ describe("direct DNS helpers", () => {
     expect(isUsableDirectDns("127.0.0.1")).toBe(false);
     expect(isUsableDirectDns("198.18.0.1")).toBe(false);
     expect(isUsableDirectDns("dns.google")).toBe(false);
+    expect(
+      validateDirectDns({
+        direct_dns_preset: "fake_ip",
+        direct_dns_servers: [],
+      }),
+    ).toEqual([]);
     expect(
       validateDirectDns({
         direct_dns_preset: "custom",

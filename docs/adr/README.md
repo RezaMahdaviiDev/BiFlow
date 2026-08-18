@@ -63,3 +63,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0057](./0057-github-releases-in-app-update.md)          | GitHub Releases in-app update               | Accepted   |
 | [0058](./0058-direct-domain-nameserver-policy.md)        | DIRECT domain nameserver policy             | Accepted   |
 | [0059](./0059-user-selected-direct-dns.md)               | User-selected DIRECT DNS resolvers          | Accepted   |
+| [0060](./0060-fake-ip-default-direct-dns.md)             | Fake-ip is the default DIRECT DNS           | Accepted   |

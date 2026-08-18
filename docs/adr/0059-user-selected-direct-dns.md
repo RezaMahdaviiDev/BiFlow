@@ -13,9 +13,10 @@ made that change a rebuild.
 
 ## Decision
 
-- Store `mihomo.direct_dns_preset` (`shecan`, `electro`, `radar`,
+- Store `mihomo.direct_dns_preset` (`fake_ip`, `shecan`, `electro`, `radar`,
   `mokhaberat`, `custom`) and `mihomo.direct_dns_servers` (custom only) on
-  `MihomoConfig`. Missing keys keep Shecan. Do not bump `schema_version`.
+  `MihomoConfig`. Missing keys keep fake-ip. Schema 2 withdraws the 3.9.0
+  implicit Shecan default (see [0060](./0060-fake-ip-default-direct-dns.md)).
 - Named presets ignore the custom list. Custom accepts one to four IP
   addresses, not host names. Reject loopback, unspecified, multicast, and
   `198.18.0.0/15`. Allow RFC1918 so Radar (`10.202.10.10`) stays valid.

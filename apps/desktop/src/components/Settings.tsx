@@ -29,6 +29,7 @@ const formSchema = z
     mixedPort: z.coerce.number().int().min(1).max(65535),
     dnsPort: z.coerce.number().int().min(1).max(65535),
     directDnsPreset: z.enum([
+      "fake_ip",
       "shecan",
       "electro",
       "radar",
@@ -467,7 +468,7 @@ function Field({
 }
 
 function directDnsOptionLabel(preset: DirectDnsPreset, name: string): string {
-  if (preset === "custom") return name;
+  if (preset === "custom" || preset === "fake_ip") return name;
   return `${name} (${DIRECT_DNS_PRESET_SERVERS[preset].join(", ")})`;
 }
 

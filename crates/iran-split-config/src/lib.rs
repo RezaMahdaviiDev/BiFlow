@@ -9,7 +9,7 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,7 +100,9 @@ impl Default for MihomoConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum DirectDnsPreset {
+    /// Mihomo fake-ip plus Cloudflare `DoH`. No Iranian nameserver policy.
     #[default]
+    FakeIp,
     Shecan,
     Electro,
     Radar,
@@ -109,22 +111,29 @@ pub enum DirectDnsPreset {
 }
 
 impl DirectDnsPreset {
-    /// Built-in IPv4 resolvers. `Custom` has none.
+    /// Built-in IPv4 resolvers. `FakeIp` and `Custom` have none.
     #[must_use]
     pub const fn servers(self) -> &'static [&'static str] {
         match self {
+            Self::FakeIp | Self::Custom => &[],
             Self::Shecan => &["178.22.122.100", "185.51.200.2"],
             Self::Electro => &["78.157.42.100", "78.157.42.101"],
             Self::Radar => &["10.202.10.10", "10.202.10.11"],
             Self::Mokhaberat => &["5.200.200.200"],
-            Self::Custom => &[],
         }
+    }
+
+    /// Whether DIRECT domains skip fake-ip and use these resolvers.
+    #[must_use]
+    pub const fn applies_direct_policy(self) -> bool {
+        !matches!(self, Self::FakeIp)
     }
 }
 
 impl std::fmt::Display for DirectDnsPreset {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
+            Self::FakeIp => "fake_ip",
             Self::Shecan => "shecan",
             Self::Electro => "electro",
             Self::Radar => "radar",
@@ -293,6 +302,9 @@ impl AppConfig {
 }
 
 fn validate_direct_dns(mihomo: &MihomoConfig, issues: &mut Vec<ValidationIssue>) {
+    if !mihomo.direct_dns_preset.applies_direct_policy() {
+        return;
+    }
     let servers = mihomo.direct_dns_resolvers();
     if servers.is_empty() {
         issues.push(issue(
@@ -495,17 +507,33 @@ impl ConfigStore {
 }
 
 fn migrate(value: &mut toml::Value, from: u32) -> Result<(), ConfigError> {
-    if from != 0 {
+    if from >= CURRENT_SCHEMA_VERSION {
         return Err(ConfigError::UnsupportedSchema(from));
     }
     let table = value
         .as_table_mut()
         .ok_or_else(|| ConfigError::UnsupportedSchema(from))?;
+    if from == 0 {
+        table.entry("revision").or_insert(toml::Value::Integer(0));
+    }
+    if from < 2 {
+        if let Some(mihomo) = table.get_mut("mihomo").and_then(toml::Value::as_table_mut) {
+            if mihomo
+                .get("direct_dns_preset")
+                .and_then(toml::Value::as_str)
+                == Some("shecan")
+            {
+                mihomo.insert(
+                    "direct_dns_preset".into(),
+                    toml::Value::String("fake_ip".into()),
+                );
+            }
+        }
+    }
     table.insert(
         "schema_version".into(),
         toml::Value::Integer(i64::from(CURRENT_SCHEMA_VERSION)),
     );
-    table.entry("revision").or_insert(toml::Value::Integer(0));
     Ok(())
 }
 
@@ -541,12 +569,9 @@ mod tests {
             second.mihomo.controller_secret
         );
         assert_eq!(first.mihomo.controller_secret.len(), 64);
-        assert_eq!(first.mihomo.direct_dns_preset, DirectDnsPreset::Shecan);
-        assert_eq!(first.mihomo.direct_dns_preset.to_string(), "shecan");
-        assert_eq!(
-            first.mihomo.direct_dns_resolvers(),
-            ["178.22.122.100", "185.51.200.2"]
-        );
+        assert_eq!(first.mihomo.direct_dns_preset, DirectDnsPreset::FakeIp);
+        assert_eq!(first.mihomo.direct_dns_preset.to_string(), "fake_ip");
+        assert!(first.mihomo.direct_dns_resolvers().is_empty());
     }
 
     #[test]
@@ -578,6 +603,36 @@ mod tests {
             .any(|item| item.code == "DIRECT_DNS_INVALID"));
         config.mihomo.direct_dns_servers = vec!["5.200.200.200".into(), "1.1.1.1".into()];
         assert!(config.validate().is_empty());
+    }
+
+    #[test]
+    fn schema_v1_implicit_shecan_migrates_to_fake_ip() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = AppConfig {
+            schema_version: 1,
+            ..AppConfig::default()
+        };
+        config.mihomo.direct_dns_preset = DirectDnsPreset::Shecan;
+        fs::write(&path, toml::to_string(&config).expect("toml")).expect("write");
+        let loaded = ConfigStore::new(&path).load().expect("load");
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.mihomo.direct_dns_preset, DirectDnsPreset::FakeIp);
+    }
+
+    #[test]
+    fn schema_v1_mokhaberat_survives_direct_dns_migration() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let mut config = AppConfig {
+            schema_version: 1,
+            ..AppConfig::default()
+        };
+        config.mihomo.direct_dns_preset = DirectDnsPreset::Mokhaberat;
+        fs::write(&path, toml::to_string(&config).expect("toml")).expect("write");
+        let loaded = ConfigStore::new(&path).load().expect("load");
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.mihomo.direct_dns_preset, DirectDnsPreset::Mokhaberat);
     }
 
     #[test]

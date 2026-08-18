@@ -20,8 +20,8 @@ The clash-master fixture already maps `rule-set:custom-direct-domains` and
 
 - Generate `dns.nameserver-policy` for `rule-set:custom-direct-domains`,
   `rule-set:iran-domains`, and `rule-set:iran-business-domains` using the
-  operator-selected DIRECT DNS (default Shecan; see
-  [0059](./0059-user-selected-direct-dns.md)).
+  operator-selected DIRECT DNS (default fake-ip; Iranian resolvers are opt-in,
+  see [0060](./0060-fake-ip-default-direct-dns.md)).
 - Put the same three rule-sets in `fake-ip-filter` so those names skip fake-ip
   and the browser talks to the real address.
 - Keep Cloudflare DoH as the default `nameserver` (Windows still `#VPN`). Do

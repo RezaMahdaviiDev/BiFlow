@@ -254,7 +254,7 @@ test.describe("primary BiFlow flows", () => {
     await page.getByRole("button", { name: "Settings" }).click();
     await page.getByRole("tab", { name: "Mihomo" }).click();
     const dns = page.getByLabel("DIRECT DNS");
-    await expect(dns).toHaveValue("shecan");
+    await expect(dns).toHaveValue("fake_ip");
     await dns.selectOption("mokhaberat");
     await page.getByRole("button", { name: "Save settings" }).click();
     await expect(

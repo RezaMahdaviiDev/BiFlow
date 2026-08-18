@@ -91,7 +91,7 @@ function initialSettings(): AppConfig {
       dns_port: 1053,
       tun_name: "clash-iran",
       log_level: "info",
-      direct_dns_preset: "shecan",
+      direct_dns_preset: "fake_ip",
       direct_dns_servers: [],
     },
     rules: { refresh_interval_minutes: 15, upstream_refresh_hours: 24 },

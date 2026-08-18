@@ -29,7 +29,7 @@ const settings: AppConfig = {
     dns_port: 1053,
     tun_name: "clash-iran",
     log_level: "info",
-    direct_dns_preset: "shecan",
+    direct_dns_preset: "fake_ip",
     direct_dns_servers: [],
   },
   rules: { refresh_interval_minutes: 15, upstream_refresh_hours: 24 },
@@ -64,7 +64,8 @@ describe("Settings", () => {
     render(<Settings settings={settings} />);
     await userEvent.click(screen.getByRole("tab", { name: "Mihomo" }));
     const dns = screen.getByLabelText("DIRECT DNS");
-    expect(dns).toHaveValue("shecan");
+    expect(dns).toHaveValue("fake_ip");
+    expect(screen.getByRole("option", { name: "Fake-ip" })).toBeInTheDocument();
     expect(
       screen.getByRole("option", { name: /Mokhaberat \(5\.200\.200\.200\)/ }),
     ).toBeInTheDocument();
