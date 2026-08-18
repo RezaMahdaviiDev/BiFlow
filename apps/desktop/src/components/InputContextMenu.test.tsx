@@ -60,4 +60,27 @@ describe("InputContextMenu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Paste" }));
     expect(field).toHaveValue("pasted");
   });
+
+  it("shows an error when paste is rejected", async () => {
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn(async () => undefined),
+        readText: vi.fn(async () => {
+          throw new Error("NotAllowedError");
+        }),
+      },
+    });
+    render(
+      <div>
+        <input aria-label="Host" defaultValue="" />
+        <InputContextMenu />
+      </div>,
+    );
+    fireEvent.contextMenu(screen.getByLabelText("Host"));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Paste" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not read or write the clipboard.",
+    );
+    expect(screen.getByLabelText("Host")).toHaveValue("");
+  });
 });

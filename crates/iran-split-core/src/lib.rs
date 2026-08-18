@@ -449,6 +449,8 @@ pub trait PlatformBackend: Send + Sync + 'static {
     async fn stop_user_proxy(&self) -> Result<(), CoreError> {
         Ok(())
     }
+    async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError>;
+    async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError>;
     async fn core_process(&self) -> Result<ProcessStatus, CoreError>;
     async fn tun_status(&self) -> Result<TunStatus, CoreError>;
     async fn check_readiness(
@@ -1260,6 +1262,7 @@ impl<B: PlatformBackend> Engine<B> {
         }
         self.announce_stage(OperationStage::StoppingProxy).await;
         self.backend.stop_user_proxy().await?;
+        self.backend.clear_hiddify_system_proxy().await?;
         self.announce_stage(OperationStage::CleaningUp).await;
         let report = self.backend.cleanup_owned_state().await?;
         let tun = self.backend.tun_status().await?;
@@ -1287,6 +1290,17 @@ impl<B: PlatformBackend> Engine<B> {
                 trace_id = %operation_id,
                 trace_route = "engine_operation->platform_backend->stop_core",
                 "pause continued after core stop failure"
+            );
+        }
+        if let Err(cause) = self.backend.clear_hiddify_system_proxy().await {
+            warn!(
+                event = "operation.pause_clear_proxy_failed",
+                section = "engine",
+                initiator = "run_pause",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->platform_backend->clear_hiddify_system_proxy",
+                "pause continued after system proxy clear failure"
             );
         }
         self.announce_stage(OperationStage::CleaningUp).await;
@@ -1328,6 +1342,17 @@ impl<B: PlatformBackend> Engine<B> {
             let health = self.backend.runtime_health().await;
             self.set_paused(health);
             return Err(error);
+        }
+        if let Err(cause) = self.backend.restore_hiddify_system_proxy().await {
+            warn!(
+                event = "operation.resume_restore_proxy_failed",
+                section = "engine",
+                initiator = "run_resume",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->platform_backend->restore_hiddify_system_proxy",
+                "resume succeeded without restoring the previous system proxy"
+            );
         }
         Ok(())
     }
@@ -1495,6 +1520,8 @@ mod tests {
         starts: AtomicUsize,
         cleanups: AtomicUsize,
         proxy_stops: AtomicUsize,
+        proxy_clears: AtomicUsize,
+        proxy_restores: AtomicUsize,
     }
 
     #[async_trait]
@@ -1604,6 +1631,16 @@ mod tests {
             Ok(())
         }
 
+        async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+            self.proxy_clears.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+            self.proxy_restores.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
         async fn core_process(&self) -> Result<ProcessStatus, CoreError> {
             Ok(ProcessStatus {
                 running: self.process.load(Ordering::SeqCst),
@@ -1670,6 +1707,7 @@ mod tests {
         assert_eq!(engine.snapshot().hiddify.phase, ComponentPhase::Running);
         assert_eq!(backend.cleanups.load(Ordering::SeqCst), 1);
         assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
         assert!(
             engine
                 .pause_stack()
@@ -1700,6 +1738,8 @@ mod tests {
             .await
             .expect("running again");
         assert!(backend.tun.load(Ordering::SeqCst));
+        assert_eq!(backend.proxy_restores.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1735,6 +1775,7 @@ mod tests {
         assert_eq!(engine.snapshot().hiddify.phase, ComponentPhase::Running);
         assert!(!backend.tun.load(Ordering::SeqCst));
         assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.proxy_restores.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -1749,6 +1790,8 @@ mod tests {
             .await
             .expect("running");
         assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 0);
+        assert_eq!(backend.proxy_restores.load(Ordering::SeqCst), 0);
         assert!(
             engine
                 .start_stack()
@@ -1763,6 +1806,8 @@ mod tests {
             .await
             .expect("stopped");
         assert!(!backend.tun.load(Ordering::SeqCst));
+        assert_eq!(backend.proxy_clears.load(Ordering::SeqCst), 1);
+        assert_eq!(backend.proxy_stops.load(Ordering::SeqCst), 1);
         assert!(
             engine
                 .stop_stack()

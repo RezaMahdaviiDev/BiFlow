@@ -825,9 +825,10 @@ mod tests {
     }
 
     #[test]
-    fn nsis_hook_uses_programdata_variable() {
+    fn nsis_hook_stages_into_localappdata_generations() {
         let hook = include_str!("../../packaging/windows/installer-hooks.nsh");
-        assert!(hook.contains("$PROGRAMDATA"));
+        assert!(hook.contains(r"$LOCALAPPDATA\biflow\runtime\generations"));
+        assert!(!hook.contains(r"$PROGRAMDATA\iran-split\staging"));
         assert!(!hook.contains("$COMMONPROGRAMDATA"));
     }
 

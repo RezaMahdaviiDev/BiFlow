@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { desktop } from "../api/desktop";
 import { useAppStore } from "../store/app";
 import { Diagnostics } from "./Diagnostics";
 
@@ -28,6 +29,7 @@ vi.mock("../api/desktop", () => ({
       tested_at: new Date().toISOString(),
     }),
     exportBundle: vi.fn(),
+    listActiveConnections: vi.fn().mockResolvedValue([]),
     freshHiddifyStart: vi.fn().mockResolvedValue({
       data_dir: "/home/user/.local/share/hiddify",
       backup_dir: "/home/user/.local/share/biflow/backups/hiddify-20260815",
@@ -44,6 +46,8 @@ describe("Diagnostics", () => {
   // or a "was not called" assertion sees the previous test's click.
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(desktop.listActiveConnections).mockResolvedValue([]);
+    useAppStore.setState({ snapshot: null, actionPending: false });
   });
 
   it("tests whether a host is direct or vpn", async () => {
@@ -221,5 +225,52 @@ describe("Diagnostics", () => {
     expect(confirm).toHaveBeenCalledOnce();
     const { desktop } = await import("../api/desktop");
     expect(desktop.deleteDebugLog).not.toHaveBeenCalled();
+  });
+
+  it("shows live DIRECT and VPN connections while the stack is running", async () => {
+    vi.mocked(desktop.listActiveConnections).mockResolvedValue([
+      {
+        host: "digikala.ir",
+        destination_ip: "5.22.12.1",
+        outbound: "direct",
+        rule: "iran-domains",
+      },
+      {
+        host: "openai.com",
+        destination_ip: "104.18.1.1",
+        outbound: "vpn",
+        rule: "MATCH",
+      },
+    ]);
+    useAppStore.setState({
+      snapshot: {
+        revision: 1,
+        phase: "running",
+        operation_id: null,
+        helper: { phase: "running", message: null, since: "now" },
+        hiddify: { phase: "running", message: null, since: "now" },
+        mihomo: { phase: "running", message: null, since: "now" },
+        tun: { phase: "running", message: null, since: "now" },
+        dns: { phase: "running", message: null, since: "now" },
+        providers: {
+          ready: 6,
+          total: 6,
+          rules_loaded: 12,
+          last_refresh: null,
+        },
+        exit_ip: "203.0.113.42",
+        backend: "external_hiddify",
+        last_error: null,
+        updated_at: "now",
+      },
+    });
+    render(<Diagnostics report={null} />);
+    expect(
+      await screen.findByRole("heading", { name: "Live connections" }),
+    ).toBeVisible();
+    expect(await screen.findByText("digikala.ir")).toBeVisible();
+    expect(screen.getByText("openai.com")).toBeVisible();
+    expect(screen.getByRole("cell", { name: "DIRECT" })).toBeVisible();
+    expect(screen.getByRole("cell", { name: "VPN" })).toBeVisible();
   });
 });

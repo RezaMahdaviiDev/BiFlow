@@ -477,6 +477,20 @@ describe("app store", () => {
     expect(useAppStore.getState().error).toMatch(/rules changed/);
   });
 
+  it("extracts the host from a pasted URL before adding a rule", async () => {
+    vi.mocked(desktop.addRule).mockResolvedValue({
+      revision: 2,
+      rules: [],
+      vpn_rules: [],
+    });
+    useAppStore.setState({
+      rules: { revision: 1, rules: [], vpn_rules: [] },
+      error: null,
+    });
+    await useAppStore.getState().addRule("https://console.kavenegar.com/");
+    expect(desktop.addRule).toHaveBeenCalledWith("console.kavenegar.com", 1);
+  });
+
   it("retries install after a failed update when a version is known", async () => {
     vi.mocked(desktop.installUpdate).mockResolvedValue({
       operation_id: "update-op",

@@ -58,6 +58,7 @@ const resources = {
       contextCopy: "Copy",
       contextCut: "Cut",
       contextPaste: "Paste",
+      contextClipboardFailed: "Could not read or write the clipboard.",
       currentIp: "Current IP",
       refreshNetwork: "Refresh connection and IP status",
       trafficSent: "Sent",
@@ -90,7 +91,7 @@ const resources = {
       aboutVersion: "Version {{version}}",
       aboutUpdatesTitle: "Updates",
       aboutUpdatesHelp:
-        "Check GitHub Releases for signed BiFlow updates, then refresh Iran rules and the bundled Mihomo build.",
+        "Check GitHub Releases for a newer BiFlow package, then refresh Iran rules and the bundled Mihomo build.",
       updateRulesAvailable: "A newer Iran rule snapshot is available.",
       updateThirdpartyAvailable:
         "A bundled Mihomo build is missing and will be installed.",
@@ -104,8 +105,8 @@ const resources = {
       updateDownloading: "Downloading version {{version}}…",
       updateInstalling: "Installing update…",
       updateRestarting: "Restarting BiFlow…",
-      updateManualDeb:
-        "This Linux package cannot self-update. The GitHub Release page was opened so you can download the .deb.",
+      updateInstalled:
+        "BiFlow was updated. Quit and open the app again to use the new version.",
       updateDownloadProgress: "Download progress",
       updateIdle: "Check GitHub Releases when you are ready to update.",
       cloudRules: "Iran cloud rules",
@@ -129,6 +130,16 @@ const resources = {
       testFlowHelp: "See whether a host would go DIRECT or through the VPN.",
       testFlowPlaceholder: "digikala.com or 5.22.12.1",
       testFlowButton: "Test flow",
+      liveConnections: "Live connections",
+      liveConnectionsHelp:
+        "Hosts and IPs Mihomo is handling right now, and whether each one is DIRECT or VPN.",
+      liveConnectionsEmpty:
+        "No active connections yet. Browse a site, then watch this list.",
+      liveConnectionsHost: "Host",
+      liveConnectionsIp: "IP",
+      liveConnectionsOutbound: "Route",
+      liveConnectionsRule: "Matched rule",
+      rulesLoaded: "Rules loaded",
       moveToDirect: "Add {{target}} to direct",
       moveToVpn: "Add {{target}} to VPN",
       moveLocalUnavailable:
@@ -225,6 +236,7 @@ const resources = {
       contextCopy: "رونوشت",
       contextCut: "برش",
       contextPaste: "چسباندن",
+      contextClipboardFailed: "خواندن یا نوشتن کلیپ‌بورد ممکن نشد.",
       currentIp: "آی‌پی فعلی",
       refreshNetwork: "تازه‌سازی وضعیت اتصال و آی‌پی",
       trafficSent: "ارسال",
@@ -256,7 +268,7 @@ const resources = {
       aboutVersion: "نسخه {{version}}",
       aboutUpdatesTitle: "به‌روزرسانی",
       aboutUpdatesHelp:
-        "به‌روزرسانی امضاشده BiFlow را از GitHub Releases بررسی کنید، سپس قوانین ایران و بسته Mihomo را تازه کنید.",
+        "نسخه تازه‌تر BiFlow را از GitHub Releases بررسی کنید، سپس قوانین ایران و بسته Mihomo را تازه کنید.",
       updateRulesAvailable: "نسخه تازه‌تری از قوانین ایران آماده است.",
       updateThirdpartyAvailable:
         "بسته Mihomo همراه برنامه موجود نیست و نصب خواهد شد.",
@@ -270,8 +282,8 @@ const resources = {
       updateDownloading: "در حال دانلود نسخه {{version}}…",
       updateInstalling: "در حال نصب به‌روزرسانی…",
       updateRestarting: "در حال راه‌اندازی مجدد BiFlow…",
-      updateManualDeb:
-        "این بسته لینوکس نمی‌تواند خودش را جایگزین کند. صفحه GitHub Release باز شد تا پرونده .deb را دانلود کنید.",
+      updateInstalled:
+        "BiFlow به‌روزرسانی شد. برنامه را ببندید و دوباره باز کنید تا نسخه جدید دیده شود.",
       updateDownloadProgress: "پیشرفت دانلود",
       updateIdle:
         "وقتی آماده بودید، به‌روزرسانی GitHub Releases را بررسی کنید.",
@@ -296,6 +308,16 @@ const resources = {
       testFlowHelp: "ببینید میزبان مستقیم می‌رود یا از وی‌پی‌ان.",
       testFlowPlaceholder: "digikala.com یا 5.22.12.1",
       testFlowButton: "آزمایش مسیر",
+      liveConnections: "اتصال‌های زنده",
+      liveConnectionsHelp:
+        "دامنه و آی‌پی‌هایی که همین حالا Mihomo می‌بیند و اینکه مستقیم می‌روند یا وی‌پی‌ان.",
+      liveConnectionsEmpty:
+        "هنوز اتصالی نیست. یک سایت باز کنید و این فهرست را ببینید.",
+      liveConnectionsHost: "میزبان",
+      liveConnectionsIp: "آی‌پی",
+      liveConnectionsOutbound: "مسیر",
+      liveConnectionsRule: "قانون منطبق",
+      rulesLoaded: "قوانین بارگذاری‌شده",
       moveToDirect: "افزودن {{target}} به مستقیم",
       moveToVpn: "افزودن {{target}} به وی‌پی‌ان",
       moveLocalUnavailable:

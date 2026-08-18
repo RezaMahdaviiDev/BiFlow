@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { desktop } from "../api/desktop";
+import { extractHost } from "../lib/host";
 import { missingConnectRequirements } from "../lib/connectRequirements";
 import { ACTION_TIMEOUT_MS, controlsLocked } from "../lib/lifecycle";
 import type {
@@ -247,9 +248,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   addRule: async (input) => {
     const rules = get().rules;
     if (!rules) return;
+    const host = extractHost(input);
+    if (!host) return;
     set({ actionPending: true, error: null });
     try {
-      const next = await desktop.addRule(input, rules.revision);
+      const next = await desktop.addRule(host, rules.revision);
       set({ rules: next, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });
@@ -259,9 +262,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
   pinRoute: async (input, outbound) => {
     const rules = get().rules;
     if (!rules) return;
+    const host = extractHost(input);
+    if (!host) return;
     set({ actionPending: true, error: null });
     try {
-      const next = await desktop.pinRoute(input, outbound, rules.revision);
+      const next = await desktop.pinRoute(host, outbound, rules.revision);
       set({ rules: next, actionPending: false });
     } catch (error) {
       set({ actionPending: false, error: message(error) });

@@ -54,17 +54,19 @@ describe("About", () => {
     ).toBeInTheDocument();
   });
 
-  it("explains the Debian download/open path", () => {
+  it("tells the operator to reopen after a Debian package install", () => {
     useAppStore.setState({
       update: {
-        phase: "manual",
-        percent: null,
+        phase: "installed",
+        percent: 100,
         version: "1.3.0",
         error: null,
       },
     });
     render(<About />);
-    expect(screen.getByRole("status")).toHaveTextContent(/cannot self-update/i);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /quit and open the app again/i,
+    );
   });
 
   it("offers install when an update is available", async () => {

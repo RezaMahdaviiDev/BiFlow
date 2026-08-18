@@ -289,10 +289,22 @@ describe("Dashboard", () => {
     expect(exitIp.className).not.toMatch(/truncate/);
   });
 
-  it("scrolls the dashboard section vertically when content overflows", () => {
+  it("lets the shell scroll overflowing dashboard content", () => {
     const { container } = render(<Dashboard snapshot={stopped} />);
-    expect(container.querySelector("section")?.className).toMatch(
+    expect(container.querySelector("section")?.className).not.toMatch(
       /overflow-y-auto/,
     );
+    expect(container.querySelector("section")?.className).toMatch(/pb-2/);
+  });
+
+  it("renders compact mobile status and provider summaries", () => {
+    render(<Dashboard snapshot={stopped} />);
+    expect(screen.getByTestId("connection-status-strip")).toBeInTheDocument();
+    expect(screen.getByTestId("provider-summary")).toBeInTheDocument();
+    expect(
+      screen
+        .getByTestId("connection-status-strip")
+        .querySelectorAll("[data-status-light]"),
+    ).toHaveLength(5);
   });
 });

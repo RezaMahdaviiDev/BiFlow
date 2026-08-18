@@ -22,6 +22,7 @@ import type {
   UpdateProgress,
   UpdateStatus,
   ValidationIssue,
+  ActiveConnection,
 } from "./models";
 
 const native =
@@ -39,6 +40,11 @@ export const desktop = {
   },
   getTrafficTotals(): Promise<TrafficTotals> {
     return native ? invoke("get_traffic_totals") : mockApi.getTrafficTotals();
+  },
+  listActiveConnections(): Promise<ActiveConnection[]> {
+    return native
+      ? invoke("list_active_connections")
+      : mockApi.listActiveConnections();
   },
   start(): Promise<OperationAccepted> {
     return native ? invoke("start_stack") : mockApi.start();

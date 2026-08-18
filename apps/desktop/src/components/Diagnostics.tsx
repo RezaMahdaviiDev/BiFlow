@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { desktop } from "../api/desktop";
 import type {
+  ActiveConnection,
   DiagnosticsReport,
   DebugLogStatus,
   ExportResult,
@@ -176,6 +177,8 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
           </div>
         ) : null}
       </form>
+
+      <LiveConnectionsCard />
 
       <div className="rounded-2xl border border-ink/10 bg-surface p-4">
         <h2 className="mb-3 font-semibold">Test timeline</h2>
@@ -455,6 +458,87 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
         ) : null}
       </div>
     </section>
+  );
+}
+
+function LiveConnectionsCard() {
+  const { t } = useTranslation();
+  const snapshot = useAppStore((state) => state.snapshot);
+  const [rows, setRows] = useState<ActiveConnection[]>([]);
+  const live = snapshot?.phase === "running" || snapshot?.phase === "degraded";
+
+  useEffect(() => {
+    if (!live) {
+      setRows([]);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      void desktop
+        .listActiveConnections()
+        .then((next) => {
+          if (!cancelled) setRows(next);
+        })
+        .catch(() => {
+          if (!cancelled) setRows([]);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [live]);
+
+  return (
+    <div
+      data-testid="live-connections"
+      className="rounded-2xl border border-ink/10 bg-surface p-4"
+    >
+      <h2 className="font-semibold">{t("liveConnections")}</h2>
+      <p className="mt-1 text-sm text-muted">{t("liveConnectionsHelp")}</p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-sm text-muted">{t("liveConnectionsEmpty")}</p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full min-w-[28rem] text-start text-sm">
+            <thead>
+              <tr className="text-muted">
+                <th className="py-1 pe-3 font-medium">
+                  {t("liveConnectionsHost")}
+                </th>
+                <th className="py-1 pe-3 font-medium">
+                  {t("liveConnectionsIp")}
+                </th>
+                <th className="py-1 pe-3 font-medium">
+                  {t("liveConnectionsOutbound")}
+                </th>
+                <th className="py-1 font-medium">{t("liveConnectionsRule")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.host}-${row.destination_ip}-${row.rule}`}>
+                  <td className="py-1 pe-3 font-medium break-all">
+                    {row.host || "—"}
+                  </td>
+                  <td className="py-1 pe-3 font-mono text-xs text-muted">
+                    {row.destination_ip || "—"}
+                  </td>
+                  <td className="py-1 pe-3">
+                    {row.outbound === "direct" ? t("direct") : t("vpn")}
+                  </td>
+                  <td className="py-1 font-mono text-xs text-muted">
+                    {row.rule || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 

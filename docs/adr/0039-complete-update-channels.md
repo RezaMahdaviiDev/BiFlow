@@ -13,18 +13,18 @@ one Install action to refresh the app and those sidecars.
 
 ## Decision
 
-- Keep the Tauri updater plugin as the only path that replaces the application
-  binary. Linux `.deb` still opens the Release page (ADR 0024).
+- Replace the application binary with the GitHub Releases package from ADR 0057
+  (`.deb` via `pkexec apt-get`, AppImage replace helper, Windows NSIS `/S`).
+  Linux `.deb` no longer opens the Release page.
 - `check_for_update` also compares the cached rule revision to the BiFlow
   manifest and reports a missing bundled Mihomo as a third-party channel.
 - `install_update` first syncs cloud rules and installs Mihomo when it is
-  missing, then runs the signed self-replace when an app update exists.
+  missing, then applies the GitHub package when an app update exists.
 - A rule-sync failure keeps the last good snapshot and does not block an
   application update. Mihomo install failure is fatal for that step.
-- When only sidecars change, Install finishes without restarting.
+- When only sidecars change, Install finishes without restarting. There is no
+  background update poll.
 
 ## Consequences
 
-- About can show pending rule and Mihomo work beside a signed app version.
-- Background polling uses the same combined status so a sidecar-only refresh
-  can surface the Install button without an error banner.
+- About can show pending rule and Mihomo work beside a GitHub app version.

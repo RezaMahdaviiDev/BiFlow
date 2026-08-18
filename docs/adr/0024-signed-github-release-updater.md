@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Superseded for in-app check/install by [0057](./0057-github-releases-in-app-update.md).
+Release jobs still produce `.sig` and `latest.json` for older clients.
 
 ## Context
 

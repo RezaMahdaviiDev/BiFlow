@@ -15,6 +15,7 @@ iran-split-core = { path = "../iran-split-core" }
 iran-split-ipc = { path = "../iran-split-ipc" }
 iran-split-mihomo = { path = "../iran-split-mihomo" }
 iran-split-rules = { path = "../iran-split-rules" }
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

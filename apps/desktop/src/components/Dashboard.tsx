@@ -51,7 +51,7 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   return (
     <section
       aria-labelledby="dashboard-title"
-      className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto"
+      className="flex flex-col gap-4 pb-2"
     >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -123,7 +123,19 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div
+        data-testid="provider-summary"
+        className="rounded-2xl border border-ink/10 bg-surface p-4 shadow-card md:hidden"
+      >
+        <p className="text-sm text-muted">{t("providers")}</p>
+        <p className="mt-1 text-lg font-semibold">
+          {snapshot.providers.ready} / {snapshot.providers.total}
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          {t("rulesLoaded")}: {snapshot.providers.rules_loaded.toLocaleString()}
+        </p>
+      </div>
+      <div className="hidden gap-4 md:grid md:grid-cols-3">
         <Metric
           icon={<Globe2 aria-hidden />}
           label={t("exitIp")}
@@ -146,7 +158,17 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           <h2 className="text-lg font-semibold">{t("components")}</h2>
           <StatusPill phase={snapshot.phase} />
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div
+          data-testid="connection-status-strip"
+          className="grid grid-cols-5 gap-2 rounded-2xl border border-ink/10 bg-surface p-3 shadow-card md:hidden"
+        >
+          <StatusLight name={t("helper")} phase={snapshot.helper.phase} />
+          <StatusLight name="Hiddify" phase={snapshot.hiddify.phase} />
+          <StatusLight name="Mihomo" phase={snapshot.mihomo.phase} />
+          <StatusLight name="TUN" phase={snapshot.tun.phase} />
+          <StatusLight name="DNS" phase={snapshot.dns.phase} />
+        </div>
+        <div className="hidden gap-3 sm:grid-cols-2 md:grid lg:grid-cols-3 xl:grid-cols-5">
           <Component
             name={t("helper")}
             status={snapshot.helper}
@@ -190,6 +212,38 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
         {boot?.mock_mode ? ` · ${t("mockMode")}` : ""}
       </p>
     </section>
+  );
+}
+
+function StatusLight({
+  name,
+  phase,
+}: {
+  name: string;
+  phase: ComponentStatus["phase"];
+}) {
+  const tone =
+    phase === "running"
+      ? "bg-success"
+      : phase === "error" || phase === "unavailable"
+        ? "bg-danger"
+        : phase === "starting" || phase === "checking" || phase === "degraded"
+          ? "bg-amber-400"
+          : "bg-slate-400";
+  return (
+    <div className="flex min-w-0 flex-col items-center gap-1 text-center">
+      <span
+        className={`h-3 w-3 rounded-full ${tone}`}
+        data-status-light={phase}
+        aria-hidden
+      />
+      <span className="max-w-full truncate text-[0.65rem] font-medium">
+        {name}
+      </span>
+      <span className="sr-only">
+        {name}: {phase}
+      </span>
+    </div>
   );
 }
 
@@ -267,10 +321,11 @@ function Component({
 function TrafficFlow() {
   const { t } = useTranslation();
   return (
-    <section className="overflow-hidden rounded-2xl border border-brand/15 bg-surface p-5 shadow-card">
+    <section className="overflow-x-hidden rounded-2xl border border-brand/15 bg-surface p-5 shadow-card">
       <h2 className="text-lg font-semibold">{t("liveRouting")}</h2>
       <p className="mt-1 text-sm text-muted">{t("liveRoutingHelp")}</p>
       <svg
+        data-testid="live-routing"
         className="mt-4 h-auto w-full"
         viewBox="0 0 760 220"
         role="img"

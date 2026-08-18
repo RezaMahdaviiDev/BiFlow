@@ -23,6 +23,7 @@ import type {
   StackSnapshot,
   UpdateProgress,
   TrafficTotals,
+  ActiveConnection,
   UpdateStatus,
   ValidationIssue,
 } from "./models";
@@ -555,6 +556,25 @@ export const mockApi = {
     lastSessionReceived = sessionReceived;
     return { ...trafficTotals };
   },
+  async listActiveConnections(): Promise<ActiveConnection[]> {
+    if (snapshot.phase !== "running" && snapshot.phase !== "degraded") {
+      return [];
+    }
+    return [
+      {
+        host: "digikala.ir",
+        destination_ip: "5.22.12.1",
+        outbound: "direct",
+        rule: "iran-domains",
+      },
+      {
+        host: "openai.com",
+        destination_ip: "104.18.1.1",
+        outbound: "vpn",
+        rule: "MATCH",
+      },
+    ];
+  },
   async start(): Promise<OperationAccepted> {
     if (lifecycleBusy && lifecycleBusy !== "connecting") {
       throw new Error("operation is already in progress");
@@ -907,7 +927,7 @@ export const mockApi = {
       return {
         available: true,
         version: "9.9.9",
-        notes: "Mock signed release",
+        notes: "Mock GitHub Release",
         app_available: true,
         rules_available: false,
         thirdparty_available: false,

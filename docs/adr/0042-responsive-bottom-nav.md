@@ -12,8 +12,10 @@ and the status bar must not sit under the nav.
 
 ## Decision
 
-- Treat `max-width: 767px` as mobile. Advanced mobile renders a bottom
-  navigation bar (icons + labels). Desktop/tablet keep the sidebar.
+- Treat `max-width: 767px` as mobile. Mobile always renders the bottom
+  navigation bar (icons + labels), including Basic mode. Tapping Rules,
+  Diagnostics, or Settings from Basic writes Advanced and opens that page.
+  Desktop/tablet keep the sidebar.
 - Stack `main` (scroll), optional bottom nav, then the status bar as flex
   siblings so they never overlap.
 - Do not introduce a hamburger control.

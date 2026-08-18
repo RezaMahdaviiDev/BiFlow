@@ -546,14 +546,32 @@ impl ControllerClient {
     ///
     /// Returns an error when the controller request or response decoding fails.
     pub async fn connection_totals(&self) -> Result<(u64, u64), MihomoError> {
-        let snapshot: ConnectionsSnapshot = self
+        let snapshot = self.connections_snapshot().await?;
+        Ok((snapshot.upload_total, snapshot.download_total))
+    }
+
+    /// Reads live connections from the controller.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the controller request or response decoding fails.
+    pub async fn active_connections(&self) -> Result<Vec<ActiveConnection>, MihomoError> {
+        let snapshot = self.connections_snapshot().await?;
+        Ok(snapshot
+            .connections
+            .into_iter()
+            .map(ActiveConnection::from)
+            .collect())
+    }
+
+    async fn connections_snapshot(&self) -> Result<ConnectionsSnapshot, MihomoError> {
+        Ok(self
             .get("/connections")
             .send()
             .await?
             .error_for_status()?
             .json()
-            .await?;
-        Ok((snapshot.upload_total, snapshot.download_total))
+            .await?)
     }
 
     /// Reads the active Mihomo configuration from the controller.
@@ -740,6 +758,65 @@ struct ConnectionsSnapshot {
     upload_total: u64,
     #[serde(rename = "downloadTotal", default)]
     download_total: u64,
+    #[serde(default)]
+    connections: Vec<ConnectionEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ConnectionEntry {
+    #[serde(default)]
+    metadata: ConnectionMetadata,
+    #[serde(default)]
+    chains: Vec<String>,
+    #[serde(default)]
+    rule: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ConnectionMetadata {
+    #[serde(default)]
+    host: String,
+    #[serde(rename = "destinationIP", default)]
+    destination_ip: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActiveConnection {
+    pub host: String,
+    pub destination_ip: String,
+    pub outbound: String,
+    pub rule: String,
+}
+
+impl From<ConnectionEntry> for ActiveConnection {
+    fn from(entry: ConnectionEntry) -> Self {
+        let host = if entry.metadata.host.is_empty() {
+            entry.metadata.destination_ip.clone()
+        } else {
+            entry.metadata.host
+        };
+        Self {
+            destination_ip: entry.metadata.destination_ip,
+            outbound: classify_outbound(&entry.chains, &entry.rule).to_owned(),
+            rule: entry.rule,
+            host,
+        }
+    }
+}
+
+fn classify_outbound(chains: &[String], rule: &str) -> &'static str {
+    if let Some(last) = chains.last() {
+        return if last.eq_ignore_ascii_case("DIRECT") {
+            "direct"
+        } else {
+            "vpn"
+        };
+    }
+    if rule.eq_ignore_ascii_case("DIRECT") {
+        "direct"
+    } else {
+        "vpn"
+    }
 }
 
 /// Resolves the public egress IP through the configured Hiddify SOCKS proxy.
@@ -887,6 +964,40 @@ mod tests {
         .expect("connections snapshot");
         assert_eq!(parsed.upload_total, 11);
         assert_eq!(parsed.download_total, 29);
+        assert!(parsed.connections.is_empty());
+    }
+
+    #[test]
+    fn active_connections_classify_last_chain() {
+        let parsed: ConnectionsSnapshot = serde_json::from_value(serde_json::json!({
+            "uploadTotal": 1,
+            "downloadTotal": 2,
+            "connections": [
+                {
+                    "metadata": { "host": "digikala.ir", "destinationIP": "5.22.12.1" },
+                    "chains": ["Iran", "DIRECT"],
+                    "rule": "RuleSet"
+                },
+                {
+                    "metadata": { "host": "openai.com", "destinationIP": "104.18.1.1" },
+                    "chains": ["Hiddify", "PROXY"],
+                    "rule": "MATCH"
+                }
+            ]
+        }))
+        .expect("connections snapshot");
+        let rows: Vec<ActiveConnection> = parsed.connections.into_iter().map(Into::into).collect();
+        assert_eq!(
+            rows[0],
+            ActiveConnection {
+                host: "digikala.ir".into(),
+                destination_ip: "5.22.12.1".into(),
+                outbound: "direct".into(),
+                rule: "RuleSet".into(),
+            }
+        );
+        assert_eq!(rows[1].outbound, "vpn");
+        assert_eq!(rows[1].host, "openai.com");
     }
 
     #[test]

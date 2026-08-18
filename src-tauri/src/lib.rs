@@ -1,6 +1,7 @@
 mod connect_prep;
 mod deps;
 mod diagnostics;
+mod github_update;
 mod helper_install;
 mod hiddify_reset;
 mod network;
@@ -14,7 +15,7 @@ use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
 use iran_split_core::{
     Engine, LifecycleBusy, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot,
 };
-use iran_split_mihomo::ControllerClient;
+use iran_split_mihomo::{ActiveConnection, ControllerClient};
 use iran_split_rules::{
     bundled_snapshot_is_complete, ensure_bundled_snapshot, CloudRuleStore, CloudRulesStatus,
     DirectRulesDocument, DohResolver, Outbound, RuleManager, RuleSet,
@@ -34,7 +35,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalSize, Manager, Runtime, Size, Window, WindowEvent,
 };
-use tauri_plugin_updater::UpdaterExt;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -89,6 +89,7 @@ struct UpdateCoordinator {
     lock: tokio::sync::Mutex<()>,
     cancel: AtomicBool,
     snapshot: std::sync::Mutex<UpdateSnapshot>,
+    pending_package: std::sync::Mutex<Option<github_update::UpdateInfo>>,
 }
 
 impl std::fmt::Debug for UpdateCoordinator {
@@ -106,6 +107,7 @@ impl UpdateCoordinator {
             lock: tokio::sync::Mutex::new(()),
             cancel: AtomicBool::new(false),
             snapshot: std::sync::Mutex::new(UpdateSnapshot::default()),
+            pending_package: std::sync::Mutex::new(None),
         }
     }
 
@@ -125,6 +127,20 @@ impl UpdateCoordinator {
             .snapshot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = snapshot;
+    }
+
+    fn remember_package(&self, info: Option<github_update::UpdateInfo>) {
+        *self
+            .pending_package
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = info;
+    }
+
+    fn pending_package(&self) -> Option<github_update::UpdateInfo> {
+        self.pending_package
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn try_begin(
@@ -499,14 +515,15 @@ struct UpdateProgress {
     thirdparty_available: Option<bool>,
 }
 
-fn update_download_percent(downloaded: usize, total: Option<u64>) -> Option<u8> {
+fn update_download_percent(downloaded: u64, total: Option<u64>) -> Option<u8> {
     let total = total?;
     if total == 0 {
         return Some(0);
     }
-    let downloaded = u128::from(u64::try_from(downloaded).unwrap_or(u64::MAX));
-    let total = u128::from(total);
-    Some(u8::try_from((downloaded.saturating_mul(100) / total).min(100)).unwrap_or(100))
+    Some(
+        u8::try_from((u128::from(downloaded).saturating_mul(100) / u128::from(total)).min(100))
+            .unwrap_or(100),
+    )
 }
 
 fn progress_from_snapshot(snapshot: &UpdateSnapshot) -> UpdateProgress {
@@ -565,51 +582,6 @@ fn emit_update_progress<R: Runtime>(app: &AppHandle<R>, mut progress: UpdateProg
             "update progress event could not be emitted"
         );
     }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_updater_self_replace_supported() -> bool {
-    linux_updater_self_replace_supported_from(std::env::var_os("APPIMAGE").as_ref())
-}
-
-#[cfg(target_os = "linux")]
-fn linux_updater_self_replace_supported_from(appimage: Option<&std::ffi::OsString>) -> bool {
-    appimage.is_some()
-}
-
-#[cfg(target_os = "linux")]
-fn open_linux_deb_release(
-    app: &AppHandle,
-    operation_id: Uuid,
-) -> Result<OperationAccepted, String> {
-    info!(
-        event = "update.manual_package",
-        section = "updates",
-        initiator = "install_update",
-        cause = "linux_deb_package",
-        trace_route = "tauri_command->open_external_url",
-        trace_id = %operation_id,
-        "linux package cannot self-replace; opening the GitHub Release"
-    );
-    deps::open_allowlisted_url("https://github.com/devlifeX/BiFlow/releases/latest")
-        .map_err(|error| error.to_string())?;
-    emit_update_progress(
-        app,
-        UpdateProgress {
-            phase: "manual".into(),
-            percent: None,
-            version: None,
-            error: None,
-            operation_id: None,
-            app_available: None,
-            rules_available: None,
-            thirdparty_available: None,
-        },
-    );
-    Ok(OperationAccepted {
-        operation_id,
-        already_complete: true,
-    })
 }
 
 async fn pause_stack_for_update(services: &AppServices) -> Result<(), String> {
@@ -758,6 +730,56 @@ async fn session_connection_totals(services: &AppServices) -> Result<(u64, u64),
     tokio::time::timeout(TRAFFIC_PROBE_TIMEOUT, client.connection_totals())
         .await
         .map_err(|_| "traffic probe timed out".to_owned())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn list_active_connections(app: AppHandle) -> Result<Vec<ActiveConnection>, String> {
+    diagnostics::trace_action(
+        "connections",
+        "tauri_command",
+        "list_active_connections",
+        async move {
+            let services = services(&app)?;
+            if !matches!(
+                services.engine.snapshot().phase,
+                StackPhase::Running | StackPhase::Degraded
+            ) {
+                return Ok(Vec::new());
+            }
+            let rows = active_mihomo_connections(services).await?;
+            info!(
+                event = "connections.listed",
+                section = "connections",
+                initiator = "tauri_command",
+                cause = "diagnostics_poll",
+                trace_route = "tauri_command->mihomo_controller",
+                count = rows.len(),
+                "listed live Mihomo connections without host values"
+            );
+            Ok(rows)
+        },
+    )
+    .await
+}
+
+async fn active_mihomo_connections(
+    services: &AppServices,
+) -> Result<Vec<ActiveConnection>, String> {
+    let config = services
+        .config_store
+        .load()
+        .or_else(|_| services.config_store.load_or_create())
+        .map_err(|error| error.to_string())?;
+    let client = ControllerClient::new(
+        &config.mihomo.controller_host,
+        config.mihomo.controller_port,
+        &config.mihomo.controller_secret,
+    )
+    .map_err(|error| error.to_string())?;
+    tokio::time::timeout(TRAFFIC_PROBE_TIMEOUT, client.active_connections())
+        .await
+        .map_err(|_| "connection listing timed out".to_owned())?
         .map_err(|error| error.to_string())
 }
 
@@ -1504,52 +1526,40 @@ fn export_support_bundle(app: AppHandle) -> Result<ExportResult, String> {
     )
 }
 
-/// Reaching `releases/latest/download/latest.json` fails intermittently on a
-/// cold or congested link — DNS, TLS, or a GitHub redirect hiccup — and the
-/// same check succeeds moments later. Retry here so a transient failure never
-/// becomes a Retry button the operator has to press.
-const UPDATE_CHECK_ATTEMPTS: u32 = 4;
-const UPDATE_CHECK_FIRST_BACKOFF: Duration = Duration::from_millis(600);
-const UPDATE_CHECK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(8);
+/// GitHub's public Releases API can flake on DNS/TLS. Retry once so a
+/// transient failure does not become a Retry button. Each attempt is bounded
+/// like `DBack`'s About-page check (about one minute).
+const UPDATE_CHECK_ATTEMPTS: u32 = 2;
+const UPDATE_CHECK_FIRST_BACKOFF: Duration = Duration::from_secs(1);
+const UPDATE_CHECK_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(60);
 const UPDATE_INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-/// How long to wait after launch before the first background check, and the
-/// interval between later ones.
-const UPDATE_BACKGROUND_DELAY: Duration = Duration::from_secs(90);
-const UPDATE_BACKGROUND_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
-async fn check_update_once(
-    app: &AppHandle,
-) -> Result<Option<tauri_plugin_updater::Update>, String> {
-    tokio::time::timeout(UPDATE_CHECK_ATTEMPT_TIMEOUT, async {
-        app.updater()
-            .map_err(|error| error.to_string())?
-            .check()
-            .await
-            .map_err(|error| error.to_string())
-    })
+async fn check_github_once() -> Result<github_update::UpdateInfo, String> {
+    tokio::time::timeout(
+        UPDATE_CHECK_ATTEMPT_TIMEOUT,
+        github_update::check(
+            version::app_version(),
+            github_update::detect_install_kind(),
+            UPDATE_CHECK_ATTEMPT_TIMEOUT,
+        ),
+    )
     .await
     .map_err(|_| "update check timed out".to_owned())?
 }
 
-fn status_from_signed_update(update: Option<&tauri_plugin_updater::Update>) -> UpdateStatus {
-    update.map_or(
-        UpdateStatus {
-            available: false,
-            version: None,
-            notes: None,
-            app_available: false,
-            rules_available: false,
-            thirdparty_available: false,
+fn status_from_github_update(info: &github_update::UpdateInfo) -> UpdateStatus {
+    UpdateStatus {
+        available: info.available,
+        version: info.available.then(|| info.latest_version.clone()),
+        notes: if info.notes.is_empty() {
+            None
+        } else {
+            Some(info.notes.clone())
         },
-        |update| UpdateStatus {
-            available: true,
-            version: Some(update.version.clone()),
-            notes: update.body.clone(),
-            app_available: true,
-            rules_available: false,
-            thirdparty_available: false,
-        },
-    )
+        app_available: info.available,
+        rules_available: false,
+        thirdparty_available: false,
+    }
 }
 
 fn merge_update_channels(
@@ -1593,8 +1603,11 @@ async fn collect_update_status(
     app: &AppHandle,
     initiator: &'static str,
 ) -> Result<UpdateStatus, String> {
-    let found = fetch_signed_update(app, initiator).await?;
-    let mut status = status_from_signed_update(found.as_ref());
+    let found = fetch_github_update(app, initiator).await?;
+    if let Ok(services) = services(app) {
+        services.updates.remember_package(Some(found.clone()));
+    }
+    let mut status = status_from_github_update(&found);
     enrich_update_channels(app, &mut status).await;
     Ok(status)
 }
@@ -1656,16 +1669,16 @@ fn update_check_backoff(attempt: u32) -> Duration {
     UPDATE_CHECK_FIRST_BACKOFF.saturating_mul(1 << attempt.min(4))
 }
 
-async fn fetch_signed_update(
+async fn fetch_github_update(
     app: &AppHandle,
     initiator: &'static str,
-) -> Result<Option<tauri_plugin_updater::Update>, String> {
+) -> Result<github_update::UpdateInfo, String> {
     let mut last_error = String::new();
     for attempt in 0..UPDATE_CHECK_ATTEMPTS {
         if update_check_cancelled(app) {
             return Err("update check cancelled".into());
         }
-        match check_update_once(app).await {
+        match check_github_once().await {
             Ok(update) => {
                 if attempt > 0 {
                     info!(
@@ -1673,7 +1686,7 @@ async fn fetch_signed_update(
                         section = "updates",
                         initiator = initiator,
                         cause = "retry_succeeded",
-                        trace_route = "updater_plugin->github_release->latest_json",
+                        trace_route = "updater->github_releases_api",
                         attempts = attempt + 1,
                         "update check succeeded after a transient failure"
                     );
@@ -1687,7 +1700,7 @@ async fn fetch_signed_update(
                     section = "updates",
                     initiator = initiator,
                     cause = last_error.as_str(),
-                    trace_route = "updater_plugin->github_release->latest_json",
+                    trace_route = "updater->github_releases_api",
                     attempt = attempt + 1,
                     attempts = UPDATE_CHECK_ATTEMPTS,
                     "update check attempt failed"
@@ -1706,7 +1719,7 @@ async fn fetch_signed_update(
         section = "updates",
         initiator = initiator,
         cause = last_error.as_str(),
-        trace_route = "updater_plugin->github_release->latest_json",
+        trace_route = "updater->github_releases_api",
         attempts = UPDATE_CHECK_ATTEMPTS,
         "update check failed after every retry"
     );
@@ -1784,155 +1797,6 @@ async fn check_for_update(app: AppHandle) -> Result<UpdateStatus, String> {
     .await
 }
 
-/// Keeps the About page current without anyone pressing Check. A failure stays
-/// silent: the retries already ran, and a background poll must never replace a
-/// real state with an error banner the operator did not ask for.
-fn spawn_background_update_checks(app: &AppHandle) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(UPDATE_BACKGROUND_DELAY).await;
-        loop {
-            let Ok(services) = services(&app) else {
-                tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
-                continue;
-            };
-            let Some((_guard, _)) = services.updates.try_begin("background_poll", "checking")
-            else {
-                emit_update_progress(&app, progress_from_snapshot(&services.updates.snapshot()));
-                tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
-                continue;
-            };
-            match collect_update_status(&app, "background_poll").await {
-                Ok(status) if status.available => {
-                    info!(
-                        event = "update.background_found",
-                        section = "updates",
-                        initiator = "background_poll",
-                        cause = "release_published",
-                        trace_route = "background_poll->updater_plugin->update_progress",
-                        update_version = status.version.as_deref().unwrap_or("unknown"),
-                        "a newer signed release is available"
-                    );
-                    emit_update_progress(
-                        &app,
-                        UpdateProgress {
-                            phase: "available".into(),
-                            percent: None,
-                            version: status.version,
-                            error: None,
-                            operation_id: None,
-                            app_available: None,
-                            rules_available: None,
-                            thirdparty_available: None,
-                        },
-                    );
-                }
-                Ok(_) | Err(_) => {}
-            }
-            tokio::time::sleep(UPDATE_BACKGROUND_INTERVAL).await;
-        }
-    });
-}
-
-async fn download_signed_update_bytes(
-    app: &AppHandle,
-    mut update: tauri_plugin_updater::Update,
-    operation_id: Uuid,
-    target_version: &str,
-) -> Result<Vec<u8>, String> {
-    emit_update_progress(
-        app,
-        UpdateProgress {
-            phase: "downloading".into(),
-            percent: Some(0),
-            version: Some(target_version.to_owned()),
-            error: None,
-            operation_id: Some(operation_id),
-            app_available: None,
-            rules_available: None,
-            thirdparty_available: None,
-        },
-    );
-    match download_update_once(app, &update, operation_id, target_version).await {
-        Ok(bytes) => Ok(bytes),
-        Err(first) => {
-            info!(
-                event = "update.download_retry_direct",
-                section = "updates",
-                initiator = "install_update",
-                cause = "proxy_aware_download_failed",
-                trace_route = "tauri_command->updater_plugin->download_no_proxy",
-                trace_id = %operation_id,
-                "retrying the signed update download without a proxy"
-            );
-            update.no_proxy = true;
-            download_update_once(app, &update, operation_id, target_version)
-                .await
-                .map_err(|_| first)
-        }
-    }
-}
-
-async fn download_update_once(
-    app: &AppHandle,
-    update: &tauri_plugin_updater::Update,
-    operation_id: Uuid,
-    target_version: &str,
-) -> Result<Vec<u8>, String> {
-    let mut downloaded = 0usize;
-    let app_for_progress = app.clone();
-    let version_for_progress = target_version.to_owned();
-    let download = update.download(
-        move |chunk_length, content_length| {
-            downloaded = downloaded.saturating_add(chunk_length);
-            emit_update_progress(
-                &app_for_progress,
-                UpdateProgress {
-                    phase: "downloading".into(),
-                    percent: update_download_percent(downloaded, content_length),
-                    version: Some(version_for_progress.clone()),
-                    error: None,
-                    operation_id: None,
-                    app_available: None,
-                    rules_available: None,
-                    thirdparty_available: None,
-                },
-            );
-        },
-        || {},
-    );
-    tokio::time::timeout(UPDATE_INSTALL_TIMEOUT, download)
-        .await
-        .map_err(|_| "update download timed out".to_owned())?
-        .map_err(|error| {
-            let message = error.to_string();
-            emit_update_progress(
-                app,
-                UpdateProgress {
-                    phase: "failed".into(),
-                    percent: None,
-                    version: Some(target_version.to_owned()),
-                    error: Some(message.clone()),
-                    operation_id: Some(operation_id),
-                    app_available: None,
-                    rules_available: None,
-                    thirdparty_available: None,
-                },
-            );
-            error!(
-                event = "update.download_failed",
-                section = "updates",
-                initiator = "install_update",
-                cause = "download_or_verify_error",
-                trace_route = "tauri_command->updater_plugin->download",
-                trace_id = %operation_id,
-                update_version = target_version,
-                "application update could not be downloaded"
-            );
-            message
-        })
-}
-
 const DIRECT_RULES_UPGRADE_GUARD: &str = "direct-rules.upgrade-guard";
 
 fn record_direct_rules_upgrade_guard(data: &Path) {
@@ -1989,16 +1853,205 @@ async fn restore_stack_after_failed_install(services: &AppServices) {
     }
 }
 
-fn schedule_update_restart(app: &AppHandle, operation_id: Uuid) -> OperationAccepted {
+fn schedule_update_exit(app: &AppHandle, operation_id: Uuid) -> OperationAccepted {
     diagnostics::flush();
-    let restart_app = app.clone();
+    let exit_app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        restart_app.restart();
+        exit_app.exit(0);
     });
     OperationAccepted {
         operation_id,
         already_complete: false,
+    }
+}
+
+async fn resolve_github_package(app: &AppHandle) -> Result<github_update::UpdateInfo, String> {
+    if let Some(pending) = services(app)?.updates.pending_package() {
+        return Ok(pending);
+    }
+    let found = fetch_github_update(app, "install_update").await?;
+    services(app)?.updates.remember_package(Some(found.clone()));
+    Ok(found)
+}
+
+async fn download_github_package(
+    app: &AppHandle,
+    operation_id: Uuid,
+    info: &github_update::UpdateInfo,
+) -> Result<PathBuf, String> {
+    let asset = info
+        .asset
+        .as_ref()
+        .ok_or_else(|| "no update package for this platform".to_owned())?;
+    let target_version = info.latest_version.clone();
+    info!(
+        event = "update.download_started",
+        section = "updates",
+        initiator = "install_update",
+        cause = "update_available",
+        trace_route = "tauri_command->github_update->download",
+        trace_id = %operation_id,
+        update_version = %target_version,
+        "application update download started"
+    );
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "downloading".into(),
+            percent: Some(0),
+            version: Some(target_version.clone()),
+            error: None,
+            operation_id: Some(operation_id),
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
+        },
+    );
+    let app_for_progress = app.clone();
+    let version_for_progress = target_version.clone();
+    let cancel_app = app.clone();
+    github_update::download_asset(
+        version::app_version(),
+        asset,
+        UPDATE_INSTALL_TIMEOUT,
+        move |written, total| {
+            emit_update_progress(
+                &app_for_progress,
+                UpdateProgress {
+                    phase: "downloading".into(),
+                    percent: update_download_percent(written, total),
+                    version: Some(version_for_progress.clone()),
+                    error: None,
+                    operation_id: None,
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
+                },
+            );
+        },
+        move || update_check_cancelled(&cancel_app),
+    )
+    .await
+    .inspect_err(|cause| {
+        emit_update_progress(
+            app,
+            UpdateProgress {
+                phase: "failed".into(),
+                percent: None,
+                version: Some(target_version.clone()),
+                error: Some(cause.clone()),
+                operation_id: Some(operation_id),
+                app_available: None,
+                rules_available: None,
+                thirdparty_available: None,
+            },
+        );
+        error!(
+            event = "update.download_failed",
+            section = "updates",
+            initiator = "install_update",
+            cause = "download_error",
+            trace_route = "tauri_command->github_update->download",
+            trace_id = %operation_id,
+            "application update could not be downloaded"
+        );
+    })
+}
+
+async fn apply_downloaded_package(
+    app: &AppHandle,
+    operation_id: Uuid,
+    info: &github_update::UpdateInfo,
+    package: &Path,
+) -> Result<OperationAccepted, String> {
+    let target_version = info.latest_version.clone();
+    emit_update_progress(
+        app,
+        UpdateProgress {
+            phase: "installing".into(),
+            percent: Some(100),
+            version: Some(target_version.clone()),
+            error: None,
+            operation_id: Some(operation_id),
+            app_available: None,
+            rules_available: None,
+            thirdparty_available: None,
+        },
+    );
+    let current_exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let outcome = match github_update::apply_package(
+        github_update::detect_install_kind(),
+        package,
+        &current_exe,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(cause) => {
+            restore_stack_after_failed_install(services(app)?).await;
+            emit_update_progress(
+                app,
+                UpdateProgress {
+                    phase: "failed".into(),
+                    percent: None,
+                    version: Some(target_version),
+                    error: Some(cause.clone()),
+                    operation_id: Some(operation_id),
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
+                },
+            );
+            return Err(cause);
+        }
+    };
+    info!(
+        event = "update.install_succeeded",
+        section = "updates",
+        initiator = "install_update",
+        cause = "download_and_install_complete",
+        trace_route = "tauri_command->github_update->apply",
+        trace_id = %operation_id,
+        update_version = %target_version,
+        "application update installed"
+    );
+    match outcome {
+        github_update::ApplyOutcome::ManualRestart => {
+            emit_update_progress(
+                app,
+                UpdateProgress {
+                    phase: "installed".into(),
+                    percent: Some(100),
+                    version: Some(target_version),
+                    error: None,
+                    operation_id: Some(operation_id),
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
+                },
+            );
+            Ok(OperationAccepted {
+                operation_id,
+                already_complete: true,
+            })
+        }
+        github_update::ApplyOutcome::HelperRestart => {
+            emit_update_progress(
+                app,
+                UpdateProgress {
+                    phase: "restarting".into(),
+                    percent: Some(100),
+                    version: Some(target_version),
+                    error: None,
+                    operation_id: Some(operation_id),
+                    app_available: None,
+                    rules_available: None,
+                    thirdparty_available: None,
+                },
+            );
+            Ok(schedule_update_exit(app, operation_id))
+        }
     }
 }
 
@@ -2007,14 +2060,10 @@ async fn perform_complete_update_install(
     operation_id: Uuid,
 ) -> Result<OperationAccepted, String> {
     apply_sidecar_updates(app, operation_id).await?;
-    #[cfg(target_os = "linux")]
-    if !linux_updater_self_replace_supported() {
-        return open_linux_deb_release(app, operation_id);
-    }
-    let update = fetch_signed_update(app, "install_update").await?;
-    let mut status = status_from_signed_update(update.as_ref());
+    let update = resolve_github_package(app).await?;
+    let mut status = status_from_github_update(&update);
     enrich_update_channels(app, &mut status).await;
-    let Some(update) = update else {
+    if !update.available || update.asset.is_none() {
         emit_update_progress(
             app,
             UpdateProgress {
@@ -2036,89 +2085,11 @@ async fn perform_complete_update_install(
             operation_id,
             already_complete: true,
         });
-    };
-    perform_signed_update_install(app, operation_id, update).await
-}
-
-async fn perform_signed_update_install(
-    app: &AppHandle,
-    operation_id: Uuid,
-    update: tauri_plugin_updater::Update,
-) -> Result<OperationAccepted, String> {
-    let target_version = update.version.clone();
-    info!(
-        event = "update.download_started",
-        section = "updates",
-        initiator = "install_update",
-        cause = "update_available",
-        trace_route = "tauri_command->updater_plugin->download",
-        trace_id = %operation_id,
-        update_version = %target_version,
-        "application update download started"
-    );
-    let bytes =
-        download_signed_update_bytes(app, update.clone(), operation_id, &target_version).await?;
+    }
+    let package = download_github_package(app, operation_id, &update).await?;
     record_direct_rules_upgrade_guard(&services(app)?.paths.data);
     pause_stack_for_update(services(app)?).await?;
-    emit_update_progress(
-        app,
-        UpdateProgress {
-            phase: "installing".into(),
-            percent: Some(100),
-            version: Some(target_version.clone()),
-            error: None,
-            operation_id: Some(operation_id),
-            app_available: None,
-            rules_available: None,
-            thirdparty_available: None,
-        },
-    );
-    let install = tokio::task::spawn_blocking(move || update.install(bytes));
-    if let Err(cause) = install
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| error.to_string())
-    {
-        restore_stack_after_failed_install(services(app)?).await;
-        emit_update_progress(
-            app,
-            UpdateProgress {
-                phase: "failed".into(),
-                percent: None,
-                version: Some(target_version),
-                error: Some(cause.clone()),
-                operation_id: Some(operation_id),
-                app_available: None,
-                rules_available: None,
-                thirdparty_available: None,
-            },
-        );
-        return Err(cause);
-    }
-    info!(
-        event = "update.install_succeeded",
-        section = "updates",
-        initiator = "install_update",
-        cause = "download_and_install_complete",
-        trace_route = "tauri_command->updater_plugin->restart",
-        trace_id = %operation_id,
-        update_version = %target_version,
-        "application update installed; relaunching"
-    );
-    emit_update_progress(
-        app,
-        UpdateProgress {
-            phase: "restarting".into(),
-            percent: Some(100),
-            version: Some(target_version),
-            error: None,
-            operation_id: Some(operation_id),
-            app_available: None,
-            rules_available: None,
-            thirdparty_available: None,
-        },
-    );
-    Ok(schedule_update_restart(app, operation_id))
+    apply_downloaded_package(app, operation_id, &update, &package).await
 }
 
 #[tauri::command]
@@ -2622,7 +2593,6 @@ fn setup_application(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Err
             "stack snapshot watcher stopped"
         );
     });
-    spawn_background_update_checks(app.handle());
     tauri::async_runtime::spawn(async move {
         if let Err(cause) = diagnostics::trace_action(
             "startup",
@@ -2835,6 +2805,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .setup(setup_application)
@@ -2844,6 +2815,7 @@ pub fn run() {
             get_stack_snapshot,
             get_network_status,
             get_traffic_totals,
+            list_active_connections,
             start_stack,
             stop_stack,
             pause_stack,
@@ -2899,7 +2871,7 @@ mod tests {
 
     #[test]
     fn update_check_attempt_timeout_bounds_a_hang() {
-        assert_eq!(super::UPDATE_CHECK_ATTEMPT_TIMEOUT, Duration::from_secs(8));
+        assert_eq!(super::UPDATE_CHECK_ATTEMPT_TIMEOUT, Duration::from_secs(60));
         assert_eq!(super::UPDATE_INSTALL_TIMEOUT, Duration::from_secs(10 * 60));
         let coordinator = super::UpdateCoordinator::new();
         let first = coordinator.try_begin("test", "checking");
@@ -3169,11 +3141,38 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_deb_packages_do_not_self_replace() {
-        assert!(!linux_updater_self_replace_supported_from(None));
-        assert!(linux_updater_self_replace_supported_from(Some(
-            &std::ffi::OsString::from("/tmp/BiFlow.AppImage"),
-        )));
+    fn linux_deb_packages_install_via_apt_not_self_replace() {
+        assert_eq!(
+            super::github_update::install_kind_from(None, false),
+            super::github_update::InstallKind::Deb
+        );
+        assert_eq!(
+            super::github_update::install_kind_from(
+                Some(std::ffi::OsStr::new("/tmp/BiFlow.AppImage")),
+                false
+            ),
+            super::github_update::InstallKind::AppImage
+        );
+    }
+
+    #[test]
+    fn coordinator_caches_the_checked_package() {
+        let coordinator = super::UpdateCoordinator::new();
+        coordinator.remember_package(Some(super::github_update::UpdateInfo {
+            available: true,
+            current_version: "3.5.0".into(),
+            latest_version: "3.6.0".into(),
+            notes: String::new(),
+            asset: Some(super::github_update::Asset {
+                name: "BiFlow_3.6.0_amd64.deb".into(),
+                url: "https://example.invalid/package".into(),
+                size: 1,
+            }),
+        }));
+        let pending = coordinator.pending_package().expect("cached");
+        assert_eq!(pending.latest_version, "3.6.0");
+        coordinator.remember_package(None);
+        assert!(coordinator.pending_package().is_none());
     }
 
     #[cfg(target_os = "linux")]

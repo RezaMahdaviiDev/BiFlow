@@ -33,7 +33,7 @@ import { Settings } from "./components/Settings";
 import { BottomNav } from "./components/BottomNav";
 import { UiModeSwitch } from "./components/UiModeSwitch";
 import { isMobileViewport, subscribeMobileViewport } from "./lib/viewport";
-import { readUiMode, type UiMode } from "./lib/uiMode";
+import { readUiMode, writeUiMode, type UiMode } from "./lib/uiMode";
 import { useAppStore } from "./store/app";
 
 /** Only a live stack lights the border: running is green, paused is amber, and
@@ -215,7 +215,21 @@ export function App() {
             {store.page === "about" ? <About /> : null}
           </div>
         </main>
-        {advanced && mobile ? <BottomNav /> : null}
+        {mobile ? (
+          <BottomNav
+            onNavigate={(page) => {
+              if (
+                uiMode === "basic" &&
+                page !== "dashboard" &&
+                page !== "about"
+              ) {
+                writeUiMode("advanced");
+                setUiMode("advanced");
+              }
+              useAppStore.getState().setPage(page);
+            }}
+          />
+        ) : null}
         <AppStatusBar />
         <InputContextMenu />
       </div>

@@ -141,6 +141,29 @@ describe("mock transport", () => {
     expect(stages).toContain("checking_readiness");
   });
 
+  it("lists mock DIRECT and VPN connections only while connected", async () => {
+    await expect(mockApi.listActiveConnections()).resolves.toEqual([]);
+    await mockApi.start();
+    await vi.waitFor(async () => {
+      const snapshot = await mockApi.getSnapshot();
+      expect(snapshot.phase).toBe("running");
+    });
+    await expect(mockApi.listActiveConnections()).resolves.toEqual([
+      {
+        host: "digikala.ir",
+        destination_ip: "5.22.12.1",
+        outbound: "direct",
+        rule: "iran-domains",
+      },
+      {
+        host: "openai.com",
+        destination_ip: "104.18.1.1",
+        outbound: "vpn",
+        rule: "MATCH",
+      },
+    ]);
+  });
+
   it("rejects a second connection operation while one is running", async () => {
     const first = mockApi.start();
     await expect(mockApi.stop()).rejects.toThrow(/already in progress/);

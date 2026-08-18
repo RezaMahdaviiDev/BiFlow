@@ -151,4 +151,40 @@ test.describe("responsive viewports", () => {
       expect(clipped).toBe(false);
     });
   }
+
+  test("shows bottom navigation in Basic on mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page.waitForFunction(
+      "typeof window.__BIFLOW_RESET_MOCK === 'function'",
+    );
+    await page.evaluate(() => {
+      window.__BIFLOW_RESET_MOCK?.();
+      localStorage.setItem("biflow-ui-mode-v1", "basic");
+    });
+    await page.reload();
+    await expect(page.getByRole("radio", { name: "Basic" })).toBeChecked();
+    await expect(page.getByTestId("bottom-nav")).toBeVisible();
+    await page.getByRole("button", { name: "Direct rules" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Direct rules" }),
+    ).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Advanced" })).toBeChecked();
+  });
+
+  test("scrolls the live routing SVG into view on mobile after connect", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openAdvanced(page);
+    await expect(page.getByTestId("provider-summary")).toBeVisible();
+    await expect(page.getByTestId("connection-status-strip")).toBeVisible();
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    const routing = page.getByTestId("live-routing");
+    await routing.scrollIntoViewIfNeeded();
+    await expect(routing).toBeVisible();
+  });
 });

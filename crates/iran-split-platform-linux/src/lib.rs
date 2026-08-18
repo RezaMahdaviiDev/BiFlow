@@ -36,6 +36,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+mod system_proxy;
+
 const IPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
@@ -755,6 +757,19 @@ impl PlatformBackend for LinuxBackend {
             }
         }
         Ok(())
+    }
+
+    async fn clear_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+        let config = self.config.read().await.clone();
+        let persist = system_proxy::snapshot_path(&self.paths.user_data_dir);
+        system_proxy::clear_if_hiddify(&config.hiddify.host, config.hiddify.port, &persist)
+            .await
+            .map(|_| ())
+    }
+
+    async fn restore_hiddify_system_proxy(&self) -> Result<(), CoreError> {
+        let persist = system_proxy::snapshot_path(&self.paths.user_data_dir);
+        system_proxy::restore(&persist).await
     }
 
     async fn core_process(&self) -> Result<ProcessStatus, CoreError> {

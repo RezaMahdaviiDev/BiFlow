@@ -16,7 +16,11 @@ const items = [
   { page: "about", icon: Info, labelKey: "about" },
 ] as const;
 
-export function BottomNav() {
+export function BottomNav({
+  onNavigate,
+}: {
+  onNavigate?: (page: (typeof items)[number]["page"]) => void;
+}) {
   const { t } = useTranslation();
   const { page: current, setPage } = useAppStore();
 
@@ -33,7 +37,7 @@ export function BottomNav() {
             key={page}
             type="button"
             aria-current={active ? "page" : undefined}
-            onClick={() => setPage(page)}
+            onClick={() => (onNavigate ? onNavigate(page) : setPage(page))}
             className={`flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-2 text-[0.65rem] font-medium ${
               active ? "text-brand" : "text-muted"
             }`}

@@ -203,6 +203,13 @@ export interface TrafficTotals {
   received: number;
 }
 
+export interface ActiveConnection {
+  host: string;
+  destination_ip: string;
+  outbound: "direct" | "vpn";
+  rule: string;
+}
+
 export interface NetworkStatus {
   state: InternetState;
   public_ip: string | null;
@@ -248,8 +255,8 @@ export type UpdatePhase =
   | "downloading"
   | "installing"
   | "restarting"
-  | "failed"
-  | "manual";
+  | "installed"
+  | "failed";
 
 export interface UpdateProgress {
   phase: UpdatePhase;

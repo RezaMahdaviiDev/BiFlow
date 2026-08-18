@@ -450,6 +450,47 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByRole("menuitem", { name: "Cut" })).toBeEnabled();
   });
 
+  test("pastes clipboard text into controlled diagnostics and direct-rule fields", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await openFresh(page);
+    await page.evaluate(() =>
+      navigator.clipboard.writeText("pasted.example.ir"),
+    );
+
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    const diagnosticsField = page.getByLabel("Test IP or domain");
+    await diagnosticsField.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Paste" }).click();
+    await expect(diagnosticsField).toHaveValue("pasted.example.ir");
+
+    await page.evaluate(() => navigator.clipboard.writeText("kavenegar.com"));
+    await page.getByRole("button", { name: "Direct rules" }).click();
+    const ruleField = page.getByLabel("Domain or IP");
+    await ruleField.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Paste" }).click();
+    await expect(ruleField).toHaveValue("kavenegar.com");
+  });
+
+  test("lists live DIRECT and VPN connections after connect", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await connectButton(page).click();
+    await expect(
+      page.getByRole("heading", { name: "Protected split routing is active" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Diagnostics" }).click();
+    const card = page.getByTestId("live-connections");
+    await expect(card).toBeVisible();
+    await expect(card.getByText("digikala.ir")).toBeVisible();
+    await expect(card.getByRole("cell", { name: "DIRECT" })).toBeVisible();
+    await expect(card.getByText("openai.com")).toBeVisible();
+    await expect(card.getByRole("cell", { name: "VPN" })).toBeVisible();
+  });
+
   test("blocks the document context menu", async ({ page }) => {
     await openFresh(page);
     const prevented = await page.evaluate(() => {

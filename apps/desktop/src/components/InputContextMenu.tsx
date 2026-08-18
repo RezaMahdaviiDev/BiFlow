@@ -1,6 +1,7 @@
 import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { readClipboardText, writeClipboardText } from "../lib/clipboard";
 import { isEditableTarget, selectionLength } from "../lib/editableTarget";
 import { BUTTON_ICON_PX } from "./AppButton";
 
@@ -13,22 +14,28 @@ interface MenuState {
 export function InputContextMenu() {
   const { t } = useTranslation();
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const onContextMenu = (event: MouseEvent) => {
       if (!isEditableTarget(event.target)) {
         setMenu(null);
+        setError(null);
         return;
       }
       event.preventDefault();
       event.target.focus();
+      setError(null);
       setMenu({
         x: event.clientX,
         y: event.clientY,
         field: event.target,
       });
     };
-    const dismiss = () => setMenu(null);
+    const dismiss = () => {
+      setMenu(null);
+      setError(null);
+    };
     document.addEventListener("contextmenu", onContextMenu);
     document.addEventListener("click", dismiss);
     window.addEventListener("blur", dismiss);
@@ -70,7 +77,9 @@ export function InputContextMenu() {
         label={t("contextCopy")}
         disabled={!hasSelection}
         onSelect={() => {
-          void copySelection(menu.field);
+          void copySelection(menu.field).catch(() =>
+            setError(t("contextClipboardFailed")),
+          );
         }}
       />
       <MenuItem
@@ -78,7 +87,9 @@ export function InputContextMenu() {
         label={t("contextCut")}
         disabled={readonly || !hasSelection}
         onSelect={() => {
-          void cutSelection(menu.field);
+          void cutSelection(menu.field).catch(() =>
+            setError(t("contextClipboardFailed")),
+          );
         }}
       />
       <MenuItem
@@ -86,9 +97,16 @@ export function InputContextMenu() {
         label={t("contextPaste")}
         disabled={readonly}
         onSelect={() => {
-          void pasteInto(menu.field);
+          void pasteInto(menu.field).catch(() =>
+            setError(t("contextClipboardFailed")),
+          );
         }}
       />
+      {error ? (
+        <li className="px-3 py-1.5 text-xs text-danger" role="alert">
+          {error}
+        </li>
+      ) : null}
     </ul>
   );
 }
@@ -128,7 +146,7 @@ async function copySelection(
     field.selectionEnd ?? 0,
   );
   if (text) {
-    await navigator.clipboard.writeText(text);
+    await writeClipboardText(text);
   }
 }
 
@@ -150,7 +168,7 @@ async function pasteInto(
   }
   const start = target.selectionStart ?? target.value.length;
   const end = target.selectionEnd ?? target.value.length;
-  const text = await navigator.clipboard.readText();
+  const text = await readClipboardText();
   if (!fieldIsEditable(target)) {
     return;
   }

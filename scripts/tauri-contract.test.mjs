@@ -54,6 +54,31 @@ describe("Tauri frontend contract", () => {
     assert.match(rust, /emit\("update-progress"/);
   });
 
+  it("reads the native clipboard through the Tauri plugin", () => {
+    const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    const cargo = readFileSync(join(root, "src-tauri/Cargo.toml"), "utf8");
+    const capabilities = JSON.parse(
+      readFileSync(join(root, "src-tauri/capabilities/main.json"), "utf8"),
+    );
+    assert.match(cargo, /tauri-plugin-clipboard-manager/);
+    assert.match(rust, /tauri_plugin_clipboard_manager::init\(\)/);
+    assert.ok(
+      capabilities.permissions.includes("clipboard-manager:allow-read-text"),
+    );
+    assert.ok(
+      capabilities.permissions.includes("clipboard-manager:allow-write-text"),
+    );
+  });
+
+  it("points NSIS helper staging at LocalAppData generations", () => {
+    const hook = readFileSync(
+      join(root, "packaging/windows/installer-hooks.nsh"),
+      "utf8",
+    );
+    assert.match(hook, /\$LOCALAPPDATA\\biflow\\runtime\\generations/);
+    assert.doesNotMatch(hook, /\$PROGRAMDATA\\iran-split\\staging/);
+  });
+
   it("keeps a resizable main window with a 390x640 minimum", () => {
     const config = JSON.parse(
       readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
@@ -266,43 +291,43 @@ describe("Tauri frontend contract", () => {
     // Defaulted in the trait, but a backend that never stops the user's proxy
     // leaves Hiddify running after Disconnect.
     assert.match(impl[0], /async fn stop_user_proxy\(/);
+    assert.match(impl[0], /async fn clear_hiddify_system_proxy\(/);
+    assert.match(impl[0], /async fn restore_hiddify_system_proxy\(/);
     // The pre-2.2.0 stub answered every call with one canned platform error.
     assert.doesNotMatch(windows, /fn unavailable<T>\(\)/);
   });
 
-  it("retries a flaky update check and polls in the background", () => {
+  it("checks GitHub Releases from About and never polls in the background", () => {
     const rust = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
-    const config = JSON.parse(
-      readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"),
+    const githubUpdate = readFileSync(
+      join(root, "src-tauri/src/github_update.rs"),
+      "utf8",
     );
 
-    // Missing the `latest/` segment yields a 404 that reads as "cannot reach".
-    assert.deepEqual(config.plugins.updater.endpoints, [
-      "https://github.com/devlifeX/BiFlow/releases/latest/download/latest.json",
-    ]);
-    // The command must go through the retry, not call the plugin directly.
+    assert.match(
+      githubUpdate,
+      /https:\/\/api\.github\.com\/repos\/devlifeX\/BiFlow\/releases\/latest/,
+    );
     assert.match(
       rust,
       /async fn check_for_update\([\s\S]*?collect_update_status\(&app, "tauri_command"\)/,
     );
     assert.match(
       rust,
-      /async fn collect_update_status\([\s\S]*?fetch_signed_update\(app, initiator\)/,
+      /async fn collect_update_status\([\s\S]*?fetch_github_update\(app, initiator\)/,
     );
-    assert.match(rust, /fn spawn_background_update_checks\(/);
-    assert.match(rust, /spawn_background_update_checks\(app\.handle\(\)\)/);
-    // A background poll that surfaced its own failures would put an error
-    // banner on screen nobody asked for.
-    const poll = rust.match(
-      /fn spawn_background_update_checks\([\s\S]*?\n\}\n/,
-    );
-    assert.ok(poll, "background update poll is missing");
-    assert.doesNotMatch(poll[0], /phase: "failed"/);
-    // Signed self-replacement, not a browser link.
-    assert.match(rust, /fn fetch_signed_update\(/);
-    assert.match(rust, /fn download_signed_update_bytes\(/);
-    assert.match(rust, /updates\.try_begin\(/);
+    assert.match(rust, /fn fetch_github_update\(/);
+    assert.match(githubUpdate, /async fn download_asset\(/);
+    assert.match(githubUpdate, /pkexec/);
+    assert.match(githubUpdate, /apt-get/);
+    assert.match(githubUpdate, /apply-update\.bat/);
+    assert.match(rust, /\.try_begin\(/);
+    assert.match(rust, /phase: "installed"/);
+    assert.doesNotMatch(rust, /fn spawn_background_update_checks\(/);
+    assert.doesNotMatch(rust, /fn fetch_signed_update\(/);
+    assert.doesNotMatch(rust, /open_linux_deb_release/);
     assert.doesNotMatch(rust, /an update is already in progress/);
+    assert.doesNotMatch(githubUpdate, /trace_route = .*browser_download_url/);
   });
 
   it("never reports a previous attempt's Windows install reason", () => {

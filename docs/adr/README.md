@@ -27,7 +27,7 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0021](./0021-shared-build-contract.md)                  | Shared local/GitHub build contract          | Accepted   |
 | [0022](./0022-biflow-owned-rules.md)                     | BiFlow-owned rule distribution              | Accepted   |
 | [0023](./0023-basic-mode-persistence.md)                 | Basic mode UI persistence                   | Accepted   |
-| [0024](./0024-signed-github-release-updater.md)          | Signed GitHub Release updater               | Accepted   |
+| [0024](./0024-signed-github-release-updater.md)          | Signed GitHub Release updater               | Superseded |
 | [0025](./0025-paused-lifecycle.md)                       | Paused lifecycle and Hiddify keep           | Accepted   |
 | [0026](./0026-linux-webkit-blank-view.md)                | Linux WebKit blank-view workaround          | Accepted   |
 | [0027](./0027-windows-debug-log-clear.md)                | Windows debug.log clear and tests           | Accepted   |
@@ -43,7 +43,7 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0037](./0037-windows-mihomo-controller-reachability.md) | Windows Mihomo controller reachability      | Accepted   |
 | [0038](./0038-windows-tun-readiness.md)                  | Windows TUN readiness and clash alignment   | Accepted   |
 | [0039](./0039-complete-update-channels.md)               | Complete update channels                    | Accepted   |
-| [0040](./0040-reliable-update-check.md)                  | Reliable update check                       | Accepted   |
+| [0040](./0040-reliable-update-check.md)                  | Reliable update check                       | Superseded |
 | [0041](./0041-reliable-cloud-rule-sync.md)               | Reliable cloud rule sync                    | Accepted   |
 | [0042](./0042-responsive-bottom-nav.md)                  | Responsive bottom navigation                | Accepted   |
 | [0043](./0043-persistent-traffic-totals.md)              | Persistent traffic totals                   | Superseded |
@@ -58,3 +58,6 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0052](./0052-in-button-connection-progress.md)          | In-button connection progress               | Accepted   |
 | [0053](./0053-connect-button-glow.md)                    | Connect button availability glow            | Accepted   |
 | [0054](./0054-curated-iranian-business-domains.md)       | Curated Iranian business domains            | Accepted   |
+| [0055](./0055-clear-hiddify-system-proxy.md)             | Clear Hiddify system proxy on pause/stop    | Accepted   |
+| [0056](./0056-live-mihomo-connections.md)                | Live Mihomo connections in Diagnostics      | Accepted   |
+| [0057](./0057-github-releases-in-app-update.md)          | GitHub Releases in-app update               | Accepted   |

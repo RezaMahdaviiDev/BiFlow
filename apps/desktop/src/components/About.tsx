@@ -183,8 +183,8 @@ function updateMessage(
       return t("updateInstalling");
     case "restarting":
       return t("updateRestarting");
-    case "manual":
-      return t("updateManualDeb");
+    case "installed":
+      return t("updateInstalled");
     case "failed":
       return t("updateFailed");
     default:

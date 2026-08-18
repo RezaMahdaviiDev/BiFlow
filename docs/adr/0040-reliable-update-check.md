@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Superseded for the plugin/`latest.json` check by [0057](./0057-github-releases-in-app-update.md).
+`UpdateCoordinator` idempotency (never return `"an update is already in progress"`) remains.
 
 ## Context
 

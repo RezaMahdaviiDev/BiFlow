@@ -631,6 +631,7 @@ describe("release artifact names", () => {
     assert.match(allow[1], /MPL-2\.0/);
     assert.match(allow[1], /Apache-2\.0 WITH LLVM-exception/);
     assert.match(allow[1], /CDLA-Permissive-2\.0/);
+    assert.match(allow[1], /BSL-1\.0/);
     assert.doesNotMatch(allow[1], /["']\*["']/);
     assert.match(deny, /allow-wildcard-paths\s*=\s*true/);
     assert.match(deny, /wildcards\s*=\s*"deny"/);

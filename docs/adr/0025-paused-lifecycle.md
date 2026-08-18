@@ -21,6 +21,8 @@ Hiddify running on Mihomo rollback.
   operations. Do not overload `stop_stack`.
 - Pause stops Mihomo, removes owned TUN/routes/DNS, verifies the OS is no longer
   intercepting, and **never** calls `stop_user_proxy`. Hiddify stays running.
+  Pause **does** call `clear_hiddify_system_proxy` when the OS proxy still
+  points at Hiddify (ADR 0055), so browsers are not left on `127.0.0.1:12334`.
 - Resume reuses the Connect start path from `Paused`. A failed resume rolls
   owned state back and remains `Paused` with `last_error` set.
 - Repeated Pause or Resume while already in the matching phase is idempotent.

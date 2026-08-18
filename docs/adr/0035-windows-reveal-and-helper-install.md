@@ -53,10 +53,13 @@ path)` so the switch is not quoted. Mixed `/` in an old `debug.log` path is
   and then exit with clap's code. Runtime install/uninstall failures still
   persist their own message. The desktop reads that file after a non-zero exit
   so the dialog is not a bare exit code.
-- NSIS uses `$PROGRAMDATA\iran-split\staging` so `HelperSettings::validate`
-  sees an absolute path. In-app Install still records
-  `%LOCALAPPDATA%\biflow\runtime\generations` in `helper.toml` and overwrites a
-  failed NSIS hook.
+- NSIS and in-app Install use the same helper `staging_dir`:
+  `%LOCALAPPDATA%\biflow\runtime\generations` (`$LOCALAPPDATA\biflow\runtime\generations`
+  in the NSIS hook). A packaged NSIS run is not part of this repository's
+  done gate; the installer-hook contract test is the proof. Do not point
+  `--staging-dir` at `$PROGRAMDATA\iran-split\staging` — the desktop stages
+  generations under the user LocalAppData tree, and a mismatch leaves
+  providers at `0 / 0`.
 
 ## Consequences
 

@@ -17,8 +17,10 @@ pause, resume, and disconnect controls. The preference must survive restarts.
   that preference. Connect still installs missing services in Basic (ADR 0044).
 - Render Basic mode as a dedicated minimal dashboard with only the segmented
   mode control, lifecycle actions, progress/cancel, and concise inline errors.
+  On mobile the five-item bottom navigation stays visible. Rules, Diagnostics,
+  and Settings switch the stored mode to Advanced and open that page.
 - Keep About reachable from the tray menu even when Basic mode hides
-  navigation. Selecting Basic from About (or any other page) returns to the
+  desktop navigation. Selecting Basic from About (or any other page) returns to the
   Basic dashboard so the control matches every other screen.
 
 ## Consequences
