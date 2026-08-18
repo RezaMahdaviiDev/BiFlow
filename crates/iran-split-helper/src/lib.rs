@@ -876,6 +876,28 @@ tun_name = "clash-iran"
         delete_owned_interface("unused");
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_production_staging_is_beside_runtime_not_inside_it() {
+        let settings = HelperSettings {
+            authorized_uid: 0,
+            authorized_gid: 0,
+            socket_path: r"\\.\pipe\iran-split-helper-v1".into(),
+            staging_dir: r"C:\ProgramData\iran-split\staging".into(),
+            runtime_dir: r"C:\ProgramData\iran-split\runtime".into(),
+            mihomo_binary: r"C:\ProgramData\iran-split\bin\mihomo.exe".into(),
+            mihomo_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .into(),
+            tun_name: "clash-iran".into(),
+        };
+        assert!(settings.validate().is_ok());
+        let nested = HelperSettings {
+            staging_dir: r"C:\ProgramData\iran-split\runtime\generations".into(),
+            ..settings
+        };
+        assert!(nested.validate().is_err());
+    }
+
     #[cfg(unix)]
     #[test]
     fn production_linux_helper_paths_are_absolute() {
@@ -972,6 +994,11 @@ tun_name = "clash-iran"
         assert!(source.contains("wait_until_pipe_ready"));
         assert!(source.contains("wintun.dll"));
         assert!(!source.contains("\"/TR\""));
+        assert!(source.contains(r#"root.join("staging")"#));
+        assert!(source.contains("fn grant_users_modify"));
+        assert!(source.contains("*S-1-5-32-545:(OI)(CI)M"));
+        assert!(source.contains("icacls"));
+        assert!(!source.contains("LOCALAPPDATA"));
     }
 
     /// `fs::metadata` fails on an NPFS object, so an `exists` check would report

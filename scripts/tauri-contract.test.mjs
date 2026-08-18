@@ -82,13 +82,26 @@ describe("Tauri frontend contract", () => {
     );
   });
 
-  it("points NSIS helper staging at LocalAppData generations", () => {
+  it("points NSIS helper staging at ProgramData iran-split staging", () => {
     const hook = readFileSync(
       join(root, "packaging/windows/installer-hooks.nsh"),
       "utf8",
     );
-    assert.match(hook, /\$LOCALAPPDATA\\biflow\\runtime\\generations/);
-    assert.doesNotMatch(hook, /\$PROGRAMDATA\\iran-split\\staging/);
+    const desktop = readFileSync(join(root, "src-tauri/src/lib.rs"), "utf8");
+    const install = readFileSync(
+      join(root, "src-tauri/src/helper_install.rs"),
+      "utf8",
+    );
+    const helper = readFileSync(
+      join(root, "crates/iran-split-helper/src/windows.rs"),
+      "utf8",
+    );
+    assert.match(hook, /\$PROGRAMDATA\\iran-split\\staging/);
+    assert.doesNotMatch(hook, /\$LOCALAPPDATA\\biflow\\runtime\\generations/);
+    assert.ok(install.includes(String.raw`C:\ProgramData\iran-split\staging`));
+    assert.match(desktop, /generation_staging_dir/);
+    assert.match(helper, /root\.join\("staging"\)/);
+    assert.match(helper, /fn grant_users_modify/);
   });
 
   it("keeps a resizable main window with a 390x640 minimum", () => {
@@ -398,7 +411,7 @@ describe("Tauri frontend contract", () => {
     );
     assert.match(
       source,
-      /#\[cfg\(target_os = "linux"\)\]\s*let payload_dir = /,
+      /#\[cfg\(target_os = "linux"\)\]\s*\{\s*let staging_dir[\s\S]*?let payload_dir = /,
     );
     assert.match(
       source,

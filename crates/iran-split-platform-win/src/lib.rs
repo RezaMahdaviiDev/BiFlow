@@ -233,6 +233,10 @@ pub struct WindowsPaths {
     pub pipe_name: String,
     pub user_data_dir: PathBuf,
     pub system_runtime_dir: PathBuf,
+    /// Directory the SYSTEM helper reads in `register_runtime_generation`.
+    /// Packaged installs use `C:\ProgramData\iran-split\staging` so NSIS and
+    /// the unelevated desktop share one machine-wide root (ADR 0064).
+    pub generation_staging_dir: PathBuf,
     pub resources_dir: PathBuf,
     pub rules_cache_dir: PathBuf,
     pub mihomo_binary: PathBuf,
@@ -699,9 +703,7 @@ impl PlatformBackend for WindowsBackend {
         let generation_id = Uuid::new_v4();
         let staging_root = self
             .paths
-            .user_data_dir
-            .join("runtime")
-            .join("generations")
+            .generation_staging_dir
             .join(generation_id.to_string());
         fs::create_dir_all(&staging_root).map_err(|error| platform_error(&error))?;
         let runtime_paths = RuntimePaths {
@@ -746,6 +748,15 @@ impl PlatformBackend for WindowsBackend {
             generation: generation.clone(),
             config_path: staging_root.join("config.yaml"),
         });
+        info!(
+            event = "runtime.generation_prepared",
+            section = "runtime_generation",
+            initiator = "windows_platform_backend",
+            cause = "stack_start",
+            trace_id = %generation_id,
+            trace_route = "desktop_engine->windows_platform_backend->prepare_runtime",
+            "runtime generation staged for the helper"
+        );
         Ok(generation)
     }
 
@@ -1138,6 +1149,7 @@ mod tests {
             pipe_name: HELPER_PIPE.to_owned(),
             user_data_dir: root.join("user-data"),
             system_runtime_dir: PathBuf::from(r"C:\ProgramData\iran-split\runtime"),
+            generation_staging_dir: root.join("staging"),
             resources_dir: resources,
             rules_cache_dir: root.join("rules-cache"),
             mihomo_binary: root.join("mihomo.exe"),
@@ -1148,6 +1160,14 @@ mod tests {
     fn pipe_name_is_versioned_and_fixed() {
         assert_eq!(HELPER_PIPE, r"\\.\pipe\iran-split-helper-v1");
         assert!(!HELPER_PIPE.contains(".."));
+    }
+
+    #[test]
+    fn packaged_connect_stages_into_the_helper_generation_root() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("generation_staging_dir"));
+        assert!(source.contains(".generation_staging_dir"));
+        assert!(!source.contains(r#"user_data_dir.join("runtime").join("generations")"#));
     }
 
     #[test]
@@ -1205,9 +1225,7 @@ mod tests {
         let backend = WindowsBackend::new(AppConfig::default(), paths.clone());
         let generation = backend.prepare_runtime().await.expect("prepare");
         let root = paths
-            .user_data_dir
-            .join("runtime")
-            .join("generations")
+            .generation_staging_dir
             .join(generation.generation_id.to_string());
         let names = fs::read_dir(&root)
             .expect("generation")
