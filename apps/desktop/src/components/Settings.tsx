@@ -3,31 +3,61 @@ import { Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import type { UseFormRegisterReturn } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { desktop } from "../api/desktop";
-import type { AppConfig, ValidationIssue } from "../api/models";
+import type {
+  AppConfig,
+  DirectDnsPreset,
+  ValidationIssue,
+} from "../api/models";
+import {
+  DIRECT_DNS_PRESETS,
+  DIRECT_DNS_PRESET_SERVERS,
+  formatDirectDnsServers,
+  parseDirectDnsServers,
+} from "../lib/directDns";
 import { useAppStore } from "../store/app";
 
-const formSchema = z.object({
-  hiddifyHost: z.literal("127.0.0.1"),
-  hiddifyPort: z.coerce.number().int().min(1).max(65535),
-  startTimeout: z.coerce.number().int().min(1).max(300),
-  stopWithStack: z.boolean(),
-  controllerPort: z.coerce.number().int().min(1).max(65535),
-  mixedPort: z.coerce.number().int().min(1).max(65535),
-  dnsPort: z.coerce.number().int().min(1).max(65535),
-  tunName: z
-    .string()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9_-]+$/),
-  logLevel: z.enum(["error", "warn", "info", "debug"]),
-  refreshMinutes: z.coerce.number().int().min(1),
-  upstreamHours: z.coerce.number().int().min(1),
-  launchAtLogin: z.boolean(),
-  connectAtLaunch: z.boolean(),
-  closeToTray: z.boolean(),
-});
+const formSchema = z
+  .object({
+    hiddifyHost: z.literal("127.0.0.1"),
+    hiddifyPort: z.coerce.number().int().min(1).max(65535),
+    startTimeout: z.coerce.number().int().min(1).max(300),
+    stopWithStack: z.boolean(),
+    controllerPort: z.coerce.number().int().min(1).max(65535),
+    mixedPort: z.coerce.number().int().min(1).max(65535),
+    dnsPort: z.coerce.number().int().min(1).max(65535),
+    directDnsPreset: z.enum([
+      "shecan",
+      "electro",
+      "radar",
+      "mokhaberat",
+      "custom",
+    ]),
+    directDnsServers: z.string(),
+    tunName: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[a-zA-Z0-9_-]+$/),
+    logLevel: z.enum(["error", "warn", "info", "debug"]),
+    refreshMinutes: z.coerce.number().int().min(1),
+    upstreamHours: z.coerce.number().int().min(1),
+    launchAtLogin: z.boolean(),
+    connectAtLaunch: z.boolean(),
+    closeToTray: z.boolean(),
+  })
+  .superRefine((values, context) => {
+    if (values.directDnsPreset !== "custom") return;
+    if (parseDirectDnsServers(values.directDnsServers).length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["directDnsServers"],
+        message: "Enter at least one DNS IP address",
+      });
+    }
+  });
 
 type FormValues = z.infer<typeof formSchema>;
 type SettingsTab = "hiddify" | "mihomo" | "behavior";
@@ -41,6 +71,8 @@ function toValues(config: AppConfig): FormValues {
     controllerPort: config.mihomo.controller_port,
     mixedPort: config.mihomo.mixed_port,
     dnsPort: config.mihomo.dns_port,
+    directDnsPreset: config.mihomo.direct_dns_preset,
+    directDnsServers: formatDirectDnsServers(config.mihomo.direct_dns_servers),
     tunName: config.mihomo.tun_name,
     logLevel: config.mihomo.log_level,
     refreshMinutes: config.rules.refresh_interval_minutes,
@@ -68,6 +100,8 @@ function merge(config: AppConfig, values: FormValues): AppConfig {
       dns_port: values.dnsPort,
       tun_name: values.tunName,
       log_level: values.logLevel,
+      direct_dns_preset: values.directDnsPreset,
+      direct_dns_servers: parseDirectDnsServers(values.directDnsServers),
     },
     rules: {
       refresh_interval_minutes: values.refreshMinutes,
@@ -82,6 +116,7 @@ function merge(config: AppConfig, values: FormValues): AppConfig {
 }
 
 export function Settings({ settings }: { settings: AppConfig }) {
+  const { t } = useTranslation();
   const { saveSettings, actionPending } = useAppStore();
   const [tab, setTab] = useState<SettingsTab>("hiddify");
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
@@ -89,11 +124,13 @@ export function Settings({ settings }: { settings: AppConfig }) {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors, isDirty },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: toValues(settings),
   });
+  const directDnsPreset = watch("directDnsPreset");
 
   useEffect(() => reset(toValues(settings)), [reset, settings]);
 
@@ -224,6 +261,37 @@ export function Settings({ settings }: { settings: AppConfig }) {
                   className="w-full rounded-xl border-ink/15 bg-canvas"
                 />
               </Field>
+              <Field
+                className="sm:col-span-2"
+                label={t("settingsDns.label")}
+                hint={t("settingsDns.help")}
+                error={errors.directDnsPreset?.message}
+              >
+                <select
+                  {...register("directDnsPreset")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                >
+                  {DIRECT_DNS_PRESETS.map((preset) => (
+                    <option key={preset} value={preset}>
+                      {directDnsOptionLabel(preset, t(`settingsDns.${preset}`))}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {directDnsPreset === "custom" ? (
+                <Field
+                  className="sm:col-span-2"
+                  label={t("settingsDns.customLabel")}
+                  hint={t("settingsDns.customHelp")}
+                  error={errors.directDnsServers?.message}
+                >
+                  <input
+                    {...register("directDnsServers")}
+                    placeholder={t("settingsDns.customPlaceholder")}
+                    className="w-full rounded-xl border-ink/15 bg-canvas"
+                  />
+                </Field>
+              ) : null}
               <Field label="TUN name" error={errors.tunName?.message}>
                 <input
                   {...register("tunName")}
@@ -372,21 +440,35 @@ function Fieldset({
 function Field({
   label,
   error,
+  hint,
+  className,
   children,
 }: {
   label: string;
   error?: string;
+  hint?: string;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <label className="block text-sm font-medium">
-      <span className="mb-1.5 block">{label}</span>
-      {children}
-      {error ? (
-        <span className="mt-1 block text-xs text-danger">{error}</span>
+    <div className={`block text-sm font-medium ${className ?? ""}`}>
+      <label className="block">
+        <span className="mb-1.5 block">{label}</span>
+        {children}
+        {error ? (
+          <span className="mt-1 block text-xs text-danger">{error}</span>
+        ) : null}
+      </label>
+      {hint ? (
+        <p className="mt-1 text-xs font-normal text-muted">{hint}</p>
       ) : null}
-    </label>
+    </div>
   );
+}
+
+function directDnsOptionLabel(preset: DirectDnsPreset, name: string): string {
+  if (preset === "custom") return name;
+  return `${name} (${DIRECT_DNS_PRESET_SERVERS[preset].join(", ")})`;
 }
 
 function Check({

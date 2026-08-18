@@ -97,6 +97,12 @@ export interface OperationAccepted {
 
 export type ExecutableSetting = "auto" | { path: string };
 export type LogLevel = "error" | "warn" | "info" | "debug";
+export type DirectDnsPreset =
+  | "shecan"
+  | "electro"
+  | "radar"
+  | "mokhaberat"
+  | "custom";
 
 export interface AppConfig {
   schema_version: number;
@@ -116,6 +122,8 @@ export interface AppConfig {
     dns_port: number;
     tun_name: string;
     log_level: LogLevel;
+    direct_dns_preset: DirectDnsPreset;
+    direct_dns_servers: string[];
   };
   rules: {
     refresh_interval_minutes: number;

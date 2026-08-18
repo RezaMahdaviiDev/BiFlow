@@ -27,6 +27,7 @@ import type {
   UpdateStatus,
   ValidationIssue,
 } from "./models";
+import { validateDirectDns } from "../lib/directDns";
 
 const now = () => new Date().toISOString();
 const component = (
@@ -90,6 +91,8 @@ function initialSettings(): AppConfig {
       dns_port: 1053,
       tun_name: "clash-iran",
       log_level: "info",
+      direct_dns_preset: "shecan",
+      direct_dns_servers: [],
     },
     rules: { refresh_interval_minutes: 15, upstream_refresh_hours: 24 },
     behavior: {
@@ -266,6 +269,7 @@ const IRAN_BUSINESS_DOMAINS = [
   "excoino.com",
   "hitobit.com",
   "karboom.io",
+  "kavenegar.com",
   "ewano.app",
 ];
 
@@ -704,6 +708,7 @@ export const mockApi = {
         message: "Hiddify must listen on loopback",
       });
     }
+    issues.push(...validateDirectDns(draft.mihomo));
     return issues;
   },
   async saveSettings(draft: AppConfig, expectedRevision: number) {

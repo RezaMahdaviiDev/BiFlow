@@ -39,8 +39,8 @@
       "file": "iran-business-domains.txt",
       "upstream_file": "curated",
       "kind": "domain",
-      "entry_count": 13,
-      "sha256": "4b3e50a8900ffc625617abbce195bcc00063d75cc780dec1c29396d3587717b4",
+      "entry_count": 14,
+      "sha256": "5ecee1dfec5e5468556319420a73c066bade4f73fc015619873b29116147db48",
       "source": "curated"
     }
   ]

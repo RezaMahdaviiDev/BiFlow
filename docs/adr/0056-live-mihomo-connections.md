@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted (DNS follow-up in [0058](./0058-direct-domain-nameserver-policy.md))
 
 ## Context
 

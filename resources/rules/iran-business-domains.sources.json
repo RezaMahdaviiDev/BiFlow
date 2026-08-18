@@ -2,7 +2,7 @@
   "schema_version": 1,
   "license": "CC0-1.0",
   "source": "curated",
-  "verified_on": "2026-08-17",
+  "verified_on": "2026-08-18",
   "entries": [
     {
       "domain": "technolife.com",
@@ -98,6 +98,14 @@
       "official_url": "https://karboom.io/",
       "discovered_from": "https://tehranindex.com/sectors/ecommerce",
       "verified_at": "2026-08-17",
+      "status": "active"
+    },
+    {
+      "domain": "kavenegar.com",
+      "category": "communications",
+      "official_url": "https://console.kavenegar.com/",
+      "discovered_from": "https://kavenegar.com/",
+      "verified_at": "2026-08-18",
       "status": "active"
     },
     {

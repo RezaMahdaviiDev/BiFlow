@@ -12,4 +12,5 @@
 +.excoino.com
 +.hitobit.com
 +.karboom.io
++.kavenegar.com
 +.ewano.app

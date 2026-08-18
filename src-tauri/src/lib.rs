@@ -1017,7 +1017,15 @@ async fn save_settings(
             .config_store
             .save(draft, expected_revision)
             .map_err(|error| error.to_string())?;
-        #[cfg(target_os = "linux")]
+        info!(
+            event = "settings.saved",
+            section = "settings",
+            initiator = "tauri_command",
+            cause = "user_save",
+            expected_revision,
+            direct_dns_preset = %saved.mihomo.direct_dns_preset,
+            "saved settings"
+        );
         services.backend.update_config(saved.clone()).await;
         Ok(saved.redacted())
     })

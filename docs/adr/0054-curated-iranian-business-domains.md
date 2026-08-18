@@ -33,5 +33,6 @@ erase provenance on the next `pnpm rules:update`.
 ## Consequences
 
 - Wave-1 domains (technolife, azkivam, and the rest of the considering list)
-  are DIRECT in mock and runtime `test_route` without user pins.
+  plus later first-party roots such as `kavenegar.com` are DIRECT in mock and
+  runtime `test_route` without user pins.
 - A later cloud refresh cannot silently drop the catalog.

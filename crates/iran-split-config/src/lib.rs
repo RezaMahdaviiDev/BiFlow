@@ -75,6 +75,9 @@ pub struct MihomoConfig {
     pub dns_port: u16,
     pub tun_name: String,
     pub log_level: LogLevel,
+    pub direct_dns_preset: DirectDnsPreset,
+    /// Used when [`DirectDnsPreset::Custom`]. Named presets ignore this list.
+    pub direct_dns_servers: Vec<String>,
 }
 
 impl Default for MihomoConfig {
@@ -87,7 +90,67 @@ impl Default for MihomoConfig {
             dns_port: 1_053,
             tun_name: "clash-iran".into(),
             log_level: LogLevel::Info,
+            direct_dns_preset: DirectDnsPreset::default(),
+            direct_dns_servers: Vec::new(),
         }
+    }
+}
+
+/// Resolvers for Iranian and user-pinned DIRECT domains (not VPN `DoH`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectDnsPreset {
+    #[default]
+    Shecan,
+    Electro,
+    Radar,
+    Mokhaberat,
+    Custom,
+}
+
+impl DirectDnsPreset {
+    /// Built-in IPv4 resolvers. `Custom` has none.
+    #[must_use]
+    pub const fn servers(self) -> &'static [&'static str] {
+        match self {
+            Self::Shecan => &["178.22.122.100", "185.51.200.2"],
+            Self::Electro => &["78.157.42.100", "78.157.42.101"],
+            Self::Radar => &["10.202.10.10", "10.202.10.11"],
+            Self::Mokhaberat => &["5.200.200.200"],
+            Self::Custom => &[],
+        }
+    }
+}
+
+impl std::fmt::Display for DirectDnsPreset {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Shecan => "shecan",
+            Self::Electro => "electro",
+            Self::Radar => "radar",
+            Self::Mokhaberat => "mokhaberat",
+            Self::Custom => "custom",
+        })
+    }
+}
+
+impl MihomoConfig {
+    /// Addresses written into Mihomo `direct-nameserver` and nameserver-policy.
+    #[must_use]
+    pub fn direct_dns_resolvers(&self) -> Vec<String> {
+        if self.direct_dns_preset == DirectDnsPreset::Custom {
+            return self
+                .direct_dns_servers
+                .iter()
+                .map(|server| server.trim().to_owned())
+                .filter(|server| !server.is_empty())
+                .collect();
+        }
+        self.direct_dns_preset
+            .servers()
+            .iter()
+            .map(|server| (*server).to_owned())
+            .collect()
     }
 }
 
@@ -193,6 +256,7 @@ impl AppConfig {
                 "TUN name must contain between 1 and 64 characters",
             ));
         }
+        validate_direct_dns(&self.mihomo, &mut issues);
 
         let ports = [
             ("hiddify.port", self.hiddify.port),
@@ -225,6 +289,53 @@ impl AppConfig {
             }
         }
         value
+    }
+}
+
+fn validate_direct_dns(mihomo: &MihomoConfig, issues: &mut Vec<ValidationIssue>) {
+    let servers = mihomo.direct_dns_resolvers();
+    if servers.is_empty() {
+        issues.push(issue(
+            "mihomo.direct_dns_servers",
+            "DIRECT_DNS_REQUIRED",
+            "DIRECT DNS needs at least one resolver address",
+        ));
+        return;
+    }
+    if servers.len() > 4 {
+        issues.push(issue(
+            "mihomo.direct_dns_servers",
+            "DIRECT_DNS_TOO_MANY",
+            "DIRECT DNS accepts at most four resolver addresses",
+        ));
+    }
+    for server in servers {
+        match server.parse::<IpAddr>() {
+            Ok(address) if is_usable_direct_dns(address) => {}
+            Ok(_) => issues.push(issue(
+                "mihomo.direct_dns_servers",
+                "DIRECT_DNS_INVALID",
+                "DIRECT DNS cannot be loopback, unspecified, multicast, or fake-ip",
+            )),
+            Err(_) => issues.push(issue(
+                "mihomo.direct_dns_servers",
+                "DIRECT_DNS_INVALID",
+                "DIRECT DNS resolvers must be IP addresses, not host names",
+            )),
+        }
+    }
+}
+
+fn is_usable_direct_dns(address: IpAddr) -> bool {
+    if address.is_loopback() || address.is_unspecified() || address.is_multicast() {
+        return false;
+    }
+    match address {
+        IpAddr::V4(value) => {
+            let octets = value.octets();
+            !(octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+        }
+        IpAddr::V6(_) => true,
     }
 }
 
@@ -430,6 +541,43 @@ mod tests {
             second.mihomo.controller_secret
         );
         assert_eq!(first.mihomo.controller_secret.len(), 64);
+        assert_eq!(first.mihomo.direct_dns_preset, DirectDnsPreset::Shecan);
+        assert_eq!(first.mihomo.direct_dns_preset.to_string(), "shecan");
+        assert_eq!(
+            first.mihomo.direct_dns_resolvers(),
+            ["178.22.122.100", "185.51.200.2"]
+        );
+    }
+
+    #[test]
+    fn mokhaberat_and_radar_presets_are_valid_addresses() {
+        let mut config = AppConfig::default();
+        config.mihomo.direct_dns_preset = DirectDnsPreset::Mokhaberat;
+        assert!(config.validate().is_empty());
+        assert_eq!(config.mihomo.direct_dns_resolvers(), ["5.200.200.200"]);
+        config.mihomo.direct_dns_preset = DirectDnsPreset::Radar;
+        assert!(config.validate().is_empty());
+        assert_eq!(
+            config.mihomo.direct_dns_resolvers(),
+            ["10.202.10.10", "10.202.10.11"]
+        );
+    }
+
+    #[test]
+    fn custom_direct_dns_rejects_empty_and_loopback() {
+        let mut config = AppConfig::default();
+        config.mihomo.direct_dns_preset = DirectDnsPreset::Custom;
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "DIRECT_DNS_REQUIRED"));
+        config.mihomo.direct_dns_servers = vec!["127.0.0.1".into()];
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "DIRECT_DNS_INVALID"));
+        config.mihomo.direct_dns_servers = vec!["5.200.200.200".into(), "1.1.1.1".into()];
+        assert!(config.validate().is_empty());
     }
 
     #[test]

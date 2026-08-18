@@ -14,7 +14,7 @@ runtime fallbacks.
 | `iran-domains.txt`          | 62,828 | `ae533f8bf147877bb97efd24a3dd708695f10289462d0746c30af0d9442f2581` |
 | `iran-networks.txt`         |  2,888 | `e72076c81b372dcd6ecb6e8fb17b63b0d33bdd1dc53f1b795875a3f811d6561e` |
 | `private.txt`               |     18 | `aed134cc43c2414cb3df5a10fcb3e215e64fac0249579a112c163674df4ddd36` |
-| `iran-business-domains.txt` |     13 | `4b3e50a8900ffc625617abbce195bcc00063d75cc780dec1c29396d3587717b4` |
+| `iran-business-domains.txt` |     14 | `5ecee1dfec5e5468556319420a73c066bade4f73fc015619873b29116147db48` |
 
 The installed copy is never modified. Live refreshes are validated and written
 to the application data directory, and a failed refresh keeps the last known

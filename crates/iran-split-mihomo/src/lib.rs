@@ -113,6 +113,7 @@ struct DnsConfig {
     nameserver: Vec<String>,
     proxy_server_nameserver: Vec<String>,
     direct_nameserver: Vec<String>,
+    nameserver_policy: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,6 +213,7 @@ pub fn generate_config(
         "MATCH,VPN".into(),
     ]);
 
+    let direct_dns = app.mihomo.direct_dns_resolvers();
     let document = MihomoConfigDocument {
         mixed_port: app.mihomo.mixed_port,
         allow_lan: false,
@@ -245,11 +247,15 @@ pub fn generate_config(
                 "+.lan".into(),
                 "+.local".into(),
                 "localhost.ptlogin2.qq.com".into(),
+                "rule-set:custom-direct-domains".into(),
+                "rule-set:iran-domains".into(),
+                "rule-set:iran-business-domains".into(),
             ],
             default_nameserver: vec!["1.1.1.1".into(), "8.8.8.8".into()],
             nameserver: nameservers(platform),
             proxy_server_nameserver: vec!["8.8.8.8".into(), "1.1.1.1".into()],
-            direct_nameserver: vec!["178.22.122.100".into(), "185.51.200.2".into()],
+            direct_nameserver: direct_dns.clone(),
+            nameserver_policy: direct_nameserver_policy(&direct_dns),
         },
         sniffer: SnifferConfig {
             enable: true,
@@ -312,6 +318,17 @@ fn nameservers(platform: Platform) -> Vec<String> {
             "https://8.8.8.8/dns-query".into(),
         ],
     }
+}
+
+fn direct_nameserver_policy(resolvers: &[String]) -> BTreeMap<String, Vec<String>> {
+    [
+        "custom-direct-domains",
+        "iran-domains",
+        "iran-business-domains",
+    ]
+    .into_iter()
+    .map(|name| (format!("rule-set:{name}"), resolvers.to_vec()))
+    .collect()
 }
 
 fn process_bypass_rules(platform: Platform) -> Vec<String> {
@@ -910,6 +927,23 @@ mod tests {
         assert!(generated
             .yaml
             .contains("RULE-SET,iran-business-domains,DIRECT"));
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&generated.yaml).expect("generated yaml");
+        let policy = parsed
+            .get("dns")
+            .and_then(|dns| dns.get("nameserver-policy"))
+            .expect("nameserver-policy");
+        for key in [
+            "rule-set:custom-direct-domains",
+            "rule-set:iran-domains",
+            "rule-set:iran-business-domains",
+        ] {
+            assert!(policy.get(key).is_some(), "DIRECT DNS policy missing {key}");
+        }
+        assert!(generated.yaml.contains("rule-set:custom-direct-domains"));
+        assert!(generated.yaml.contains("rule-set:iran-business-domains"));
+        assert!(generated.yaml.contains("178.22.122.100"));
+        assert!(generated.yaml.contains("185.51.200.2"));
         assert!(!generated.yaml.contains("/runtime/"));
         assert_eq!(generated.sha256.len(), 64);
     }
@@ -933,6 +967,21 @@ mod tests {
             .yaml
             .contains("PROCESS-NAME-WILDCARD,*Hiddify*,DIRECT"));
         assert!(generated.yaml.contains("PROCESS-NAME,BiFlow.exe,DIRECT"));
+    }
+
+    #[test]
+    fn generated_config_uses_the_selected_direct_dns_preset() {
+        let mut app = AppConfig::default();
+        app.mihomo.direct_dns_preset = iran_split_config::DirectDnsPreset::Mokhaberat;
+        let generated = generate_config(
+            &app,
+            Platform::Linux,
+            &paths(),
+            &DirectRulesDocument::default(),
+        )
+        .expect("config");
+        assert!(generated.yaml.contains("5.200.200.200"));
+        assert!(!generated.yaml.contains("178.22.122.100"));
     }
 
     #[test]

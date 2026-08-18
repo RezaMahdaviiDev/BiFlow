@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../api/models";
+import { useAppStore } from "../store/app";
 import { Settings } from "./Settings";
 
 vi.mock("../api/desktop", () => ({
@@ -28,6 +29,8 @@ const settings: AppConfig = {
     dns_port: 1053,
     tun_name: "clash-iran",
     log_level: "info",
+    direct_dns_preset: "shecan",
+    direct_dns_servers: [],
   },
   rules: { refresh_interval_minutes: 15, upstream_refresh_hours: 24 },
   behavior: {
@@ -38,6 +41,10 @@ const settings: AppConfig = {
 };
 
 describe("Settings", () => {
+  beforeEach(() => {
+    useAppStore.setState({ actionPending: false });
+  });
+
   it("rejects a remote Hiddify address before persistence", async () => {
     render(<Settings settings={settings} />);
     const host = screen.getByLabelText("Host");
@@ -47,5 +54,29 @@ describe("Settings", () => {
       screen.getByRole("button", { name: "Save settings" }),
     );
     expect(await screen.findByText(/Invalid literal value/)).toBeVisible();
+  });
+
+  it("lets the operator pick a DIRECT DNS preset including Mokhaberat", async () => {
+    const saveSettings = vi
+      .fn<(draft: AppConfig) => Promise<void>>()
+      .mockResolvedValue(undefined);
+    useAppStore.setState({ saveSettings });
+    render(<Settings settings={settings} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Mihomo" }));
+    const dns = screen.getByLabelText("DIRECT DNS");
+    expect(dns).toHaveValue("shecan");
+    expect(
+      screen.getByRole("option", { name: /Mokhaberat \(5\.200\.200\.200\)/ }),
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(dns, "custom");
+    expect(screen.getByLabelText("Custom resolvers")).toBeVisible();
+    await userEvent.selectOptions(dns, "mokhaberat");
+    expect(screen.queryByLabelText("Custom resolvers")).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save settings" }),
+    );
+    expect(saveSettings.mock.calls[0]?.[0].mihomo.direct_dns_preset).toBe(
+      "mokhaberat",
+    );
   });
 });

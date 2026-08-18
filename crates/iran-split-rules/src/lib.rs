@@ -891,6 +891,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bundled_catalog_sends_kavenegar_console_direct() {
+        let catalog = include_str!("../../../resources/rules/iran-business-domains.txt")
+            .lines()
+            .filter_map(|line| line.strip_prefix("+.").map(str::to_owned));
+        let set = RuleSet::from_sources(&DirectRulesDocument::default(), [], [], catalog);
+        let decision = set.decide("console.kavenegar.com").expect("decide");
+        assert_eq!(decision.outbound, Outbound::Direct);
+        assert_eq!(decision.reason, DecisionReason::IranDomain);
+        assert_eq!(decision.matched_rule.as_deref(), Some("kavenegar.com"));
+    }
+
     #[tokio::test]
     async fn a_subdomain_pin_stores_the_registrable_root_and_covers_siblings() {
         let directory = tempfile::tempdir().expect("tempdir");

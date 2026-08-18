@@ -249,6 +249,20 @@ test.describe("primary BiFlow flows", () => {
     await expect(page.getByText(/Included:.*debug\.log/)).toBeVisible();
   });
 
+  test("saves a DIRECT DNS preset from Settings", async ({ page }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("tab", { name: "Mihomo" }).click();
+    const dns = page.getByLabel("DIRECT DNS");
+    await expect(dns).toHaveValue("shecan");
+    await dns.selectOption("mokhaberat");
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(
+      page.getByRole("button", { name: "Save settings" }),
+    ).toBeDisabled();
+    await expect(dns).toHaveValue("mokhaberat");
+  });
+
   test("rings the window green while connected and amber while paused", async ({
     page,
   }) => {

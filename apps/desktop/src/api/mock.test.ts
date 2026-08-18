@@ -94,6 +94,12 @@ describe("mock transport", () => {
     await expect(
       mockApi.testRoute("selleracademy.technolife.com"),
     ).resolves.toMatchObject({ outbound: "direct" });
+    await expect(
+      mockApi.testRoute("console.kavenegar.com"),
+    ).resolves.toMatchObject({
+      outbound: "direct",
+      matched_rule: "kavenegar.com",
+    });
   });
 
   it("resyncs cloud rule counts from the BiFlow snapshot", async () => {
@@ -181,6 +187,21 @@ describe("mock transport", () => {
     sessionStorage.setItem("biflow-mock-update-fail", "1");
     await expect(mockApi.installUpdate()).rejects.toThrow(
       /signature verification failed/i,
+    );
+  });
+
+  it("rejects an empty custom DIRECT DNS list", async () => {
+    const settings = await mockApi.getSettings();
+    const issues = await mockApi.validateSettings({
+      ...settings,
+      mihomo: {
+        ...settings.mihomo,
+        direct_dns_preset: "custom",
+        direct_dns_servers: [],
+      },
+    });
+    expect(issues.some((issue) => issue.code === "DIRECT_DNS_REQUIRED")).toBe(
+      true,
     );
   });
 });

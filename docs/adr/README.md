@@ -61,3 +61,5 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0055](./0055-clear-hiddify-system-proxy.md)             | Clear Hiddify system proxy on pause/stop    | Accepted   |
 | [0056](./0056-live-mihomo-connections.md)                | Live Mihomo connections in Diagnostics      | Accepted   |
 | [0057](./0057-github-releases-in-app-update.md)          | GitHub Releases in-app update               | Accepted   |
+| [0058](./0058-direct-domain-nameserver-policy.md)        | DIRECT domain nameserver policy             | Accepted   |
+| [0059](./0059-user-selected-direct-dns.md)               | User-selected DIRECT DNS resolvers          | Accepted   |
