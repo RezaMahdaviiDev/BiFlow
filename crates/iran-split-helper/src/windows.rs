@@ -118,10 +118,11 @@ fn install_inner(
     let helper_dest = bin.join("iran-split-helper.exe");
     let mihomo_dest = bin.join("mihomo.exe");
     let config_dest = root.join("helper.toml");
-    // NSIS perMachine `SetShellVarContext all` makes `$LOCALAPPDATA` expand to
-    // `C:\ProgramData`, and an elevated in-app Install can record an admin
-    // profile. The helper always stages beside `runtime`, never inside a user
-    // profile and never inside `runtime_dir` (those two must not nest).
+    // NSIS perMachine `SetShellVarContext all` makes the local-appdata shell
+    // variable expand to `C:\ProgramData`, and an elevated in-app Install can
+    // record an admin profile. The helper always stages beside `runtime`, never
+    // inside a user profile and never inside `runtime_dir` (those two must not
+    // nest).
     let staging_dir = root.join("staging");
     if requested_staging_dir != staging_dir {
         warn!(

@@ -98,7 +98,7 @@ describe("Tauri frontend contract", () => {
     );
     assert.match(hook, /\$PROGRAMDATA\\iran-split\\staging/);
     assert.doesNotMatch(hook, /\$LOCALAPPDATA\\biflow\\runtime\\generations/);
-    assert.match(install, /C:\\\\ProgramData\\\\iran-split\\\\staging/);
+    assert.ok(install.includes(String.raw`C:\ProgramData\iran-split\staging`));
     assert.match(desktop, /generation_staging_dir/);
     assert.match(helper, /root\.join\("staging"\)/);
     assert.match(helper, /fn grant_users_modify/);
@@ -411,7 +411,7 @@ describe("Tauri frontend contract", () => {
     );
     assert.match(
       source,
-      /#\[cfg\(target_os = "linux"\)\]\s*let payload_dir = /,
+      /#\[cfg\(target_os = "linux"\)\]\s*\{\s*let staging_dir[\s\S]*?let payload_dir = /,
     );
     assert.match(
       source,
