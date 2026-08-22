@@ -21,7 +21,7 @@ use uuid::Uuid;
 const PROCESS_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const MIHOMO_STAY_ALIVE: Duration = Duration::from_millis(400);
 const MAX_LOG_ENTRIES: usize = 2_000;
-const GENERATION_FILES: [&str; 9] = [
+const GENERATION_FILES: [&str; 11] = [
     "config.yaml",
     "private.txt",
     "iran-domains.txt",
@@ -31,6 +31,8 @@ const GENERATION_FILES: [&str; 9] = [
     "custom-direct-ips.txt",
     "custom-vpn-domains.txt",
     "custom-vpn-ips.txt",
+    "custom-openvpn-domains.txt",
+    "custom-openvpn-ips.txt",
 ];
 
 #[derive(Debug, Error)]
@@ -47,6 +49,11 @@ pub enum HelperServiceError {
     BinaryIntegrity,
     #[error("Mihomo process failed: {0}")]
     Process(String),
+    /// The `OpenVPN` side tunnel could not start, or the helper refused to
+    /// start it. The message reaches the user, so it never carries a profile
+    /// path or a credential.
+    #[error("OpenVPN side tunnel failed: {0}")]
+    OpenVpn(String),
     /// Shown verbatim in the install dialog, so it carries no prefix of its
     /// own: the desktop already frames it as an installation failure, and
     /// `Process` would blame Mihomo for a Task Scheduler problem.
@@ -161,6 +168,9 @@ pub struct Supervisor {
     child: Mutex<Option<ManagedChild>>,
     registered: Mutex<HashMap<Uuid, String>>,
     logs: Arc<Mutex<VecDeque<ServiceLogEntry>>>,
+    /// The `OpenVPN` side tunnel, when one is running. Kept beside Mihomo
+    /// rather than inside it: the two start, stop, and fail independently.
+    openvpn: Mutex<Option<openvpn::RunningOpenVpn>>,
 }
 
 impl Supervisor {
@@ -171,6 +181,7 @@ impl Supervisor {
             child: Mutex::new(None),
             registered: Mutex::new(HashMap::new()),
             logs: Arc::new(Mutex::new(VecDeque::with_capacity(MAX_LOG_ENTRIES))),
+            openvpn: Mutex::new(None),
         }
     }
 
@@ -369,6 +380,17 @@ impl Supervisor {
     /// Returns an error when the process or network cleanup fails.
     pub async fn cleanup(&self) -> Result<CleanupReport, HelperServiceError> {
         let process_stopped = !self.stop().await?.running;
+        // The side tunnel goes first: its routes point at a device this
+        // cleanup is about to delete, and a route to a dead device blackholes
+        // whatever Mihomo had pinned to it.
+        let mut openvpn_warnings = Vec::new();
+        let openvpn_stopped = match self.stop_openvpn().await {
+            Ok(status) => !status.running,
+            Err(error) => {
+                openvpn_warnings.push(redact(&error.to_string()));
+                false
+            }
+        };
         let interface_path = Path::new("/sys/class/net").join(&self.settings.tun_name);
         if interface_path.exists() {
             #[cfg(unix)]
@@ -377,19 +399,19 @@ impl Supervisor {
             delete_owned_interface(&self.settings.tun_name);
         }
         let tun_removed = !interface_path.exists();
-        let warnings = if tun_removed {
-            Vec::new()
-        } else {
-            vec![format!(
+        let mut warnings = openvpn_warnings;
+        if !tun_removed {
+            warnings.push(format!(
                 "owned interface {} remains after cleanup",
                 self.settings.tun_name
-            )]
-        };
+            ));
+        }
         let report = CleanupReport {
             process_stopped,
             tun_removed,
             routes_removed: 0,
             dns_restored: true,
+            openvpn_stopped,
             warnings,
         };
         self.push_log("info", "network_cleanup_finished", BTreeMap::new())
@@ -787,6 +809,7 @@ async fn delete_owned_interface(name: &str) -> Result<(), HelperServiceError> {
 fn delete_owned_interface(_name: &str) {}
 
 mod commands;
+mod openvpn;
 
 #[cfg(unix)]
 mod linux;

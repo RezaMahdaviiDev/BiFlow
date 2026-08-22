@@ -40,6 +40,7 @@
 ## Features
 
 - **Split routing** — Iranian sites, Iranian IP ranges, and private/LAN traffic stay **DIRECT**. Everything else uses the Hiddify connection you already have.
+- **OpenVPN side tunnel** — Optionally start an OpenVPN profile right after Hiddify to reach a private or corporate network. It never becomes the system gateway: only the tunnel's own network, the routes the server scopes to itself, and hosts you pin travel through it, so a tunnel that drops cannot take your internet with it.
 - **Connect, Pause, Resume, Disconnect** — One operation at a time. The active button shows the real stage (Start Hiddify, Start Mihomo, and so on) with an in-button progress fill.
 - **Basic and Advanced** — First launch opens Basic. Advanced adds component health, live traffic routes, and extra tools.
 - **Direct rules** — Pin hosts to DIRECT or VPN in a sortable table with one-click route switching. Refresh the bundled Iran domain and IP lists from the BiFlow cloud snapshot.
@@ -76,19 +77,22 @@ allowlisted official download when it is missing.
    bundled Mihomo build when needed.
 3. Open **Direct rules** if you want extra sites or IPs to stay DIRECT, or to
    refresh Iran domain and IP lists from the cloud.
-4. Press **Connect**. BiFlow prepares a routing generation, starts Mihomo, and
+4. Optional: turn on the **OpenVPN** side tunnel in Settings and point it at a
+   `.ovpn` profile. BiFlow starts it after Hiddify and installs only its
+   scoped routes.
+5. Press **Connect**. BiFlow prepares a routing generation, starts Mihomo, and
    asks the helper to attach the TUN and routes. **Pause** stops owned routing
    and Mihomo while leaving Hiddify running; **Resume** rebuilds the split
    stack. **Disconnect** tears owned state down and may also stop Hiddify when
    that setting is on.
-5. Iranian, private, and your custom rules stay DIRECT. Other traffic uses
+6. Iranian, private, and your custom rules stay DIRECT. Other traffic uses
    Hiddify. The dashboard animates both routes while connected, and
    **Diagnostics** can test a host and show DIRECT vs VPN before you rely on it.
    Its support export includes the permanent, locally redacted `debug.log`,
    which records Rust actions, warnings, errors, causes, initiators, and trace
    IDs for troubleshooting. Diagnostics shows its size and lets you reveal or
    delete it when you choose.
-6. **Disconnect** tears the owned TUN and routes down. A failed start rolls back
+7. **Disconnect** tears the owned TUN and routes down. A failed start rolls back
    instead of leaving a half-applied network.
 
 Cloud rule updates fetch the BiFlow-owned manifest, then the files from that

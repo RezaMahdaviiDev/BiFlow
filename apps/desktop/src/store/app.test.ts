@@ -39,6 +39,7 @@ const boot = {
     operation_id: null,
     helper: { phase: "running", message: "Helper is ready", since: "now" },
     hiddify: { phase: "stopped", message: null, since: "now" },
+    openvpn: { phase: "stopped", message: null, since: "now" },
     mihomo: { phase: "stopped", message: null, since: "now" },
     tun: { phase: "stopped", message: null, since: "now" },
     dns: { phase: "stopped", message: null, since: "now" },
@@ -467,7 +468,7 @@ describe("app store", () => {
 
   it("rethrows addRule failures after recording the store error", async () => {
     useAppStore.setState({
-      rules: { revision: 1, rules: [], vpn_rules: [] },
+      rules: { revision: 1, rules: [], vpn_rules: [], openvpn_rules: [] },
       error: null,
     });
     vi.mocked(desktop.addRule).mockRejectedValue(new Error("rules changed"));
@@ -482,9 +483,10 @@ describe("app store", () => {
       revision: 2,
       rules: [],
       vpn_rules: [],
+      openvpn_rules: [],
     });
     useAppStore.setState({
-      rules: { revision: 1, rules: [], vpn_rules: [] },
+      rules: { revision: 1, rules: [], vpn_rules: [], openvpn_rules: [] },
       error: null,
     });
     await useAppStore.getState().addRule("https://console.kavenegar.com/");

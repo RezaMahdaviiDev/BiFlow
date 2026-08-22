@@ -123,6 +123,40 @@ pub struct DirectRulesDocument {
     /// direct. `default` so documents written before exclusions still load.
     #[serde(default)]
     pub vpn_rules: Vec<DirectRule>,
+    /// Hosts routed through the `OpenVPN` side tunnel — usually internal
+    /// addresses only that tunnel can reach. `default` so documents written
+    /// before the side tunnel existed still load.
+    #[serde(default)]
+    pub openvpn_rules: Vec<DirectRule>,
+}
+
+impl DirectRulesDocument {
+    fn list(&self, outbound: Outbound) -> &Vec<DirectRule> {
+        match outbound {
+            Outbound::Direct => &self.rules,
+            Outbound::Vpn => &self.vpn_rules,
+            Outbound::OpenVpn => &self.openvpn_rules,
+        }
+    }
+
+    fn list_mut(&mut self, outbound: Outbound) -> &mut Vec<DirectRule> {
+        match outbound {
+            Outbound::Direct => &mut self.rules,
+            Outbound::Vpn => &mut self.vpn_rules,
+            Outbound::OpenVpn => &mut self.openvpn_rules,
+        }
+    }
+
+    fn all_rules(&self) -> impl Iterator<Item = &DirectRule> {
+        self.rules
+            .iter()
+            .chain(self.vpn_rules.iter())
+            .chain(self.openvpn_rules.iter())
+    }
+
+    fn total(&self) -> usize {
+        self.rules.len() + self.vpn_rules.len() + self.openvpn_rules.len()
+    }
 }
 
 #[async_trait]
@@ -285,15 +319,23 @@ impl RuleManager {
         expected_revision: u64,
     ) -> Result<DirectRulesDocument, RuleError> {
         let target = DirectTarget::parse(input)?;
-        if outbound == Outbound::Vpn {
-            // Loopback, LAN, and CGNAT have to stay direct or the machine
-            // loses its own network while the tunnel is up.
-            if let DirectTarget::Ip(address) = &target {
-                if is_private_or_local(*address) {
+        if let DirectTarget::Ip(address) = &target {
+            match outbound {
+                // Loopback, LAN, and CGNAT have to stay direct or the machine
+                // loses its own network while the tunnel is up.
+                Outbound::Vpn if is_private_or_local(*address) => {
                     return Err(RuleError::InvalidRule(
                         "private, loopback, and carrier-grade NAT addresses cannot be sent through the VPN".into(),
                     ));
                 }
+                // The side tunnel is allowed private ranges — reaching them is
+                // usually why it exists — but never loopback.
+                Outbound::OpenVpn if address.is_loopback() => {
+                    return Err(RuleError::InvalidRule(
+                        "loopback addresses cannot be sent through the OpenVPN side tunnel".into(),
+                    ));
+                }
+                Outbound::Direct | Outbound::Vpn | Outbound::OpenVpn => {}
             }
         }
         let resolved_ips = match &target {
@@ -303,28 +345,25 @@ impl RuleManager {
         let mut document = self.document.lock().await;
         ensure_revision(&document, expected_revision)?;
 
-        let already_pinned = match outbound {
-            Outbound::Direct => &document.rules,
-            Outbound::Vpn => &document.vpn_rules,
+        let already_pinned = document
+            .list(outbound)
+            .iter()
+            .any(|rule| rule.target == target);
+        // A host belongs to one list only, so pinning it here clears it from
+        // every other route it might have been on.
+        let mut moved = false;
+        for other in Outbound::ALL.into_iter().filter(|value| *value != outbound) {
+            let list = document.list_mut(other);
+            let dropped = list.len();
+            list.retain(|rule| rule.target != target);
+            moved |= list.len() != dropped;
         }
-        .iter()
-        .any(|rule| rule.target == target);
-        let other = match outbound {
-            Outbound::Direct => &mut document.vpn_rules,
-            Outbound::Vpn => &mut document.rules,
-        };
-        let dropped = other.len();
-        other.retain(|rule| rule.target != target);
-        let moved = other.len() != dropped;
         if already_pinned && !moved {
             return Ok(document.clone());
         }
         if !already_pinned {
             let now = Utc::now();
-            let list = match outbound {
-                Outbound::Direct => &mut document.rules,
-                Outbound::Vpn => &mut document.vpn_rules,
-            };
+            let list = document.list_mut(outbound);
             list.push(DirectRule {
                 target,
                 resolved_ips,
@@ -352,10 +391,11 @@ impl RuleManager {
         let target = DirectTarget::parse(input)?;
         let mut document = self.document.lock().await;
         ensure_revision(&document, expected_revision)?;
-        let before = document.rules.len() + document.vpn_rules.len();
-        document.rules.retain(|rule| rule.target != target);
-        document.vpn_rules.retain(|rule| rule.target != target);
-        if document.rules.len() + document.vpn_rules.len() != before {
+        let before = document.total();
+        for list in Outbound::ALL {
+            document.list_mut(list).retain(|rule| rule.target != target);
+        }
+        if document.total() != before {
             document.revision = document.revision.saturating_add(1);
             publish(&self.path, &document)?;
         }
@@ -371,9 +411,7 @@ impl RuleManager {
         let domains = {
             let document = self.document.lock().await;
             document
-                .rules
-                .iter()
-                .chain(document.vpn_rules.iter())
+                .all_rules()
                 .filter_map(|rule| match &rule.target {
                     DirectTarget::Domain(domain) => Some(domain.clone()),
                     DirectTarget::Ip(_) => None,
@@ -387,9 +425,16 @@ impl RuleManager {
         let now = Utc::now();
         let mut document = self.document.lock().await;
         let DirectRulesDocument {
-            rules, vpn_rules, ..
+            rules,
+            vpn_rules,
+            openvpn_rules,
+            ..
         } = &mut *document;
-        for rule in rules.iter_mut().chain(vpn_rules.iter_mut()) {
+        for rule in rules
+            .iter_mut()
+            .chain(vpn_rules.iter_mut())
+            .chain(openvpn_rules.iter_mut())
+        {
             if let DirectTarget::Domain(domain) = &rule.target {
                 if let Some((_, addresses)) = resolved.iter().find(|(name, _)| name == domain) {
                     rule.resolved_ips.clone_from(addresses);
@@ -423,7 +468,11 @@ fn canonicalize_document(mut document: DirectRulesDocument) -> DirectRulesDocume
     let before = document.clone();
     document.rules = merge_canonical_rules(document.rules);
     document.vpn_rules = merge_canonical_rules(document.vpn_rules);
-    if document.rules != before.rules || document.vpn_rules != before.vpn_rules {
+    document.openvpn_rules = merge_canonical_rules(document.openvpn_rules);
+    if document.rules != before.rules
+        || document.vpn_rules != before.vpn_rules
+        || document.openvpn_rules != before.openvpn_rules
+    {
         document.revision = document.revision.saturating_add(1);
     }
     document
@@ -489,11 +538,19 @@ fn publish(path: &Path, document: &DirectRulesDocument) -> Result<(), RuleError>
 pub enum Outbound {
     Direct,
     Vpn,
+    /// The `OpenVPN` side tunnel that runs beside Hiddify.
+    OpenVpn,
+}
+
+impl Outbound {
+    /// Every route a host can be pinned to, in precedence order.
+    pub const ALL: [Self; 3] = [Self::OpenVpn, Self::Vpn, Self::Direct];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionReason {
+    OpenVpnRule,
     VpnRule,
     CustomRule,
     PrivateOrLocal,
@@ -511,6 +568,8 @@ pub struct RouteDecision {
 
 #[derive(Debug, Clone, Default)]
 pub struct RuleSet {
+    openvpn_domains: HashSet<String>,
+    openvpn_ips: HashSet<IpAddr>,
     vpn_domains: HashSet<String>,
     vpn_ips: HashSet<IpAddr>,
     custom_domains: HashSet<String>,
@@ -553,6 +612,16 @@ impl RuleSet {
                 }
             }
         }
+        for rule in &custom.openvpn_rules {
+            match &rule.target {
+                DirectTarget::Domain(domain) => {
+                    set.openvpn_domains.insert(domain.clone());
+                }
+                DirectTarget::Ip(address) => {
+                    set.openvpn_ips.insert(*address);
+                }
+            }
+        }
         set
     }
 
@@ -568,6 +637,19 @@ impl RuleSet {
         }
         let domain = normalize_domain(target)?;
         let canonical = registrable_domain(&domain).unwrap_or_else(|_| domain.clone());
+        // Side-tunnel pins win over Hiddify pins: the host is usually internal
+        // to that tunnel, so no other route can reach it at all.
+        if let Some(pin) = self
+            .openvpn_domains
+            .iter()
+            .find(|pin| domain_matches_pin(&domain, pin) || *pin == &canonical)
+        {
+            return Ok(RouteDecision {
+                outbound: Outbound::OpenVpn,
+                reason: DecisionReason::OpenVpnRule,
+                matched_rule: Some(pin.clone()),
+            });
+        }
         if let Some(pin) = self
             .vpn_domains
             .iter()
@@ -608,8 +690,17 @@ impl RuleSet {
     }
 
     fn decide_ip(&self, address: IpAddr) -> RouteDecision {
-        // Loopback and LAN stay direct even under an exclusion; the generated
-        // config keeps private-networks ahead of the VPN rule sets too.
+        // A side-tunnel pin outranks the LAN rule, because reaching an
+        // RFC1918 range that lives behind the tunnel is the usual reason to
+        // run one. Loopback is never overridable: the machine has to be able
+        // to reach itself. The generated Mihomo config uses this same order.
+        if !address.is_loopback() && self.openvpn_ips.contains(&address) {
+            return RouteDecision {
+                outbound: Outbound::OpenVpn,
+                reason: DecisionReason::OpenVpnRule,
+                matched_rule: Some(address.to_string()),
+            };
+        }
         if is_private_or_local(address) {
             return direct(DecisionReason::PrivateOrLocal, Some(address.to_string()));
         }
@@ -768,6 +859,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_host_lives_on_exactly_one_route_across_all_three_lists() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+
+        let vpn = manager
+            .pin("example.com", Outbound::Vpn, 0)
+            .await
+            .expect("vpn");
+        let side = manager
+            .pin("example.com", Outbound::OpenVpn, vpn.revision)
+            .await
+            .expect("openvpn");
+        assert!(side.vpn_rules.is_empty(), "the VPN pin must be dropped");
+        assert!(side.rules.is_empty());
+        assert_eq!(side.openvpn_rules.len(), 1);
+
+        let back = manager
+            .pin("example.com", Outbound::Direct, side.revision)
+            .await
+            .expect("direct");
+        assert!(back.openvpn_rules.is_empty());
+        assert_eq!(back.rules.len(), 1);
+
+        let removed = manager
+            .remove("example.com", back.revision)
+            .await
+            .expect("remove");
+        assert_eq!(removed.total(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_side_tunnel_may_claim_a_private_range_but_never_loopback() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = RuleManager::load(
+            directory.path().join("direct-rules.json"),
+            Arc::new(FixedResolver),
+        )
+        .expect("manager");
+
+        // Reaching an internal 10/8 host is the usual reason to run the side
+        // tunnel, so this pin has to be allowed where a VPN pin is not.
+        let pinned = manager
+            .pin("10.20.5.5", Outbound::OpenVpn, 0)
+            .await
+            .expect("private openvpn pin");
+        assert_eq!(pinned.openvpn_rules.len(), 1);
+        assert!(manager
+            .pin("10.20.5.5", Outbound::Vpn, pinned.revision)
+            .await
+            .is_err());
+        assert!(manager
+            .pin("127.0.0.1", Outbound::OpenVpn, pinned.revision)
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn side_tunnel_pins_outrank_vpn_pins_and_the_lan_rule() {
+        let now = Utc::now();
+        let rule = |value: &str| DirectRule {
+            target: DirectTarget::parse(value).expect("target"),
+            resolved_ips: Vec::new(),
+            created_at: now,
+            refreshed_at: Some(now),
+        };
+        let custom = DirectRulesDocument {
+            revision: 1,
+            rules: Vec::new(),
+            vpn_rules: vec![rule("example.com")],
+            openvpn_rules: vec![rule("intranet.example.net"), rule("10.20.5.5")],
+        };
+        let set = RuleSet::from_sources(&custom, [], [], []);
+
+        // Pins canonicalize to their registrable root, so the subdomain the
+        // user typed still matches here.
+        let internal = set.decide("intranet.example.net").expect("decide");
+        assert_eq!(internal.outbound, Outbound::OpenVpn);
+        assert_eq!(internal.reason, DecisionReason::OpenVpnRule);
+
+        // A pinned RFC1918 address must reach the tunnel, not the local LAN.
+        let private = set.decide("10.20.5.5").expect("decide");
+        assert_eq!(private.outbound, Outbound::OpenVpn);
+
+        // An unpinned private address still stays on the local network, and
+        // loopback is never overridable.
+        assert_eq!(
+            set.decide("10.20.9.9").expect("decide").outbound,
+            Outbound::Direct
+        );
+        assert_eq!(
+            set.decide("127.0.0.1").expect("decide").reason,
+            DecisionReason::PrivateOrLocal
+        );
+
+        // Hiddify pins keep working beside the side tunnel.
+        assert_eq!(
+            set.decide("example.com").expect("decide").outbound,
+            Outbound::Vpn
+        );
+    }
+
+    #[tokio::test]
     async fn private_and_loopback_addresses_cannot_be_pinned_to_the_vpn() {
         let directory = tempfile::tempdir().expect("tempdir");
         let manager = RuleManager::load(
@@ -841,6 +1038,7 @@ mod tests {
         let custom = DirectRulesDocument {
             revision: 1,
             vpn_rules: Vec::new(),
+            openvpn_rules: Vec::new(),
             rules: vec![DirectRule {
                 target: DirectTarget::Domain("example.com".into()),
                 resolved_ips: vec![],
@@ -1010,6 +1208,7 @@ mod tests {
                 },
             ],
             vpn_rules: Vec::new(),
+            openvpn_rules: Vec::new(),
         };
         fs::write(&path, serde_json::to_vec_pretty(&original).expect("json")).expect("write");
         let manager = RuleManager::load(&path, Arc::new(FixedResolver)).expect("load");

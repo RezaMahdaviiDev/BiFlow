@@ -1,3 +1,4 @@
+use ipnet::IpNet;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,7 +10,7 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -20,6 +21,7 @@ pub struct AppConfig {
     pub mihomo: MihomoConfig,
     pub rules: RulesConfig,
     pub behavior: BehaviorConfig,
+    pub openvpn: OpenVpnConfig,
 }
 
 impl Default for AppConfig {
@@ -31,6 +33,7 @@ impl Default for AppConfig {
             mihomo: MihomoConfig::default(),
             rules: RulesConfig::default(),
             behavior: BehaviorConfig::default(),
+            openvpn: OpenVpnConfig::default(),
         }
     }
 }
@@ -219,6 +222,75 @@ impl Default for BehaviorConfig {
     }
 }
 
+/// Split-tunnel `OpenVPN` that starts after Hiddify and never owns the default
+/// route.
+///
+/// `BiFlow` starts `OpenVPN` as a *side* tunnel: the helper always passes
+/// `--pull-filter ignore "redirect-gateway"` and `--pull-filter ignore
+/// "dhcp-option DNS"`, so a profile that asks to become the system gateway
+/// cannot take the machine offline when the tunnel drops. Only the networks
+/// the server scopes to itself (plus [`OpenVpnConfig::tunnel_routes`]) leave
+/// through the `OpenVPN` device; everything else keeps following the existing
+/// DIRECT / Hiddify split. See ADR 0067.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenVpnConfig {
+    /// Start `OpenVPN` as part of Connect, right after Hiddify is reachable.
+    pub enabled: bool,
+    /// Fail Connect when `OpenVPN` cannot start. Off by default so a broken
+    /// profile degrades one component instead of the whole stack.
+    pub required: bool,
+    /// Keep the server's scoped `push route` directives. The default route is
+    /// filtered out regardless; `false` adds `--route-nopull` and leaves
+    /// [`OpenVpnConfig::tunnel_routes`] as the only way in.
+    pub pull_routes: bool,
+    /// TUN device `OpenVPN` owns. Must differ from the Mihomo device.
+    pub device: String,
+    pub start_timeout_seconds: u64,
+    /// Firewall mark Mihomo stamps on `OpenVPN`-bound traffic (Linux only).
+    pub routing_mark: u32,
+    /// Policy-routing table that carries the `OpenVPN` default (Linux only).
+    pub routing_table: u32,
+    /// Absolute path to the `.ovpn` profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<PathBuf>,
+    /// Optional `auth-user-pass` credentials file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_file: Option<PathBuf>,
+    /// Explicit `openvpn` binary. `None` discovers it on `PATH`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executable: Option<PathBuf>,
+    /// Extra destinations reachable through the tunnel, as CIDRs. A default
+    /// route is rejected here on purpose.
+    pub tunnel_routes: Vec<String>,
+}
+
+impl Default for OpenVpnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            required: false,
+            pull_routes: true,
+            device: "biflow-ovpn".into(),
+            start_timeout_seconds: 45,
+            routing_mark: 0x0000_b1f0,
+            routing_table: 178,
+            profile: None,
+            auth_file: None,
+            executable: None,
+            tunnel_routes: Vec::new(),
+        }
+    }
+}
+
+impl OpenVpnConfig {
+    /// Whether the stack should try to bring the `OpenVPN` side tunnel up.
+    #[must_use]
+    pub const fn active(&self) -> bool {
+        self.enabled && self.profile.is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidationIssue {
     pub field: String,
@@ -266,6 +338,7 @@ impl AppConfig {
             ));
         }
         validate_direct_dns(&self.mihomo, &mut issues);
+        validate_openvpn(&self.openvpn, &self.mihomo, &mut issues);
 
         let ports = [
             ("hiddify.port", self.hiddify.port),
@@ -297,7 +370,101 @@ impl AppConfig {
                 value.hiddify.executable = ExecutableSetting::Path(PathBuf::from(name));
             }
         }
+        // A `.ovpn` path leaks the profile (often the provider and account)
+        // and the auth file leaks where credentials live, so exports keep the
+        // file name only.
+        value.openvpn.profile = value.openvpn.profile.as_deref().map(file_name_only);
+        value.openvpn.auth_file = value.openvpn.auth_file.as_deref().map(file_name_only);
+        value.openvpn.executable = value.openvpn.executable.as_deref().map(file_name_only);
         value
+    }
+}
+
+/// Rejects any `OpenVPN` setting that could take the machine offline.
+///
+/// The important rule is `TUNNEL_ROUTE_DEFAULT`: a `0.0.0.0/0` or `::/0` entry
+/// would turn the side tunnel into the system gateway, which is exactly the
+/// failure this integration exists to prevent.
+fn validate_openvpn(
+    openvpn: &OpenVpnConfig,
+    mihomo: &MihomoConfig,
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let device = openvpn.device.trim();
+    if device.is_empty() || device.len() > 64 {
+        issues.push(issue(
+            "openvpn.device",
+            "INVALID_DEVICE",
+            "OpenVPN device name must contain between 1 and 64 characters",
+        ));
+    } else if device == mihomo.tun_name.trim() {
+        issues.push(issue(
+            "openvpn.device",
+            "DEVICE_CONFLICT",
+            "OpenVPN device must differ from the Mihomo TUN device",
+        ));
+    }
+    if openvpn.start_timeout_seconds == 0 || openvpn.start_timeout_seconds > 300 {
+        issues.push(issue(
+            "openvpn.start_timeout_seconds",
+            "OUT_OF_RANGE",
+            "start timeout must be between 1 and 300 seconds",
+        ));
+    }
+    if openvpn.routing_mark == 0 {
+        issues.push(issue(
+            "openvpn.routing_mark",
+            "INVALID_MARK",
+            "routing mark cannot be zero",
+        ));
+    }
+    if openvpn.routing_table == 0 || openvpn.routing_table > 252 {
+        issues.push(issue(
+            "openvpn.routing_table",
+            "OUT_OF_RANGE",
+            "routing table must be between 1 and 252 so the main tables stay untouched",
+        ));
+    }
+    for path in [
+        ("openvpn.profile", openvpn.profile.as_ref()),
+        ("openvpn.auth_file", openvpn.auth_file.as_ref()),
+        ("openvpn.executable", openvpn.executable.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(field, value)| value.map(|path| (field, path)))
+    {
+        if !path.1.is_absolute() {
+            issues.push(issue(path.0, "PATH_NOT_ABSOLUTE", "path must be absolute"));
+        }
+    }
+    if openvpn.enabled && openvpn.profile.is_none() {
+        issues.push(issue(
+            "openvpn.profile",
+            "PROFILE_REQUIRED",
+            "an enabled OpenVPN side tunnel needs a .ovpn profile",
+        ));
+    }
+    if openvpn.tunnel_routes.len() > 64 {
+        issues.push(issue(
+            "openvpn.tunnel_routes",
+            "TOO_MANY_ROUTES",
+            "OpenVPN accepts at most 64 tunnel routes",
+        ));
+    }
+    for route in &openvpn.tunnel_routes {
+        match route.trim().parse::<IpNet>() {
+            Ok(network) if network.prefix_len() == 0 => issues.push(issue(
+                "openvpn.tunnel_routes",
+                "TUNNEL_ROUTE_DEFAULT",
+                "a default route would send the whole system through OpenVPN",
+            )),
+            Ok(_) => {}
+            Err(_) => issues.push(issue(
+                "openvpn.tunnel_routes",
+                "TUNNEL_ROUTE_INVALID",
+                "tunnel routes must be CIDR networks such as 10.8.0.0/24",
+            )),
+        }
     }
 }
 
@@ -336,6 +503,11 @@ fn validate_direct_dns(mihomo: &MihomoConfig, issues: &mut Vec<ValidationIssue>)
             )),
         }
     }
+}
+
+fn file_name_only(path: &Path) -> PathBuf {
+    path.file_name()
+        .map_or_else(|| PathBuf::from("[REDACTED]"), PathBuf::from)
 }
 
 fn is_usable_direct_dns(address: IpAddr) -> bool {
@@ -606,6 +778,88 @@ mod tests {
     }
 
     #[test]
+    fn openvpn_defaults_are_off_and_valid() {
+        let config = AppConfig::default();
+        assert!(config.validate().is_empty());
+        assert!(!config.openvpn.enabled);
+        assert!(!config.openvpn.required);
+        assert!(!config.openvpn.active());
+        assert!(config.openvpn.pull_routes);
+        assert_ne!(config.openvpn.device, config.mihomo.tun_name);
+    }
+
+    #[test]
+    fn openvpn_rejects_a_default_tunnel_route() {
+        let mut config = AppConfig::default();
+        config.openvpn.tunnel_routes = vec!["10.8.0.0/24".into(), "0.0.0.0/0".into()];
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "TUNNEL_ROUTE_DEFAULT"));
+        config.openvpn.tunnel_routes = vec!["::/0".into()];
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "TUNNEL_ROUTE_DEFAULT"));
+        config.openvpn.tunnel_routes = vec!["10.8.0.0/24".into(), "192.168.44.0/24".into()];
+        assert!(config.validate().is_empty());
+    }
+
+    #[test]
+    fn openvpn_rejects_device_conflict_and_missing_profile() {
+        let mut config = AppConfig::default();
+        config.openvpn.device.clone_from(&config.mihomo.tun_name);
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "DEVICE_CONFLICT"));
+        config.openvpn.device = "biflow-ovpn".into();
+        config.openvpn.enabled = true;
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "PROFILE_REQUIRED"));
+        config.openvpn.profile = Some(PathBuf::from("office.ovpn"));
+        assert!(config
+            .validate()
+            .iter()
+            .any(|item| item.code == "PATH_NOT_ABSOLUTE"));
+        config.openvpn.profile = Some(PathBuf::from("/etc/openvpn/office.ovpn"));
+        assert!(config.validate().is_empty());
+        assert!(config.openvpn.active());
+    }
+
+    #[test]
+    fn redaction_keeps_only_openvpn_file_names() {
+        let mut config = AppConfig::default();
+        config.openvpn.profile = Some(PathBuf::from("/home/reza/vpn/office.ovpn"));
+        config.openvpn.auth_file = Some(PathBuf::from("/home/reza/vpn/secret.txt"));
+        let redacted = config.redacted();
+        assert_eq!(redacted.openvpn.profile, Some(PathBuf::from("office.ovpn")));
+        assert_eq!(
+            redacted.openvpn.auth_file,
+            Some(PathBuf::from("secret.txt"))
+        );
+        assert_eq!(redacted.mihomo.controller_secret, "[REDACTED]");
+    }
+
+    #[test]
+    fn schema_v2_config_without_openvpn_migrates_to_defaults() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("config.toml");
+        let config = AppConfig {
+            schema_version: 2,
+            ..AppConfig::default()
+        };
+        let mut table = toml::Table::try_from(&config).expect("table");
+        table.remove("openvpn");
+        fs::write(&path, toml::to_string(&table).expect("toml")).expect("write");
+        let loaded = ConfigStore::new(&path).load().expect("load");
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(loaded.openvpn, OpenVpnConfig::default());
+    }
+
+    #[test]
     fn schema_v1_implicit_shecan_migrates_to_fake_ip() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("config.toml");
@@ -616,7 +870,7 @@ mod tests {
         config.mihomo.direct_dns_preset = DirectDnsPreset::Shecan;
         fs::write(&path, toml::to_string(&config).expect("toml")).expect("write");
         let loaded = ConfigStore::new(&path).load().expect("load");
-        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(loaded.mihomo.direct_dns_preset, DirectDnsPreset::FakeIp);
     }
 
@@ -631,7 +885,7 @@ mod tests {
         config.mihomo.direct_dns_preset = DirectDnsPreset::Mokhaberat;
         fs::write(&path, toml::to_string(&config).expect("toml")).expect("write");
         let loaded = ConfigStore::new(&path).load().expect("load");
-        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(loaded.mihomo.direct_dns_preset, DirectDnsPreset::Mokhaberat);
     }
 

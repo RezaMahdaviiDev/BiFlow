@@ -38,6 +38,19 @@ const settings: AppConfig = {
     connect_at_launch: false,
     close_to_tray: true,
   },
+  openvpn: {
+    enabled: false,
+    required: false,
+    pull_routes: true,
+    device: "biflow-ovpn",
+    start_timeout_seconds: 45,
+    routing_mark: 45552,
+    routing_table: 178,
+    profile: null,
+    auth_file: null,
+    executable: null,
+    tunnel_routes: [],
+  },
 };
 
 describe("Settings", () => {
@@ -79,5 +92,70 @@ describe("Settings", () => {
     expect(saveSettings.mock.calls[0]?.[0].mihomo.direct_dns_preset).toBe(
       "mokhaberat",
     );
+  });
+
+  it("refuses a default route for the OpenVPN side tunnel", async () => {
+    const saveSettings = vi
+      .fn<(draft: AppConfig) => Promise<void>>()
+      .mockResolvedValue(undefined);
+    useAppStore.setState({ saveSettings });
+    render(<Settings settings={settings} />);
+    await userEvent.click(screen.getByRole("tab", { name: "OpenVPN" }));
+    await userEvent.type(
+      screen.getByLabelText("Extra networks through the tunnel"),
+      "0.0.0.0/0",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save settings" }),
+    );
+    expect(
+      await screen.findByText(/whole system through OpenVPN/),
+    ).toBeVisible();
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("saves an enabled side tunnel with its profile and scoped routes", async () => {
+    const saveSettings = vi
+      .fn<(draft: AppConfig) => Promise<void>>()
+      .mockResolvedValue(undefined);
+    useAppStore.setState({ saveSettings });
+    render(<Settings settings={settings} />);
+    await userEvent.click(screen.getByRole("tab", { name: "OpenVPN" }));
+    await userEvent.click(screen.getByLabelText("Start OpenVPN with Connect"));
+    await userEvent.type(
+      screen.getByLabelText(".ovpn profile"),
+      "/etc/openvpn/office.ovpn",
+    );
+    await userEvent.type(
+      screen.getByLabelText("Extra networks through the tunnel"),
+      "10.8.0.0/24, 192.168.44.0/24",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save settings" }),
+    );
+    const draft = saveSettings.mock.calls[0]?.[0];
+    expect(draft?.openvpn.enabled).toBe(true);
+    expect(draft?.openvpn.profile).toBe("/etc/openvpn/office.ovpn");
+    expect(draft?.openvpn.tunnel_routes).toEqual([
+      "10.8.0.0/24",
+      "192.168.44.0/24",
+    ]);
+    // Never on by default: a broken profile must not cost the user Connect.
+    expect(draft?.openvpn.required).toBe(false);
+  });
+
+  it("requires a profile before the side tunnel can be enabled", async () => {
+    const saveSettings = vi
+      .fn<(draft: AppConfig) => Promise<void>>()
+      .mockResolvedValue(undefined);
+    useAppStore.setState({ saveSettings });
+    render(<Settings settings={settings} />);
+    await userEvent.click(screen.getByRole("tab", { name: "OpenVPN" }));
+    await userEvent.click(screen.getByLabelText("Start OpenVPN with Connect"));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save settings" }),
+    );
+    expect(await screen.findByText(/Choose a .ovpn profile/)).toBeVisible();
+    expect(saveSettings).not.toHaveBeenCalled();
   });
 });

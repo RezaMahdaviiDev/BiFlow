@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { StackSnapshot } from "../api/models";
+import type { AppConfig, StackSnapshot } from "../api/models";
 import { useAppStore } from "../store/app";
 import { Dashboard } from "./Dashboard";
 
@@ -34,6 +34,7 @@ const stopped: StackSnapshot = {
   operation_id: null,
   helper: { phase: "running", message: "Helper is ready", since: now },
   hiddify: { phase: "stopped", message: null, since: now },
+  openvpn: { phase: "stopped", message: null, since: now },
   mihomo: { phase: "stopped", message: null, since: now },
   tun: { phase: "stopped", message: null, since: now },
   dns: { phase: "stopped", message: null, since: now },
@@ -42,6 +43,48 @@ const stopped: StackSnapshot = {
   backend: "external_hiddify",
   last_error: null,
   updated_at: now,
+};
+
+const settingsFixture: AppConfig = {
+  schema_version: 3,
+  revision: 0,
+  hiddify: {
+    host: "127.0.0.1",
+    port: 12334,
+    executable: "auto",
+    start_timeout_seconds: 45,
+    stop_with_stack: true,
+  },
+  mihomo: {
+    controller_host: "127.0.0.1",
+    controller_port: 19090,
+    controller_secret: "redacted",
+    mixed_port: 17890,
+    dns_port: 1053,
+    tun_name: "clash-iran",
+    log_level: "info",
+    direct_dns_preset: "fake_ip",
+    direct_dns_servers: [],
+  },
+  rules: { refresh_interval_minutes: 15, upstream_refresh_hours: 24 },
+  behavior: {
+    launch_at_login: false,
+    connect_at_launch: false,
+    close_to_tray: true,
+  },
+  openvpn: {
+    enabled: false,
+    required: false,
+    pull_routes: true,
+    device: "biflow-ovpn",
+    start_timeout_seconds: 45,
+    routing_mark: 45552,
+    routing_table: 178,
+    profile: null,
+    auth_file: null,
+    executable: null,
+    tunnel_routes: [],
+  },
 };
 
 describe("Dashboard", () => {
@@ -306,5 +349,38 @@ describe("Dashboard", () => {
         .getByTestId("connection-status-strip")
         .querySelectorAll("[data-status-light]"),
     ).toHaveLength(5);
+  });
+
+  it("shows the OpenVPN component only once the side tunnel is enabled", () => {
+    // Off by default, so the dashboard must not grow a sixth component for
+    // the majority who never run a side tunnel.
+    const { rerender } = render(<Dashboard snapshot={stopped} />);
+    expect(screen.queryByText("OpenVPN")).toBeNull();
+
+    useAppStore.setState({
+      settings: {
+        ...settingsFixture,
+        openvpn: { ...settingsFixture.openvpn, enabled: true },
+      },
+    });
+    rerender(
+      <Dashboard
+        snapshot={{
+          ...stopped,
+          openvpn: {
+            phase: "running",
+            message: "biflow-ovpn · 2 routes",
+            since: now,
+          },
+        }}
+      />,
+    );
+    expect(screen.getAllByText("OpenVPN").length).toBeGreaterThan(0);
+    expect(screen.getByText("biflow-ovpn · 2 routes")).toBeVisible();
+    expect(
+      screen
+        .getByTestId("connection-status-strip")
+        .querySelectorAll("[data-status-light]"),
+    ).toHaveLength(6);
   });
 });

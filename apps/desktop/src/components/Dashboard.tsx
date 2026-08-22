@@ -11,6 +11,7 @@ import {
   Play,
   Power,
   PowerOff,
+  Route,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -35,7 +36,11 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
     installingId,
     installDependency,
     installHelper,
+    settings,
   } = useAppStore();
+  // The side tunnel is opt-in and most users never turn it on, so its card
+  // only appears once there is something to report about it.
+  const sideTunnel = settings?.openvpn.enabled ?? false;
   const active = snapshot.phase === "running" || snapshot.phase === "degraded";
   const paused = snapshot.phase === "paused";
   const locked = controlsLocked(snapshot, actionPending);
@@ -43,6 +48,8 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
   const needsAttention = [
     snapshot.helper,
     snapshot.hiddify,
+    // Deliberately not snapshot.openvpn: the side tunnel is optional, and a
+    // tunnel that will not start must not make the whole stack look broken.
     snapshot.mihomo,
     snapshot.tun,
     snapshot.dns,
@@ -167,6 +174,9 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           <StatusLight name="Mihomo" phase={snapshot.mihomo.phase} />
           <StatusLight name="TUN" phase={snapshot.tun.phase} />
           <StatusLight name="DNS" phase={snapshot.dns.phase} />
+          {sideTunnel ? (
+            <StatusLight name="OpenVPN" phase={snapshot.openvpn.phase} />
+          ) : null}
         </div>
         <div className="hidden gap-3 sm:grid-cols-2 md:grid lg:grid-cols-3 xl:grid-cols-5">
           <Component
@@ -202,6 +212,13 @@ export function Dashboard({ snapshot }: { snapshot: StackSnapshot }) {
           />
           <Component name="TUN" status={snapshot.tun} icon={<ArrowDownUp />} />
           <Component name="DNS" status={snapshot.dns} icon={<Network />} />
+          {sideTunnel ? (
+            <Component
+              name="OpenVPN"
+              status={snapshot.openvpn}
+              icon={<Route />}
+            />
+          ) : null}
         </div>
       </div>
 

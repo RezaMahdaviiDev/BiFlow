@@ -336,11 +336,49 @@ test.describe("primary BiFlow flows", () => {
     await expect(pinned).toContainText("VPN");
 
     // Moving it back leaves the bundled list to decide again.
-    await pinned.getByTitle(/to direct/).click();
+    await pinned.getByLabel(/^Route for /).selectOption("direct");
     await page.getByRole("button", { name: "Diagnostics" }).click();
     await page.getByLabel("Test IP or domain").fill("www.rade.ir");
     await page.getByRole("button", { name: "Test flow" }).click();
     await expect(page.getByText("www.rade.ir → DIRECT")).toBeVisible();
+  });
+
+  test("routes a private host through the OpenVPN side tunnel", async ({
+    page,
+  }) => {
+    await openFresh(page);
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("tab", { name: "OpenVPN" }).click();
+
+    // A default route here would put the whole machine behind the side
+    // tunnel, which the form has to refuse.
+    await page
+      .getByLabel("Extra networks through the tunnel")
+      .fill("0.0.0.0/0");
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(page.getByText(/whole system through OpenVPN/)).toBeVisible();
+
+    await page
+      .getByLabel("Extra networks through the tunnel")
+      .fill("10.20.0.0/16");
+    await page.getByLabel("Start OpenVPN with Connect").check();
+    await page.getByLabel(".ovpn profile").fill("/etc/openvpn/office.ovpn");
+    await page.getByRole("button", { name: "Save settings" }).click();
+    await expect(
+      page.getByRole("button", { name: "Save settings" }),
+    ).toBeDisabled();
+
+    // An internal address is a legitimate side-tunnel pin, and it must show
+    // up on the rules page as its own route rather than as DIRECT or VPN.
+    await page.getByRole("button", { name: "Direct rules" }).click();
+    await page.getByLabel("Domain or IP").fill("10.20.5.5");
+    await page.getByRole("button", { name: "Add rule", exact: true }).click();
+    const pinned = page.getByRole("row").filter({
+      has: page.getByText("10.20.5.5", { exact: true }),
+    });
+    await expect(pinned).toContainText("DIRECT");
+    await pinned.getByLabel(/^Route for /).selectOption("openvpn");
+    await expect(pinned).toContainText("OpenVPN");
   });
 
   test("restarts Hiddify on clean state from diagnostics", async ({ page }) => {

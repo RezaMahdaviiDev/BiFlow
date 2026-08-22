@@ -36,6 +36,14 @@ const rules: DirectRulesDocument = {
       refreshed_at: new Date().toISOString(),
     },
   ],
+  openvpn_rules: [
+    {
+      target: { kind: "ip", value: "10.20.5.5" },
+      resolved_ips: ["10.20.5.5"],
+      created_at: new Date().toISOString(),
+      refreshed_at: new Date().toISOString(),
+    },
+  ],
 };
 
 describe("DirectRules", () => {
@@ -101,5 +109,34 @@ describe("DirectRules", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Add rule$/ }));
     expect(addRule).toHaveBeenCalledWith("aparat.com");
     expect(screen.getByLabelText("Domain or IP")).toHaveValue("aparat.com");
+  });
+
+  it("lists side-tunnel pins and can move a host onto any of the three routes", async () => {
+    const pinRoute = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      rules,
+      actionPending: false,
+      cloudRules: {
+        domain_count: 1,
+        ip_count: 1,
+        last_synced_at: null,
+        source: "bundled",
+        snapshot_revision: null,
+        sets: [],
+      },
+      pinRoute,
+    });
+    render(<DirectRules rules={rules} />);
+
+    // The private address pinned to the side tunnel is a legitimate rule, and
+    // it has to be visible beside the DIRECT and VPN pins.
+    const sideRoute = screen.getByLabelText("Route for 10.20.5.5");
+    expect(sideRoute).toHaveValue("openvpn");
+
+    await userEvent.selectOptions(
+      screen.getByLabelText("Route for example.ir"),
+      "openvpn",
+    );
+    expect(pinRoute).toHaveBeenCalledWith("example.ir", "openvpn");
   });
 });

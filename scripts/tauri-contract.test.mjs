@@ -268,6 +268,8 @@ describe("Tauri frontend contract", () => {
       "custom-direct-ips.txt",
       "custom-vpn-domains.txt",
       "custom-vpn-ips.txt",
+      "custom-openvpn-domains.txt",
+      "custom-openvpn-ips.txt",
       "config.yaml",
     ];
     for (const name of providers) {
@@ -278,9 +280,16 @@ describe("Tauri frontend contract", () => {
       );
     }
     // Each backend must pin its own Platform value or the generated config
-    // silently loses the Windows-only strict-route flag.
-    assert.match(linux, /generate_config\(&config, Platform::Linux,/);
-    assert.match(windows, /generate_config\(&config, Platform::Windows,/);
+    // silently loses the Windows-only strict-route flag. The call is wrapped
+    // across lines since the OpenVPN outbound became an argument.
+    assert.match(linux, /generate_config\(\s*&config,\s*Platform::Linux,/);
+    assert.match(windows, /generate_config\(\s*&config,\s*Platform::Windows,/);
+    // Both backends must describe the side tunnel to Mihomo, or one platform
+    // ships a configuration whose OpenVPN pins point at nothing.
+    assert.match(linux, /fn openvpn_outbound/);
+    assert.match(windows, /fn openvpn_outbound/);
+    assert.match(linux, /HelperCommand::StartOpenVpn/);
+    assert.match(windows, /HelperCommand::StartOpenVpn/);
     // A readiness timeout used to be CoreError::Platform, which the UI maps
     // to "An internal error occurred." Keep both backends on the typed error.
     assert.match(linux, /fn readiness_error/);

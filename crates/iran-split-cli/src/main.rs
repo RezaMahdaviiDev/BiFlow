@@ -109,6 +109,7 @@ impl PlatformBackend for DemoBackend {
         RuntimeHealth {
             helper: ComponentStatus::new(ComponentPhase::Running, Some("Helper demo".into())),
             hiddify: ComponentStatus::new(ComponentPhase::Running, Some("Demo proxy".into())),
+            openvpn: ComponentStatus::new(ComponentPhase::Stopped, None),
             mihomo: ComponentStatus::new(
                 if running {
                     ComponentPhase::Running
@@ -199,6 +200,7 @@ impl PlatformBackend for DemoBackend {
             process_stopped: true,
             tun_removed: true,
             dns_restored: true,
+            openvpn_stopped: true,
             routes_removed: 0,
             warnings: vec![],
         })

@@ -15,6 +15,7 @@ pub enum StackPhase {
     Uninitialized,
     Stopped,
     StartingHiddify,
+    StartingOpenVpn,
     PreparingRuntime,
     ValidatingConfig,
     StartingCore,
@@ -89,6 +90,7 @@ pub enum ErrorCode {
     HiddifyNotFound,
     HiddifyPortBusy,
     HiddifyEgressUnavailable,
+    OpenVpnFailed,
     ConfigInvalid,
     HelperUnavailable,
     HelperUnauthorized,
@@ -155,6 +157,7 @@ impl LifecycleBusy {
 pub enum OperationStage {
     Preparing,
     StartingHiddify,
+    StartingOpenVpn,
     PreparingRuntime,
     ValidatingConfig,
     StartingCore,
@@ -169,6 +172,7 @@ impl OperationStage {
     const fn from_phase(phase: StackPhase) -> Option<Self> {
         match phase {
             StackPhase::StartingHiddify => Some(Self::StartingHiddify),
+            StackPhase::StartingOpenVpn => Some(Self::StartingOpenVpn),
             StackPhase::PreparingRuntime => Some(Self::PreparingRuntime),
             StackPhase::ValidatingConfig => Some(Self::ValidatingConfig),
             StackPhase::StartingCore => Some(Self::StartingCore),
@@ -196,6 +200,10 @@ pub struct StackSnapshot {
     pub operation_id: Option<Uuid>,
     pub helper: ComponentStatus,
     pub hiddify: ComponentStatus,
+    /// The optional `OpenVPN` side tunnel. `default` so a client that predates
+    /// it still decodes a snapshot.
+    #[serde(default)]
+    pub openvpn: ComponentStatus,
     pub mihomo: ComponentStatus,
     pub tun: ComponentStatus,
     pub dns: ComponentStatus,
@@ -216,6 +224,7 @@ impl Default for StackSnapshot {
             operation_id: None,
             helper: ComponentStatus::default(),
             hiddify: ComponentStatus::default(),
+            openvpn: ComponentStatus::default(),
             mihomo: ComponentStatus::default(),
             tun: ComponentStatus::default(),
             dns: ComponentStatus::default(),
@@ -259,11 +268,28 @@ pub struct TunStatus {
     pub name: Option<String>,
 }
 
+/// A running `OpenVPN` side tunnel, as the engine sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OpenVpnState {
+    pub device: String,
+    /// Address the tunnel assigned locally.
+    pub local_address: Option<String>,
+    /// Scoped networks that now reach the tunnel — "its own IP", plus
+    /// anything the user added. Never a default route.
+    pub routes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag reports one independent piece of owned state the helper had to release"
+)]
 pub struct CleanupReport {
     pub process_stopped: bool,
     pub tun_removed: bool,
     pub dns_restored: bool,
+    /// `true` once the `OpenVPN` side tunnel and its scoped routes are gone.
+    pub openvpn_stopped: bool,
     pub routes_removed: u32,
     pub warnings: Vec<String>,
 }
@@ -271,7 +297,11 @@ pub struct CleanupReport {
 impl CleanupReport {
     #[must_use]
     pub fn clean(&self) -> bool {
-        self.process_stopped && self.tun_removed && self.dns_restored && self.warnings.is_empty()
+        self.process_stopped
+            && self.tun_removed
+            && self.dns_restored
+            && self.openvpn_stopped
+            && self.warnings.is_empty()
     }
 }
 
@@ -287,6 +317,7 @@ pub struct ReadinessReport {
 pub struct RuntimeHealth {
     pub helper: ComponentStatus,
     pub hiddify: ComponentStatus,
+    pub openvpn: ComponentStatus,
     pub mihomo: ComponentStatus,
     pub tun: ComponentStatus,
     pub dns: ComponentStatus,
@@ -313,6 +344,8 @@ pub enum CoreError {
     HiddifyNotFound,
     #[error("Hiddify egress did not become ready")]
     HiddifyEgressUnavailable,
+    #[error("OpenVPN side tunnel failed: {0}")]
+    OpenVpnFailed(String),
     #[error("runtime configuration is invalid: {0}")]
     ConfigInvalid(String),
     #[error("Mihomo executable was not found")]
@@ -364,6 +397,12 @@ impl CoreError {
                 "errors.hiddifyEgressUnavailable",
                 true,
                 Some(Remediation::RunDiagnostics),
+            ),
+            Self::OpenVpnFailed(_) => (
+                ErrorCode::OpenVpnFailed,
+                "errors.openVpnFailed",
+                true,
+                Some(Remediation::OpenSettings),
             ),
             Self::ConfigInvalid(_) => (
                 ErrorCode::ConfigInvalid,
@@ -442,6 +481,32 @@ pub trait PlatformBackend: Send + Sync + 'static {
     async fn runtime_health(&self) -> RuntimeHealth;
     async fn helper_status(&self) -> Result<HelperStatus, CoreError>;
     async fn ensure_hiddify(&self, cancel: CancellationToken) -> Result<(), CoreError>;
+    /// Brings the optional `OpenVPN` side tunnel up, after Hiddify and before
+    /// the Mihomo generation is prepared.
+    ///
+    /// The order is not incidental. The generated Mihomo configuration has to
+    /// name the tunnel's device and keep its server address DIRECT, and both
+    /// facts only exist once the tunnel is actually up.
+    ///
+    /// `Ok(None)` means the user has not enabled a side tunnel — the common
+    /// case, and not a failure.
+    async fn ensure_openvpn(
+        &self,
+        _cancel: CancellationToken,
+    ) -> Result<Option<OpenVpnState>, CoreError> {
+        Ok(None)
+    }
+    /// Whether a failed side tunnel should fail the whole connect.
+    ///
+    /// `false` by default, which is the point of the feature: `OpenVPN` is a
+    /// side tunnel, and losing it must not cost the user their connection.
+    async fn openvpn_required(&self) -> bool {
+        false
+    }
+    /// Stops the side tunnel and removes its scoped routes. Idempotent.
+    async fn stop_openvpn(&self) -> Result<(), CoreError> {
+        Ok(())
+    }
     async fn prepare_runtime(&self) -> Result<RuntimeGeneration, CoreError>;
     async fn validate_runtime(&self, generation: &RuntimeGeneration) -> Result<(), CoreError>;
     async fn start_core(&self, generation: &RuntimeGeneration) -> Result<(), CoreError>;
@@ -1115,11 +1180,19 @@ impl<B: PlatformBackend> Engine<B> {
             return Ok(());
         }
         let mut core_started = false;
+        let mut openvpn_started = false;
         let result = self
-            .start_steps(operation_id, cancel, &mut core_started)
+            .start_steps(
+                operation_id,
+                cancel,
+                &mut core_started,
+                &mut openvpn_started,
+            )
             .await;
         if let Err(error) = result {
-            if core_started || matches!(error, CoreError::Cancelled) {
+            // A side tunnel that came up before a later step failed would
+            // otherwise be left running with routes nothing manages.
+            if openvpn_started || core_started || matches!(error, CoreError::Cancelled) {
                 if let Err(rollback_error) = self.rollback(operation_id).await {
                     return Err(CoreError::TunCleanupFailed(format!(
                         "start failed ({error}); rollback failed ({rollback_error})"
@@ -1140,6 +1213,7 @@ impl<B: PlatformBackend> Engine<B> {
         operation_id: Uuid,
         cancel: &CancellationToken,
         core_started: &mut bool,
+        openvpn_started: &mut bool,
     ) -> Result<(), CoreError> {
         let helper = self.backend.helper_status().await?;
         if !helper.available {
@@ -1165,6 +1239,10 @@ impl<B: PlatformBackend> Engine<B> {
         self.update(|snapshot| {
             snapshot.hiddify = ComponentStatus::new(ComponentPhase::Running, None);
         });
+
+        // Hiddify is up; the side tunnel goes next so the Mihomo generation
+        // that follows can name its device and pin its server to DIRECT.
+        *openvpn_started = self.start_openvpn_step(operation_id, cancel).await?;
 
         self.announce(StackPhase::PreparingRuntime, operation_id)
             .await;
@@ -1239,6 +1317,84 @@ impl<B: PlatformBackend> Engine<B> {
         Ok(())
     }
 
+    /// Runs the `OpenVPN` stage.
+    ///
+    /// A failure here only aborts the connect when the user asked for that.
+    /// The default is to record the side tunnel as degraded and carry on with
+    /// the DIRECT / Hiddify split, because the alternative — losing the whole
+    /// connection because one optional tunnel would not come up — is exactly
+    /// what this feature exists to avoid.
+    async fn start_openvpn_step(
+        &self,
+        operation_id: Uuid,
+        cancel: &CancellationToken,
+    ) -> Result<bool, CoreError> {
+        self.announce(StackPhase::StartingOpenVpn, operation_id)
+            .await;
+        self.update(|snapshot| {
+            snapshot.openvpn = ComponentStatus::new(ComponentPhase::Starting, None);
+        });
+        match self.backend.ensure_openvpn(cancel.clone()).await {
+            Ok(Some(state)) => {
+                let summary = format!("{} · {} routes", state.device, state.routes.len());
+                self.update(|snapshot| {
+                    snapshot.openvpn = ComponentStatus::new(ComponentPhase::Running, Some(summary));
+                });
+                info!(
+                    event = "openvpn.started",
+                    section = "openvpn",
+                    initiator = "start_steps",
+                    cause = "user_enabled_side_tunnel",
+                    trace_id = %operation_id,
+                    trace_route = "engine_operation->platform_backend->ensure_openvpn",
+                    device = %state.device,
+                    routes = state.routes.len(),
+                    "OpenVPN side tunnel is carrying its scoped routes"
+                );
+                check_cancelled(cancel).map(|()| true)
+            }
+            Ok(None) => {
+                self.update(|snapshot| {
+                    snapshot.openvpn = ComponentStatus::new(ComponentPhase::Stopped, None);
+                });
+                check_cancelled(cancel).map(|()| false)
+            }
+            Err(CoreError::Cancelled) => Err(CoreError::Cancelled),
+            Err(error) => {
+                if self.backend.openvpn_required().await {
+                    self.update(|snapshot| {
+                        snapshot.openvpn =
+                            ComponentStatus::new(ComponentPhase::Error, Some(error.to_string()));
+                    });
+                    error!(
+                        event = "openvpn.start_failed",
+                        section = "openvpn",
+                        initiator = "start_steps",
+                        cause = %error,
+                        trace_id = %operation_id,
+                        trace_route = "engine_operation->platform_backend->ensure_openvpn",
+                        "connect aborted because the side tunnel is marked required"
+                    );
+                    return Err(error);
+                }
+                self.update(|snapshot| {
+                    snapshot.openvpn =
+                        ComponentStatus::new(ComponentPhase::Degraded, Some(error.to_string()));
+                });
+                warn!(
+                    event = "openvpn.start_skipped",
+                    section = "openvpn",
+                    initiator = "start_steps",
+                    cause = %error,
+                    trace_id = %operation_id,
+                    trace_route = "engine_operation->platform_backend->ensure_openvpn",
+                    "connect continued without the optional side tunnel"
+                );
+                check_cancelled(cancel).map(|()| false)
+            }
+        }
+    }
+
     async fn confirm_core_and_tun(
         &self,
         cancel: &CancellationToken,
@@ -1277,6 +1433,17 @@ impl<B: PlatformBackend> Engine<B> {
 
     async fn rollback(&self, operation_id: Uuid) -> Result<(), CoreError> {
         self.transition(StackPhase::Recovering, operation_id);
+        if let Err(cause) = self.backend.stop_openvpn().await {
+            warn!(
+                event = "openvpn.rollback_stop_failed",
+                section = "openvpn",
+                initiator = "rollback",
+                cause = %cause,
+                trace_id = %operation_id,
+                trace_route = "engine_operation->rollback->platform_backend->stop_openvpn",
+                "rollback continued after the side tunnel stop step failed"
+            );
+        }
         if let Err(cause) = self.backend.stop_core().await {
             warn!(
                 event = "operation.rollback_stop_failed",
@@ -1387,11 +1554,17 @@ impl<B: PlatformBackend> Engine<B> {
             return Ok(());
         }
         let mut core_started = false;
+        let mut openvpn_started = false;
         let result = self
-            .start_steps(operation_id, cancel, &mut core_started)
+            .start_steps(
+                operation_id,
+                cancel,
+                &mut core_started,
+                &mut openvpn_started,
+            )
             .await;
         if let Err(error) = result {
-            if core_started || matches!(error, CoreError::Cancelled) {
+            if openvpn_started || core_started || matches!(error, CoreError::Cancelled) {
                 if let Err(rollback_error) = self.rollback_pause(operation_id).await {
                     return Err(CoreError::TunCleanupFailed(format!(
                         "resume failed ({error}); rollback failed ({rollback_error})"
@@ -1464,6 +1637,9 @@ impl<B: PlatformBackend> Engine<B> {
             snapshot.operation_id = None;
             snapshot.operation_stage = None;
             snapshot.exit_ip = None;
+            // Pause releases every route BiFlow owns, and the side tunnel's
+            // scoped routes are owned routes, so it stops with the rest.
+            snapshot.openvpn = ComponentStatus::new(ComponentPhase::Stopped, None);
             snapshot.mihomo = ComponentStatus::new(ComponentPhase::Stopped, None);
             snapshot.tun = ComponentStatus::new(ComponentPhase::Stopped, None);
             snapshot.dns = ComponentStatus::new(ComponentPhase::Stopped, None);
@@ -1530,6 +1706,7 @@ impl<B: PlatformBackend> Engine<B> {
 fn apply_health(snapshot: &mut StackSnapshot, health: RuntimeHealth) {
     snapshot.helper = health.helper;
     snapshot.hiddify = health.hiddify;
+    snapshot.openvpn = health.openvpn;
     snapshot.mihomo = health.mihomo;
     snapshot.tun = health.tun;
     snapshot.dns = health.dns;
@@ -1574,6 +1751,11 @@ mod tests {
         proxy_stops: AtomicUsize,
         proxy_clears: AtomicUsize,
         proxy_restores: AtomicUsize,
+        openvpn_enabled: AtomicBool,
+        openvpn_fails: AtomicBool,
+        openvpn_required: AtomicBool,
+        openvpn_running: AtomicBool,
+        openvpn_stops: AtomicUsize,
     }
 
     #[async_trait]
@@ -1594,6 +1776,14 @@ mod tests {
             RuntimeHealth {
                 helper,
                 hiddify,
+                openvpn: ComponentStatus::new(
+                    if self.openvpn_running.load(Ordering::SeqCst) {
+                        ComponentPhase::Running
+                    } else {
+                        ComponentPhase::Stopped
+                    },
+                    None,
+                ),
                 mihomo: ComponentStatus::new(
                     if running {
                         ComponentPhase::Running
@@ -1729,13 +1919,43 @@ mod tests {
             self.cleanups.fetch_add(1, Ordering::SeqCst);
             self.process.store(false, Ordering::SeqCst);
             self.tun.store(false, Ordering::SeqCst);
+            self.openvpn_running.store(false, Ordering::SeqCst);
             Ok(CleanupReport {
                 process_stopped: true,
                 tun_removed: true,
                 dns_restored: true,
+                openvpn_stopped: true,
                 routes_removed: 2,
                 warnings: vec![],
             })
+        }
+
+        async fn ensure_openvpn(
+            &self,
+            _cancel: CancellationToken,
+        ) -> Result<Option<OpenVpnState>, CoreError> {
+            if !self.openvpn_enabled.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
+            if self.openvpn_fails.load(Ordering::SeqCst) {
+                return Err(CoreError::OpenVpnFailed("test profile is broken".into()));
+            }
+            self.openvpn_running.store(true, Ordering::SeqCst);
+            Ok(Some(OpenVpnState {
+                device: "test-ovpn".into(),
+                local_address: Some("10.8.0.6".into()),
+                routes: vec!["10.8.0.0/24".into()],
+            }))
+        }
+
+        async fn openvpn_required(&self) -> bool {
+            self.openvpn_required.load(Ordering::SeqCst)
+        }
+
+        async fn stop_openvpn(&self) -> Result<(), CoreError> {
+            self.openvpn_stops.fetch_add(1, Ordering::SeqCst);
+            self.openvpn_running.store(false, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -2039,6 +2259,109 @@ mod tests {
                 return stages;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn the_side_tunnel_starts_after_hiddify_and_before_the_core() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.openvpn_enabled.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        let mut receiver = engine.subscribe();
+        let collect = collect_stages_until(&mut receiver, StackPhase::Running);
+        let start = engine.start_stack();
+        let (stages, accepted) = tokio::join!(collect, start);
+        accepted.expect("start accepted");
+
+        // The order is the contract: the Mihomo generation that follows has to
+        // know the tunnel's device and server address.
+        let hiddify = stages
+            .iter()
+            .position(|stage| *stage == OperationStage::StartingHiddify)
+            .expect("hiddify stage");
+        let openvpn = stages
+            .iter()
+            .position(|stage| *stage == OperationStage::StartingOpenVpn)
+            .expect("openvpn stage");
+        let core = stages
+            .iter()
+            .position(|stage| *stage == OperationStage::StartingCore)
+            .expect("core stage");
+        assert!(hiddify < openvpn, "OpenVPN must wait for Hiddify");
+        assert!(openvpn < core, "Mihomo must wait for OpenVPN");
+
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.openvpn.phase, ComponentPhase::Running);
+        assert_eq!(
+            snapshot.openvpn.message.as_deref(),
+            Some("test-ovpn · 1 routes")
+        );
+
+        engine.stop_stack().await.expect("stop accepted");
+        engine
+            .wait_for_phase(StackPhase::Stopped, Duration::from_secs(2))
+            .await
+            .expect("stopped");
+        assert_eq!(engine.snapshot().openvpn.phase, ComponentPhase::Stopped);
+    }
+
+    #[tokio::test]
+    async fn a_failing_side_tunnel_does_not_cost_the_user_their_connection() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.openvpn_enabled.store(true, Ordering::SeqCst);
+        backend.openvpn_fails.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.start_stack().await.expect("start accepted");
+        engine
+            .wait_for_phase(StackPhase::Running, Duration::from_secs(2))
+            .await
+            .expect("running without the side tunnel");
+
+        let snapshot = engine.snapshot();
+        assert_eq!(snapshot.phase, StackPhase::Running);
+        assert_eq!(snapshot.openvpn.phase, ComponentPhase::Degraded);
+        assert_eq!(snapshot.mihomo.phase, ComponentPhase::Running);
+        assert!(snapshot.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_required_side_tunnel_fails_the_connect_and_rolls_back() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.openvpn_enabled.store(true, Ordering::SeqCst);
+        backend.openvpn_fails.store(true, Ordering::SeqCst);
+        backend.openvpn_required.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.start_stack().await.expect("start accepted");
+        engine
+            .wait_for_phase(StackPhase::Error, Duration::from_secs(2))
+            .await
+            .expect("start failed");
+
+        let snapshot = engine.snapshot();
+        // The component status itself is refreshed from the backend on the
+        // way out, so the surviving evidence is the surfaced error.
+        assert_eq!(snapshot.openvpn.phase, ComponentPhase::Stopped);
+        assert_eq!(
+            snapshot.last_error.as_ref().map(|error| error.code),
+            Some(ErrorCode::OpenVpnFailed)
+        );
+        assert!(!backend.process.load(Ordering::SeqCst), "core must not run");
+    }
+
+    #[tokio::test]
+    async fn a_started_side_tunnel_is_torn_down_when_a_later_step_fails() {
+        let backend = Arc::new(FakeBackend::default());
+        backend.openvpn_enabled.store(true, Ordering::SeqCst);
+        backend.fail_readiness.store(true, Ordering::SeqCst);
+        let engine = Engine::new(Arc::clone(&backend), &tokio::runtime::Handle::current());
+        engine.start_stack().await.expect("start accepted");
+        engine
+            .wait_for_phase(StackPhase::Error, Duration::from_secs(2))
+            .await
+            .expect("start failed");
+
+        // Rollback must not leave a tunnel running with routes nothing owns.
+        assert!(!backend.openvpn_running.load(Ordering::SeqCst));
+        assert!(backend.openvpn_stops.load(Ordering::SeqCst) >= 1);
     }
 
     #[tokio::test]

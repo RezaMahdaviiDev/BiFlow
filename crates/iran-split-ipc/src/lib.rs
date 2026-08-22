@@ -1,5 +1,6 @@
+use ipnet::IpNet;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::BTreeMap, io};
+use std::{collections::BTreeMap, io, path::PathBuf};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use uuid::Uuid;
@@ -56,11 +57,55 @@ pub enum HelperCommand {
         config_sha256: String,
     },
     GetMihomoProcessStatus,
+    StartOpenVpn(OpenVpnRequest),
+    StopOpenVpn,
+    GetOpenVpnStatus,
     CleanupOwnedNetworkState,
     CollectServiceLogs {
         max_entries: u16,
     },
     PrepareForUpdate,
+}
+
+/// Everything the helper needs to run the `OpenVPN` side tunnel.
+///
+/// The desktop never sends raw `OpenVPN` arguments. It sends these vetted
+/// fields and the helper builds the command line itself, always appending the
+/// flags that keep the tunnel from becoming the system gateway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenVpnRequest {
+    pub profile: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<PathBuf>,
+    pub device: String,
+    /// Keep the server's scoped `push route` directives (never the default).
+    pub pull_routes: bool,
+    /// Extra CIDRs the helper installs on the `OpenVPN` device.
+    #[serde(default)]
+    pub tunnel_routes: Vec<String>,
+    pub routing_mark: u32,
+    pub routing_table: u32,
+    pub start_timeout_seconds: u64,
+}
+
+/// Live state of the `OpenVPN` side tunnel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OpenVpnStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub device: Option<String>,
+    /// Address the tunnel assigned to this machine.
+    pub local_address: Option<String>,
+    /// Remote transport address. Mihomo must keep this DIRECT or the tunnel's
+    /// own packets loop back into the split TUN.
+    pub server_endpoint: Option<String>,
+    /// Scoped networks currently routed into the tunnel.
+    #[serde(default)]
+    pub routes: Vec<String>,
+    pub started_at: Option<String>,
+    pub last_error: Option<String>,
 }
 
 impl HelperCommand {
@@ -96,6 +141,7 @@ impl HelperCommand {
                     "log request must contain between 1 and 2000 entries".into(),
                 ))
             }
+            Self::StartOpenVpn(request) => request.validate(),
             _ => Ok(()),
         }
     }
@@ -110,11 +156,90 @@ impl HelperCommand {
             Self::StopMihomo => "stop_mihomo",
             Self::RestartMihomo { .. } => "restart_mihomo",
             Self::GetMihomoProcessStatus => "get_mihomo_process_status",
+            Self::StartOpenVpn(_) => "start_openvpn",
+            Self::StopOpenVpn => "stop_openvpn",
+            Self::GetOpenVpnStatus => "get_openvpn_status",
             Self::CleanupOwnedNetworkState => "cleanup_owned_network_state",
             Self::CollectServiceLogs { .. } => "collect_service_logs",
             Self::PrepareForUpdate => "prepare_for_update",
         }
     }
+}
+
+impl OpenVpnRequest {
+    /// Rejects a request the helper must not act on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::InvalidMessage`] when a path is relative or
+    /// traversing, the device name is unusable, the policy-routing numbers are
+    /// out of range, or a tunnel route is malformed or a default route.
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        for (label, path) in [
+            ("profile", Some(&self.profile)),
+            ("auth file", self.auth_file.as_ref()),
+            ("executable", self.executable.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(label, path)| path.map(|path| (label, path)))
+        {
+            if !path.is_absolute() || path.components().any(|part| part.as_os_str() == "..") {
+                return Err(ProtocolError::InvalidMessage(format!(
+                    "OpenVPN {label} path must be absolute and free of parent traversal"
+                )));
+            }
+        }
+        if !valid_device_name(&self.device) {
+            return Err(ProtocolError::InvalidMessage(
+                "OpenVPN device must be 1-15 characters of letters, digits, dashes, or underscores"
+                    .into(),
+            ));
+        }
+        if self.routing_mark == 0 {
+            return Err(ProtocolError::InvalidMessage(
+                "OpenVPN routing mark cannot be zero".into(),
+            ));
+        }
+        if self.routing_table == 0 || self.routing_table > 252 {
+            return Err(ProtocolError::InvalidMessage(
+                "OpenVPN routing table must be between 1 and 252".into(),
+            ));
+        }
+        if self.start_timeout_seconds == 0 || self.start_timeout_seconds > 300 {
+            return Err(ProtocolError::InvalidMessage(
+                "OpenVPN start timeout must be between 1 and 300 seconds".into(),
+            ));
+        }
+        if self.tunnel_routes.len() > 64 {
+            return Err(ProtocolError::InvalidMessage(
+                "OpenVPN accepts at most 64 tunnel routes".into(),
+            ));
+        }
+        for route in &self.tunnel_routes {
+            match route.trim().parse::<IpNet>() {
+                Ok(network) if network.prefix_len() > 0 => {}
+                Ok(_) => {
+                    return Err(ProtocolError::InvalidMessage(
+                        "an OpenVPN default route would take the whole system offline".into(),
+                    ))
+                }
+                Err(_) => {
+                    return Err(ProtocolError::InvalidMessage(
+                        "OpenVPN tunnel routes must be CIDR networks".into(),
+                    ))
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn valid_device_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 15
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -131,6 +256,7 @@ pub enum HelperReply {
     ServiceStatus(ServiceStatus),
     GenerationRegistered { generation_id: Uuid },
     ProcessStatus(ProcessStatus),
+    OpenVpnStatus(OpenVpnStatus),
     CleanupReport(CleanupReport),
     Logs(Vec<ServiceLogEntry>),
     ReadyForUpdate,
@@ -162,18 +288,30 @@ pub struct ProcessStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag reports one independent piece of owned state the helper had to release"
+)]
 pub struct CleanupReport {
     pub process_stopped: bool,
     pub tun_removed: bool,
     pub routes_removed: u32,
     pub dns_restored: bool,
+    /// `true` once the `OpenVPN` side tunnel and its owned routes are gone.
+    /// `default` so reports written before the side tunnel existed still load.
+    #[serde(default)]
+    pub openvpn_stopped: bool,
     pub warnings: Vec<String>,
 }
 
 impl CleanupReport {
     #[must_use]
     pub fn clean(&self) -> bool {
-        self.process_stopped && self.tun_removed && self.dns_restored && self.warnings.is_empty()
+        self.process_stopped
+            && self.tun_removed
+            && self.dns_restored
+            && self.openvpn_stopped
+            && self.warnings.is_empty()
     }
 }
 
@@ -322,5 +460,82 @@ mod tests {
         assert!(HelperCommand::CollectServiceLogs { max_entries: 2_001 }
             .validate()
             .is_err());
+    }
+
+    fn openvpn_request() -> OpenVpnRequest {
+        OpenVpnRequest {
+            profile: PathBuf::from("/etc/openvpn/office.ovpn"),
+            auth_file: None,
+            executable: None,
+            device: "biflow-ovpn".into(),
+            pull_routes: true,
+            tunnel_routes: vec!["10.8.0.0/24".into()],
+            routing_mark: 0x0000_b1f0,
+            routing_table: 178,
+            start_timeout_seconds: 45,
+        }
+    }
+
+    #[test]
+    fn openvpn_request_rejects_traversal_and_default_routes() {
+        assert!(openvpn_request().validate().is_ok());
+
+        let traversing = OpenVpnRequest {
+            profile: PathBuf::from("/etc/openvpn/../../root/.ssh/id_rsa"),
+            ..openvpn_request()
+        };
+        assert!(traversing.validate().is_err());
+
+        let relative = OpenVpnRequest {
+            profile: PathBuf::from("office.ovpn"),
+            ..openvpn_request()
+        };
+        assert!(relative.validate().is_err());
+
+        let default_route = OpenVpnRequest {
+            tunnel_routes: vec!["0.0.0.0/0".into()],
+            ..openvpn_request()
+        };
+        assert!(default_route.validate().is_err());
+
+        let reserved_table = OpenVpnRequest {
+            routing_table: 254,
+            ..openvpn_request()
+        };
+        assert!(reserved_table.validate().is_err());
+
+        let hostile_device = OpenVpnRequest {
+            device: "tun0; rm -rf /".into(),
+            ..openvpn_request()
+        };
+        assert!(hostile_device.validate().is_err());
+    }
+
+    #[test]
+    fn cleanup_is_not_clean_until_openvpn_is_gone() {
+        let mut report = CleanupReport {
+            process_stopped: true,
+            tun_removed: true,
+            routes_removed: 2,
+            dns_restored: true,
+            openvpn_stopped: false,
+            warnings: Vec::new(),
+        };
+        assert!(!report.clean());
+        report.openvpn_stopped = true;
+        assert!(report.clean());
+    }
+
+    #[test]
+    fn openvpn_commands_are_audited_by_name() {
+        assert_eq!(
+            HelperCommand::StartOpenVpn(openvpn_request()).audit_name(),
+            "start_openvpn"
+        );
+        assert_eq!(HelperCommand::StopOpenVpn.audit_name(), "stop_openvpn");
+        assert_eq!(
+            HelperCommand::GetOpenVpnStatus.audit_name(),
+            "get_openvpn_status"
+        );
     }
 }

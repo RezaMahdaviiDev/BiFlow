@@ -57,7 +57,10 @@ interface AppStore {
   cancel: () => Promise<void>;
   saveSettings: (draft: AppConfig) => Promise<void>;
   addRule: (input: string) => Promise<void>;
-  pinRoute: (input: string, outbound: "direct" | "vpn") => Promise<void>;
+  pinRoute: (
+    input: string,
+    outbound: "direct" | "vpn" | "openvpn",
+  ) => Promise<void>;
   removeRule: (input: string) => Promise<void>;
   refreshRules: () => Promise<void>;
   syncCloudRules: () => Promise<void>;

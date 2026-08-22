@@ -18,6 +18,9 @@ const STAGE_META: Record<
 > = {
   preparing: { percent: 10, labelKey: "stages.preparing" },
   starting_hiddify: { percent: 25, labelKey: "stages.startHiddify" },
+  // Slotted between Hiddify and the runtime prep it feeds, so the existing
+  // milestones keep their percentages.
+  starting_openvpn: { percent: 32, labelKey: "stages.startOpenVpn" },
   preparing_runtime: { percent: 40, labelKey: "stages.prepareRuntime" },
   validating_config: { percent: 55, labelKey: "stages.validateConfig" },
   starting_core: { percent: 70, labelKey: "stages.startMihomo" },
@@ -76,6 +79,8 @@ function derivedStage(
     switch (snapshot.phase) {
       case "starting_hiddify":
         return STAGE_META.starting_hiddify;
+      case "starting_openvpn":
+        return STAGE_META.starting_openvpn;
       case "preparing_runtime":
         return STAGE_META.preparing_runtime;
       case "validating_config":

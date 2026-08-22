@@ -1084,6 +1084,7 @@ async fn pin_route(
         let outbound = match outbound.as_str() {
             "direct" => iran_split_rules::Outbound::Direct,
             "vpn" => iran_split_rules::Outbound::Vpn,
+            "openvpn" => iran_split_rules::Outbound::OpenVpn,
             other => return Err(format!("unknown outbound: {other}")),
         };
         info!(

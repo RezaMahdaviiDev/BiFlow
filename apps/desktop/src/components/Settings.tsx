@@ -48,8 +48,45 @@ const formSchema = z
     launchAtLogin: z.boolean(),
     connectAtLaunch: z.boolean(),
     closeToTray: z.boolean(),
+    openVpnEnabled: z.boolean(),
+    openVpnRequired: z.boolean(),
+    openVpnPullRoutes: z.boolean(),
+    openVpnProfile: z.string(),
+    openVpnAuthFile: z.string(),
+    openVpnDevice: z
+      .string()
+      .min(1)
+      .max(15)
+      .regex(/^[a-zA-Z0-9_-]+$/),
+    openVpnTimeout: z.coerce.number().int().min(1).max(300),
+    openVpnTunnelRoutes: z.string(),
   })
   .superRefine((values, context) => {
+    if (values.openVpnEnabled && values.openVpnProfile.trim().length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["openVpnProfile"],
+        message: "Choose a .ovpn profile",
+      });
+    }
+    for (const route of parseTunnelRoutes(values.openVpnTunnelRoutes)) {
+      // A default route here would put the whole machine behind the side
+      // tunnel, which is the failure this feature exists to prevent.
+      if (route === "0.0.0.0/0" || route === "::/0") {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["openVpnTunnelRoutes"],
+          message:
+            "A default route would send the whole system through OpenVPN",
+        });
+      } else if (!/^[0-9a-fA-F.:]+\/\d{1,3}$/.test(route)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["openVpnTunnelRoutes"],
+          message: "Enter CIDR networks such as 10.8.0.0/24",
+        });
+      }
+    }
     if (values.directDnsPreset !== "custom") return;
     if (parseDirectDnsServers(values.directDnsServers).length === 0) {
       context.addIssue({
@@ -61,7 +98,15 @@ const formSchema = z
   });
 
 type FormValues = z.infer<typeof formSchema>;
-type SettingsTab = "hiddify" | "mihomo" | "behavior";
+type SettingsTab = "hiddify" | "openvpn" | "mihomo" | "behavior";
+
+/** Splits the comma or whitespace separated CIDR list the user typed. */
+function parseTunnelRoutes(value: string): string[] {
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
 
 function toValues(config: AppConfig): FormValues {
   return {
@@ -81,6 +126,14 @@ function toValues(config: AppConfig): FormValues {
     launchAtLogin: config.behavior.launch_at_login,
     connectAtLaunch: config.behavior.connect_at_launch,
     closeToTray: config.behavior.close_to_tray,
+    openVpnEnabled: config.openvpn.enabled,
+    openVpnRequired: config.openvpn.required,
+    openVpnPullRoutes: config.openvpn.pull_routes,
+    openVpnProfile: config.openvpn.profile ?? "",
+    openVpnAuthFile: config.openvpn.auth_file ?? "",
+    openVpnDevice: config.openvpn.device,
+    openVpnTimeout: config.openvpn.start_timeout_seconds,
+    openVpnTunnelRoutes: config.openvpn.tunnel_routes.join(", "),
   };
 }
 
@@ -112,6 +165,17 @@ function merge(config: AppConfig, values: FormValues): AppConfig {
       launch_at_login: values.launchAtLogin,
       connect_at_launch: values.connectAtLaunch,
       close_to_tray: values.closeToTray,
+    },
+    openvpn: {
+      ...config.openvpn,
+      enabled: values.openVpnEnabled,
+      required: values.openVpnRequired,
+      pull_routes: values.openVpnPullRoutes,
+      device: values.openVpnDevice,
+      start_timeout_seconds: values.openVpnTimeout,
+      profile: values.openVpnProfile.trim() || null,
+      auth_file: values.openVpnAuthFile.trim() || null,
+      tunnel_routes: parseTunnelRoutes(values.openVpnTunnelRoutes),
     },
   };
 }
@@ -171,6 +235,14 @@ export function Settings({ settings }: { settings: AppConfig }) {
           Hiddify
         </TabButton>
         <TabButton
+          id="settings-tab-openvpn"
+          selected={tab === "openvpn"}
+          controls="settings-panel-openvpn"
+          onSelect={() => setTab("openvpn")}
+        >
+          OpenVPN
+        </TabButton>
+        <TabButton
           id="settings-tab-mihomo"
           selected={tab === "mihomo"}
           controls="settings-panel-mihomo"
@@ -228,6 +300,84 @@ export function Settings({ settings }: { settings: AppConfig }) {
               <Check
                 label="Stop Hiddify with stack"
                 registration={register("stopWithStack")}
+              />
+            </Fieldset>
+          ) : null}
+
+          {tab === "openvpn" ? (
+            <Fieldset
+              id="settings-panel-openvpn"
+              labelledBy="settings-tab-openvpn"
+              legend={t("settingsOpenVpn.legend")}
+            >
+              <p className="text-sm text-muted sm:col-span-2">
+                {t("settingsOpenVpn.intro")}
+              </p>
+              <Check
+                label={t("settingsOpenVpn.enabled")}
+                registration={register("openVpnEnabled")}
+              />
+              <Check
+                label={t("settingsOpenVpn.required")}
+                registration={register("openVpnRequired")}
+              />
+              <Field
+                className="sm:col-span-2"
+                label={t("settingsOpenVpn.profile")}
+                hint={t("settingsOpenVpn.profileHelp")}
+                error={errors.openVpnProfile?.message}
+              >
+                <input
+                  {...register("openVpnProfile")}
+                  placeholder="/etc/openvpn/office.ovpn"
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                className="sm:col-span-2"
+                label={t("settingsOpenVpn.authFile")}
+                hint={t("settingsOpenVpn.authFileHelp")}
+                error={errors.openVpnAuthFile?.message}
+              >
+                <input
+                  {...register("openVpnAuthFile")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                label={t("settingsOpenVpn.device")}
+                error={errors.openVpnDevice?.message}
+              >
+                <input
+                  {...register("openVpnDevice")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                label={t("settingsOpenVpn.timeout")}
+                error={errors.openVpnTimeout?.message}
+              >
+                <input
+                  type="number"
+                  {...register("openVpnTimeout")}
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Field
+                className="sm:col-span-2"
+                label={t("settingsOpenVpn.tunnelRoutes")}
+                hint={t("settingsOpenVpn.tunnelRoutesHelp")}
+                error={errors.openVpnTunnelRoutes?.message}
+              >
+                <input
+                  {...register("openVpnTunnelRoutes")}
+                  placeholder="10.8.0.0/24, 192.168.44.0/24"
+                  className="w-full rounded-xl border-ink/15 bg-canvas"
+                />
+              </Field>
+              <Check
+                label={t("settingsOpenVpn.pullRoutes")}
+                registration={register("openVpnPullRoutes")}
               />
             </Fieldset>
           ) : null}
