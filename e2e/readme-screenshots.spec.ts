@@ -51,12 +51,16 @@ test.describe("readme screenshots", () => {
       animations: "disabled",
     });
 
-    // Diagnostics with the grouped, sortable live-connections table.
+    // Diagnostics with Reachability probes and the live-connections table.
     await page.getByRole("button", { name: "Diagnostics" }).click();
+    const reachability = page.getByTestId("reachability");
+    await expect(reachability).toBeVisible();
+    await expect(reachability.getByText("google.com")).toBeVisible();
+    await expect(reachability.getByText("iran.ir")).toBeVisible();
     const connections = page.getByTestId("live-connections");
     await expect(connections).toBeVisible();
     await expect(connections.getByText("digikala.ir")).toBeVisible();
-    await connections.scrollIntoViewIfNeeded();
+    await reachability.scrollIntoViewIfNeeded();
     await page.screenshot({
       path: join(screenshotDir, "diagnostics.png"),
       animations: "disabled",

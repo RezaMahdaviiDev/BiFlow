@@ -17,8 +17,13 @@ answers to common questions.
 features list, description, how it works, architecture, develop, and FAQ.
 Agent rules and crate-level lessons stay in `AGENTS.md`.
 
-Committed shots live in `docs/screenshots/`. Refresh them with
+Committed shots live in `docs/screenshots/` (desktop dashboard, Diagnostics
+with Reachability, and the phone-sized shell). Refresh them with
 `BIFLOW_CAPTURE_README=1 pnpm exec playwright test e2e/readme-screenshots.spec.ts`.
+The Diagnostics shot waits for the Reachability card so the landing page
+shows the current probe table. A user-visible UI change must recapture
+those files in the same change; stale landing-page images fail the done
+gate.
 
 ## Consequences
 
@@ -28,3 +33,5 @@ Committed shots live in `docs/screenshots/`. Refresh them with
   split-routing ADRs.
 - The features list and screenshot files are covered by the README contract
   test so a landing-page edit cannot drop them.
+- Agents recapture the three shots whenever Dashboard, Diagnostics, or the
+  phone-sized shell changes, so GitHub's first-run view matches the build.

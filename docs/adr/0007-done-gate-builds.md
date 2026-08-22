@@ -10,7 +10,7 @@ Agents could finish a change after editing files even when the frontend or Rust 
 
 ## Decision
 
-`AGENTS.md` has a hard **Done gate**: prove the parts that changed with zero failures and zero project warnings. Frontend changes run `pnpm check` + `pnpm build`. Rust changes run `cargo test -p <crate>` plus `cargo clippy -p <crate> --all-targets -- -D warnings` for each touched workspace crate. Do not `cargo clean`, and do not run `cargo test --workspace` plus `cargo build --workspace` after every task. A wide Cargo change uses one incremental `cargo test --workspace` plus warning-denying workspace Clippy. Missing toolchains must be installed, not skipped.
+`AGENTS.md` has a hard **Done gate**: prove the parts that changed with zero failures and zero project warnings. Frontend changes run `pnpm check` + `pnpm build`. Rust changes run `cargo test -p <crate>` plus `cargo clippy -p <crate> --all-targets -- -D warnings` for each touched workspace crate, then `cargo fmt --all --check` before the change is reported done. Do not `cargo clean`, and do not run `cargo test --workspace` plus `cargo build --workspace` after every task. A wide Cargo change uses one incremental `cargo test --workspace` plus warning-denying workspace Clippy. Missing toolchains must be installed, not skipped. A user-visible UI change also refreshes `docs/screenshots/` with the README Playwright capture.
 
 ## Consequences
 

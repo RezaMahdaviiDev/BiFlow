@@ -79,13 +79,7 @@ pub async fn check_all(hiddify_proxy: Option<(String, u16)>) -> Vec<Reachability
     let proxied = hiddify_proxy.as_ref().and_then(|(host, port)| {
         reqwest::Proxy::all(format!("socks5h://{host}:{port}"))
             .ok()
-            .and_then(|proxy| {
-                base_client_builder()
-                    .no_proxy()
-                    .proxy(proxy)
-                    .build()
-                    .ok()
-            })
+            .and_then(|proxy| base_client_builder().no_proxy().proxy(proxy).build().ok())
     });
 
     let probe = |target: &'static Target| {
@@ -203,11 +197,13 @@ mod tests {
         assert!(TARGETS
             .iter()
             .any(|target| target.domain == "iran.ir" && target.path == ProbePath::Direct));
-        assert!(TARGETS
-            .iter()
-            .filter(|target| target.path == ProbePath::Vpn)
-            .count()
-            == 2);
+        assert!(
+            TARGETS
+                .iter()
+                .filter(|target| target.path == ProbePath::Vpn)
+                .count()
+                == 2
+        );
     }
 
     #[test]

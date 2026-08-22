@@ -28,7 +28,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/diagnostics.png" alt="Diagnostics with the live connections table grouped by domain, sortable columns, and route-switch actions" width="800" />
+  <img src="docs/screenshots/diagnostics.png" alt="Diagnostics with Reachability probes for Google, Facebook, and iran.ir, plus the live connections table" width="800" />
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@
 - **Basic and Advanced** — First launch opens Basic. Advanced adds component health, live traffic routes, and extra tools.
 - **Direct rules** — Pin hosts to DIRECT or VPN in a sortable table with one-click route switching. Refresh the bundled Iran domain and IP lists from the BiFlow cloud snapshot.
 - **Live connections** — One row per domain with a connection count, resolved IPs, route, and matched rule. Sort any column and send a host to the opposite route without leaving the table.
-- **Diagnostics** — Test whether a host would go DIRECT or through the VPN, then move it. Export or clear the local `debug.log`. Fresh Hiddify start repairs a blank Hiddify window without touching subscriptions.
+- **Diagnostics** — Probe Google, Facebook, and iran.ir to see if the node or DIRECT path is reachable. Test a host, then move it. Export or clear the local `debug.log`. Fresh Hiddify start repairs a blank Hiddify window without touching subscriptions.
 - **DIRECT DNS presets** — Fake-ip by default; Shecan, Electro, Radar, Mokhaberat, or custom resolvers are one Settings choice away for DIRECT domains. DIRECT domains always resolve to their real addresses.
 - **Browser-friendly routing** — Clears a Hiddify-owned system proxy while connected so browsers actually use the split routing, and rejects VPN-bound QUIC so pages fall back to working TCP instead of hanging.
 - **Status bar** — Internet reachability, public IP, approximate country, and lifetime sent/received totals.

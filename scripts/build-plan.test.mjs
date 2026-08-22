@@ -378,6 +378,7 @@ describe("release artifact names", () => {
     assert.match(readme, /Right traffic\. Right route/);
     assert.match(readme, /## Features/);
     assert.match(readme, /docs\/screenshots\/desktop\.png/);
+    assert.match(readme, /docs\/screenshots\/diagnostics\.png/);
     assert.match(readme, /docs\/screenshots\/mobile\.png/);
     assert.match(readme, /## Description/);
     assert.match(readme, /## How it works/);
@@ -387,6 +388,10 @@ describe("release artifact names", () => {
     assert.ok(
       existsSync(join(root, "docs/screenshots/desktop.png")),
       "desktop screenshot",
+    );
+    assert.ok(
+      existsSync(join(root, "docs/screenshots/diagnostics.png")),
+      "diagnostics screenshot",
     );
     assert.ok(
       existsSync(join(root, "docs/screenshots/mobile.png")),
@@ -404,6 +409,8 @@ describe("release artifact names", () => {
       agents,
       /cargo clippy -p <crate> --all-targets -- -D warnings/,
     );
+    assert.match(agents, /cargo fmt --all --check/);
+    assert.match(agents, /BIFLOW_CAPTURE_README=1/);
     assert.match(agents, /zero warnings from project code/);
     assert.match(agents, /Do \*\*not\*\* `cargo clean`/);
     assert.match(agents, /not done/i);
