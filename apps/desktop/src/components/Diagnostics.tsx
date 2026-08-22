@@ -726,6 +726,11 @@ function LiveConnectionsCard() {
     key: "count",
     dir: "desc",
   });
+  const [query, setQuery] = useState("");
+  const [outboundFilter, setOutboundFilter] = useState<
+    "all" | "direct" | "vpn"
+  >("all");
+  const [ruleFilter, setRuleFilter] = useState("all");
   const live = snapshot?.phase === "running" || snapshot?.phase === "degraded";
 
   useEffect(() => {
@@ -752,6 +757,25 @@ function LiveConnectionsCard() {
     };
   }, [live]);
 
+  const groups = groupConnections(rows);
+  const ruleOptions = [
+    ...new Set(groups.map((group) => group.rule).filter(Boolean)),
+  ].sort();
+  // Keep a vanished rule visible in the select instead of blanking it; the
+  // user can still switch back to "all rules".
+  if (ruleFilter !== "all" && !ruleOptions.includes(ruleFilter)) {
+    ruleOptions.push(ruleFilter);
+  }
+  const needle = query.trim().toLowerCase();
+  const filtered = groups.filter(
+    (group) =>
+      (outboundFilter === "all" || group.outbound === outboundFilter) &&
+      (ruleFilter === "all" || group.rule === ruleFilter) &&
+      (needle === "" ||
+        group.host.toLowerCase().includes(needle) ||
+        group.ips.some((ip) => ip.toLowerCase().includes(needle))),
+  );
+
   return (
     <div
       data-testid="live-connections"
@@ -762,109 +786,163 @@ function LiveConnectionsCard() {
       {rows.length === 0 ? (
         <p className="mt-3 text-sm text-muted">{t("liveConnectionsEmpty")}</p>
       ) : (
-        <div className="mt-3 overflow-x-auto rounded-xl border border-ink/10">
-          <table className="w-full min-w-[36rem] text-start text-sm">
-            <thead>
-              <tr className="bg-canvas text-muted">
-                <SortHeader
-                  label={t("liveConnectionsHost")}
-                  sortKey="host"
-                  state={sort}
-                  onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
-                />
-                <SortHeader
-                  label={t("liveConnectionsCount")}
-                  sortKey="count"
-                  state={sort}
-                  onToggle={(key) =>
-                    setSort((prev) => toggleSort(prev, key, "desc"))
-                  }
-                />
-                <SortHeader
-                  label={t("liveConnectionsIp")}
-                  sortKey="ip"
-                  state={sort}
-                  onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
-                />
-                <SortHeader
-                  label={t("liveConnectionsOutbound")}
-                  sortKey="outbound"
-                  state={sort}
-                  onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
-                />
-                <SortHeader
-                  label={t("liveConnectionsRule")}
-                  sortKey="rule"
-                  state={sort}
-                  onToggle={(key) => setSort((prev) => toggleSort(prev, key))}
-                />
-                <th className="px-3 py-2 text-start font-medium">
-                  {t("tableActions")}
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink/10">
-              {sortRows(
-                groupConnections(rows),
-                sort,
-                CONNECTION_SORT_ACCESSORS,
-              ).map((group) => {
-                const target = group.host || group.ips[0] || "";
-                const destination =
-                  group.outbound === "direct" ? "vpn" : "direct";
-                return (
-                  <tr key={group.key} className="hover:bg-canvas/60">
-                    <td className="px-3 py-2 font-medium break-all">
-                      {group.host || "—"}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted">
-                      {group.count}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted">
-                      {formatGroupIps(group.ips) || "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      <span
-                        className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
-                          group.outbound === "vpn"
-                            ? "bg-brand/10 text-brand"
-                            : "bg-success/10 text-success"
-                        }`}
-                      >
-                        {group.outbound === "direct" ? t("direct") : t("vpn")}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-muted">
-                      {group.rule || "—"}
-                    </td>
-                    <td className="px-3 py-2">
-                      {target ? (
-                        <button
-                          type="button"
-                          disabled={actionPending}
-                          onClick={() =>
-                            void pinRoute(target, destination).catch(
-                              () => undefined,
-                            )
-                          }
-                          className="inline-flex items-center gap-1 rounded-lg border border-ink/15 px-2 py-1 text-xs font-semibold text-muted hover:text-brand disabled:opacity-50"
-                          title={
-                            destination === "direct"
-                              ? t("moveToDirect", { target })
-                              : t("moveToVpn", { target })
-                          }
-                        >
-                          <ArrowLeftRight size={14} aria-hidden />
-                          {destination === "direct" ? t("direct") : t("vpn")}
-                        </button>
-                      ) : null}
-                    </td>
+        <>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              aria-label={t("liveConnectionsSearch")}
+              placeholder={t("liveConnectionsSearch")}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              className="min-w-0 flex-1 rounded-xl border-ink/15 bg-canvas text-sm"
+            />
+            <select
+              aria-label={t("liveConnectionsOutbound")}
+              value={outboundFilter}
+              onChange={(event) =>
+                setOutboundFilter(
+                  event.target.value as "all" | "direct" | "vpn",
+                )
+              }
+              className="rounded-xl border-ink/15 bg-canvas text-sm"
+            >
+              <option value="all">{t("liveConnectionsAllRoutes")}</option>
+              <option value="direct">{t("direct")}</option>
+              <option value="vpn">{t("vpn")}</option>
+            </select>
+            <select
+              aria-label={t("liveConnectionsRule")}
+              value={ruleFilter}
+              onChange={(event) => setRuleFilter(event.target.value)}
+              className="rounded-xl border-ink/15 bg-canvas text-sm"
+            >
+              <option value="all">{t("liveConnectionsAllRules")}</option>
+              {ruleOptions.map((rule) => (
+                <option key={rule} value={rule}>
+                  {rule}
+                </option>
+              ))}
+            </select>
+          </div>
+          {filtered.length === 0 ? (
+            <p className="mt-3 text-sm text-muted">
+              {t("liveConnectionsNoMatch")}
+            </p>
+          ) : (
+            <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-ink/10">
+              <table className="w-full min-w-[36rem] text-start text-sm">
+                <thead className="sticky top-0 z-10">
+                  <tr className="bg-canvas text-muted">
+                    <SortHeader
+                      label={t("liveConnectionsHost")}
+                      sortKey="host"
+                      state={sort}
+                      onToggle={(key) =>
+                        setSort((prev) => toggleSort(prev, key))
+                      }
+                    />
+                    <SortHeader
+                      label={t("liveConnectionsCount")}
+                      sortKey="count"
+                      state={sort}
+                      onToggle={(key) =>
+                        setSort((prev) => toggleSort(prev, key, "desc"))
+                      }
+                    />
+                    <SortHeader
+                      label={t("liveConnectionsIp")}
+                      sortKey="ip"
+                      state={sort}
+                      onToggle={(key) =>
+                        setSort((prev) => toggleSort(prev, key))
+                      }
+                    />
+                    <SortHeader
+                      label={t("liveConnectionsOutbound")}
+                      sortKey="outbound"
+                      state={sort}
+                      onToggle={(key) =>
+                        setSort((prev) => toggleSort(prev, key))
+                      }
+                    />
+                    <SortHeader
+                      label={t("liveConnectionsRule")}
+                      sortKey="rule"
+                      state={sort}
+                      onToggle={(key) =>
+                        setSort((prev) => toggleSort(prev, key))
+                      }
+                    />
+                    <th className="px-3 py-2 text-start font-medium">
+                      {t("tableActions")}
+                    </th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                </thead>
+                <tbody className="divide-y divide-ink/10">
+                  {sortRows(filtered, sort, CONNECTION_SORT_ACCESSORS).map(
+                    (group) => {
+                      const target = group.host || group.ips[0] || "";
+                      const destination =
+                        group.outbound === "direct" ? "vpn" : "direct";
+                      return (
+                        <tr key={group.key} className="hover:bg-canvas/60">
+                          <td className="px-3 py-2 font-medium break-all">
+                            {group.host || "—"}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs text-muted">
+                            {group.count}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs text-muted">
+                            {formatGroupIps(group.ips) || "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                                group.outbound === "vpn"
+                                  ? "bg-brand/10 text-brand"
+                                  : "bg-success/10 text-success"
+                              }`}
+                            >
+                              {group.outbound === "direct"
+                                ? t("direct")
+                                : t("vpn")}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 font-mono text-xs text-muted">
+                            {group.rule || "—"}
+                          </td>
+                          <td className="px-3 py-2">
+                            {target ? (
+                              <button
+                                type="button"
+                                disabled={actionPending}
+                                onClick={() =>
+                                  void pinRoute(target, destination).catch(
+                                    () => undefined,
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 rounded-lg border border-ink/15 px-2 py-1 text-xs font-semibold text-muted hover:text-brand disabled:opacity-50"
+                                title={
+                                  destination === "direct"
+                                    ? t("moveToDirect", { target })
+                                    : t("moveToVpn", { target })
+                                }
+                              >
+                                <ArrowLeftRight size={14} aria-hidden />
+                                {destination === "direct"
+                                  ? t("direct")
+                                  : t("vpn")}
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    },
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

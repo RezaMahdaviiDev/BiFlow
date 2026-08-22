@@ -314,6 +314,72 @@ describe("Diagnostics", () => {
     expect(screen.getByTitle("Add openai.com to direct")).toBeVisible();
   });
 
+  it("filters live connections by route and rule and searches host or IP", async () => {
+    vi.mocked(desktop.listActiveConnections).mockResolvedValue([
+      {
+        host: "digikala.ir",
+        destination_ip: "5.22.12.1",
+        outbound: "direct",
+        rule: "iran-domains",
+      },
+      {
+        host: "openai.com",
+        destination_ip: "104.18.1.1",
+        outbound: "vpn",
+        rule: "MATCH",
+      },
+    ]);
+    useAppStore.setState({
+      snapshot: {
+        revision: 1,
+        phase: "running",
+        operation_id: null,
+        helper: { phase: "running", message: null, since: "now" },
+        hiddify: { phase: "running", message: null, since: "now" },
+        mihomo: { phase: "running", message: null, since: "now" },
+        tun: { phase: "running", message: null, since: "now" },
+        dns: { phase: "running", message: null, since: "now" },
+        providers: {
+          ready: 6,
+          total: 6,
+          rules_loaded: 12,
+          last_refresh: null,
+        },
+        exit_ip: "203.0.113.42",
+        backend: "external_hiddify",
+        last_error: null,
+        updated_at: "now",
+      },
+    });
+    render(<Diagnostics report={null} />);
+    await screen.findByText("digikala.ir");
+
+    // Route filter narrows to VPN rows only.
+    await userEvent.selectOptions(screen.getByLabelText("Route"), "vpn");
+    expect(screen.queryByText("digikala.ir")).toBeNull();
+    expect(screen.getByText("openai.com")).toBeVisible();
+    await userEvent.selectOptions(screen.getByLabelText("Route"), "all");
+
+    // Rule filter offers the observed rules and narrows to one of them.
+    await userEvent.selectOptions(
+      screen.getByLabelText("Matched rule"),
+      "iran-domains",
+    );
+    expect(screen.getByText("digikala.ir")).toBeVisible();
+    expect(screen.queryByText("openai.com")).toBeNull();
+    await userEvent.selectOptions(screen.getByLabelText("Matched rule"), "all");
+
+    // Search matches destination IPs as well as hosts.
+    const search = screen.getByLabelText("Search host or IP");
+    await userEvent.type(search, "104.18");
+    expect(screen.getByText("openai.com")).toBeVisible();
+    expect(screen.queryByText("digikala.ir")).toBeNull();
+
+    await userEvent.clear(search);
+    await userEvent.type(search, "no-such-host");
+    expect(screen.getByText("No connections match this filter.")).toBeVisible();
+  });
+
   it("shows a reachability row per fixed probe domain", async () => {
     render(<Diagnostics report={null} />);
     expect(
