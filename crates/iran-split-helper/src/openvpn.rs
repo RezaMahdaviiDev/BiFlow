@@ -131,11 +131,11 @@ impl Supervisor {
         command
             .args(build_arguments(request))
             .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        apply_openvpn_spawn(&mut command);
         let mut child = command
             .spawn()
             .map_err(|error| HelperServiceError::OpenVpn(redact(&error.to_string())))?;
@@ -770,15 +770,30 @@ async fn run_capture(binary: &str, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Rebuilds the minimum environment `OpenVPN` needs after `env_clear`.
+#[cfg(unix)]
+fn apply_openvpn_spawn(command: &mut Command) {
+    command.env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+}
+
+/// Rebuilds the minimum environment `OpenVPN` needs after `env_clear`.
+///
+/// A cleared environment on Windows costs the process `SYSTEMROOT`, without
+/// which it cannot start at all, so the same variables the Mihomo spawn
+/// restores are restored here — and the console window is hidden, since the
+/// helper runs as a service.
 #[cfg(windows)]
-async fn interface_index(device: &str) -> Option<u32> {
-    let output = run_capture("netsh", &["interface", "ipv4", "show", "interfaces"]).await?;
-    output.lines().find_map(|line| {
-        if !line.contains(device) {
-            return None;
-        }
-        line.split_whitespace().next()?.parse().ok()
-    })
+fn apply_openvpn_spawn(command: &mut Command) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let system_root = std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".into());
+    let system_drive = std::env::var("SYSTEMDRIVE").unwrap_or_else(|_| r"C:".into());
+    command
+        .env("SYSTEMROOT", &system_root)
+        .env("SystemRoot", &system_root)
+        .env("WINDIR", &system_root)
+        .env("SYSTEMDRIVE", system_drive)
+        .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        .creation_flags(CREATE_NO_WINDOW);
 }
 
 async fn terminate(child: &mut Child) -> Result<(), HelperServiceError> {
