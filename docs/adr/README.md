@@ -69,3 +69,4 @@ Keep this index current. Add a new ADR for each non-obvious change, or update th
 | [0063](./0063-reject-quic-toward-vpn.md)                 | Reject QUIC toward the VPN                  | Accepted   |
 | [0064](./0064-windows-machine-wide-helper-staging.md)    | Windows machine-wide helper staging         | Accepted   |
 | [0065](./0065-linux-vpn-doh-and-egress-probe.md)         | Linux VPN DoH and multi-path egress probe   | Accepted   |
+| [0066](./0066-reachability-diagnostics.md)               | Reachability section in Diagnostics         | Accepted   |

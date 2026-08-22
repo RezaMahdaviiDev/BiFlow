@@ -231,6 +231,23 @@ test.describe("primary BiFlow flows", () => {
     await page.getByRole("button", { name: "Test flow" }).click();
     await expect(page.getByText("example.ir → DIRECT")).toBeVisible();
 
+    // Reachability probes the fixed domains; disconnected mock keeps the VPN
+    // pair red and iran.ir green, and a red row explains its likely causes.
+    const reachability = page.getByTestId("reachability");
+    await expect(
+      reachability.getByRole("heading", { name: "Reachability", exact: true }),
+    ).toBeVisible();
+    await expect(reachability.getByText("google.com")).toBeVisible();
+    await expect(reachability.getByText("facebook.com")).toBeVisible();
+    await expect(reachability.getByText("iran.ir")).toBeVisible();
+    // "Unreachable" contains "Reachable", so the green label needs exact.
+    await expect(
+      reachability.getByText("Reachable", { exact: true }),
+    ).toBeVisible();
+    await reachability.getByText("google.com").click();
+    await expect(page.getByRole("dialog")).toContainText("Press Connect first");
+    await page.getByRole("button", { name: "Close" }).click();
+
     await expect(
       page.getByRole("heading", { name: "Permanent debug.log", exact: true }),
     ).toBeVisible();

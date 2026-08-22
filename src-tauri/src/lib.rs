@@ -5,6 +5,7 @@ mod github_update;
 mod helper_install;
 mod hiddify_reset;
 mod network;
+mod reachability;
 mod traffic;
 mod tray;
 mod version;
@@ -13,7 +14,8 @@ mod window_state;
 use chrono::Utc;
 use iran_split_config::{AppConfig, ConfigStore, ValidationIssue};
 use iran_split_core::{
-    Engine, LifecycleBusy, OperationAccepted, PlatformBackend, StackPhase, StackSnapshot,
+    ComponentPhase, Engine, LifecycleBusy, OperationAccepted, PlatformBackend, StackPhase,
+    StackSnapshot,
 };
 use iran_split_mihomo::{ActiveConnection, ControllerClient};
 use iran_split_rules::{
@@ -667,6 +669,37 @@ async fn get_network_status(app: AppHandle) -> Result<network::NetworkStatus, St
         "tauri_command",
         "get_network_status",
         async move { Ok(services(&app)?.network.check().await) },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn check_reachability(
+    app: AppHandle,
+) -> Result<Vec<reachability::ReachabilityResult>, String> {
+    diagnostics::trace_action(
+        "network",
+        "tauri_command",
+        "check_reachability",
+        async move {
+            let services = services(&app)?;
+            // Route VPN-path probes through Hiddify only while it is actually
+            // serving; otherwise fall back to direct requests so the UI can
+            // say "connect first" instead of showing a phantom proxy failure.
+            let hiddify_running =
+                services.engine.snapshot().hiddify.phase == ComponentPhase::Running;
+            let proxy = if hiddify_running {
+                let config = services
+                    .config_store
+                    .load()
+                    .or_else(|_| services.config_store.load_or_create())
+                    .map_err(|error| error.to_string())?;
+                Some((config.hiddify.host.clone(), config.hiddify.port))
+            } else {
+                None
+            };
+            Ok(reachability::check_all(proxy).await)
+        },
     )
     .await
 }
@@ -2825,6 +2858,7 @@ pub fn run() {
             bootstrap_app,
             get_stack_snapshot,
             get_network_status,
+            check_reachability,
             get_traffic_totals,
             list_active_connections,
             start_stack,

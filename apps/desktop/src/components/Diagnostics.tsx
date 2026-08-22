@@ -22,6 +22,7 @@ import type {
   ExportResult,
   FreshStartReport,
   LogEntry,
+  ReachabilityResult,
   RouteTestResult,
 } from "../api/models";
 import type { ConnectionGroup } from "../lib/connectionGroups";
@@ -183,6 +184,8 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
           </div>
         ) : null}
       </form>
+
+      <ReachabilityCard />
 
       <LiveConnectionsCard />
 
@@ -464,6 +467,239 @@ export function Diagnostics({ report }: { report: DiagnosticsReport | null }) {
         ) : null}
       </div>
     </section>
+  );
+}
+
+const REACHABILITY_DOT: Record<ReachabilityResult["status"], string> = {
+  ok: "bg-success",
+  slow: "bg-amber-500",
+  unreachable: "bg-danger",
+};
+
+function reachabilityCauses(
+  row: ReachabilityResult,
+  t: (key: string) => string,
+): { title: string; items: string[] } {
+  if (row.status === "slow") {
+    return {
+      title: t("reachability.causeSlowTitle"),
+      items: [t("reachability.causeSlow1")],
+    };
+  }
+  if (row.path === "vpn" && !row.via_proxy) {
+    return {
+      title: t("reachability.causeVpnOfflineTitle"),
+      items: [t("reachability.causeVpnOffline1")],
+    };
+  }
+  if (row.path === "vpn") {
+    return {
+      title: t("reachability.causeVpnBlockedTitle"),
+      items: [
+        t("reachability.causeVpnBlocked1"),
+        t("reachability.causeVpnBlocked2"),
+        t("reachability.causeVpnBlocked3"),
+      ],
+    };
+  }
+  return {
+    title: t("reachability.causeDirectTitle"),
+    items: [
+      t("reachability.causeDirect1"),
+      t("reachability.causeDirect2"),
+      t("reachability.causeDirect3"),
+    ],
+  };
+}
+
+function ReachabilityCard() {
+  const { t } = useTranslation();
+  const snapshot = useAppStore((state) => state.snapshot);
+  const connected =
+    snapshot?.phase === "running" || snapshot?.phase === "degraded";
+  const [rows, setRows] = useState<ReachabilityResult[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const runCheck = () => {
+    setChecking(true);
+    return desktop
+      .checkReachability()
+      .then((next) => {
+        setRows(next);
+        return next;
+      })
+      .catch(() => {
+        setRows([]);
+        return [] as ReachabilityResult[];
+      })
+      .finally(() => setChecking(false));
+  };
+
+  // Re-probe when the stack connects or disconnects: both the path taken and
+  // the expected outcome change with it.
+  useEffect(() => {
+    void runCheck();
+  }, [connected]);
+
+  const selected = rows?.find((row) => row.id === selectedId) ?? null;
+  const statusLabel = (status: ReachabilityResult["status"]) =>
+    status === "ok"
+      ? t("reachability.statusOk")
+      : status === "slow"
+        ? t("reachability.statusSlow")
+        : t("reachability.statusUnreachable");
+
+  return (
+    <div
+      data-testid="reachability"
+      className="rounded-2xl border border-ink/10 bg-surface p-4"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-semibold">{t("reachability.title")}</h2>
+          <p className="mt-1 text-sm text-muted">{t("reachability.help")}</p>
+        </div>
+        <button
+          type="button"
+          disabled={checking}
+          onClick={() => void runCheck()}
+          className="inline-flex items-center gap-2 rounded-xl border border-ink/15 px-3 py-2 text-sm font-semibold disabled:opacity-50"
+        >
+          {checking ? (
+            <LoaderCircle className="animate-spin" size={16} aria-hidden />
+          ) : (
+            <RefreshCw size={16} aria-hidden />
+          )}
+          {t("reachability.refresh")}
+        </button>
+      </div>
+      {rows === null ? (
+        <p className="mt-3 text-sm text-muted">{t("reachability.checking")}</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-ink/10 rounded-xl border border-ink/10">
+          {rows.map((row) => {
+            const inner = (
+              <>
+                <span
+                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${REACHABILITY_DOT[row.status]}`}
+                  aria-hidden
+                />
+                <span className="font-medium">{row.domain}</span>
+                <span className="rounded-md bg-canvas px-2 py-0.5 text-xs font-semibold text-muted">
+                  {row.path === "vpn"
+                    ? t("reachability.pathVpn")
+                    : t("reachability.pathDirect")}
+                </span>
+                <span className="ms-auto flex items-center gap-3 text-sm text-muted">
+                  {row.latency_ms !== null ? (
+                    <span className="font-mono text-xs">
+                      {row.latency_ms} ms
+                    </span>
+                  ) : null}
+                  <span>{statusLabel(row.status)}</span>
+                </span>
+              </>
+            );
+            return (
+              <li key={row.id}>
+                {row.status === "ok" ? (
+                  <div className="flex items-center gap-3 px-3 py-2.5">
+                    {inner}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(row.id)}
+                    title={t("reachability.rowHint")}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 text-start hover:bg-canvas/60"
+                  >
+                    {inner}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {selected ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+          onClick={() => setSelectedId(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("reachability.modalTitle", {
+              domain: selected.domain,
+              status: statusLabel(selected.status),
+            })}
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-md rounded-2xl border border-ink/10 bg-surface p-5 shadow-xl"
+          >
+            <h3 className="flex items-center gap-2 font-semibold">
+              <span
+                className={`h-2.5 w-2.5 rounded-full ${REACHABILITY_DOT[selected.status]}`}
+                aria-hidden
+              />
+              {t("reachability.modalTitle", {
+                domain: selected.domain,
+                status: statusLabel(selected.status),
+              })}
+            </h3>
+            {(() => {
+              const causes = reachabilityCauses(selected, t);
+              return (
+                <div className="mt-3">
+                  <p className="text-sm font-medium">{causes.title}</p>
+                  <ul className="mt-2 list-disc space-y-2 ps-5 text-sm text-muted">
+                    {causes.items.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
+            {selected.detail ? (
+              <p className="mt-3 break-all rounded-xl bg-canvas p-2 font-mono text-xs text-muted">
+                {selected.detail}
+              </p>
+            ) : null}
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedId(null)}
+                className="rounded-xl border border-ink/15 px-3 py-2 text-sm font-semibold"
+              >
+                {t("reachability.close")}
+              </button>
+              <button
+                type="button"
+                disabled={checking}
+                onClick={() =>
+                  void runCheck().then((next) => {
+                    const fresh = next.find((row) => row.id === selectedId);
+                    if (fresh?.status === "ok") setSelectedId(null);
+                  })
+                }
+                className="inline-flex items-center gap-2 rounded-xl bg-brand px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {checking ? (
+                  <LoaderCircle
+                    className="animate-spin"
+                    size={16}
+                    aria-hidden
+                  />
+                ) : (
+                  <RefreshCw size={16} aria-hidden />
+                )}
+                {t("reachability.tryAgain")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

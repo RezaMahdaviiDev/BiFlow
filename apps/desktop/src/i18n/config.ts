@@ -176,6 +176,41 @@ const resources = {
       freshHiddifyNothing: "nothing to clear",
       freshHiddifyBackup: "Backup",
       flowResult: "Flow",
+      reachability: {
+        title: "Reachability",
+        help: "Live checks of well-known destinations over the path each one really takes.",
+        refresh: "Check again",
+        checking: "Checking…",
+        pathVpn: "VPN",
+        pathDirect: "DIRECT",
+        statusOk: "Reachable",
+        statusSlow: "Slow",
+        statusUnreachable: "Unreachable",
+        rowHint: "Click for likely causes",
+        modalTitle: "Why is {{domain}} {{status}}?",
+        close: "Close",
+        tryAgain: "Try again",
+        causeVpnBlockedTitle:
+          "The tunnel is up, but this destination dies inside the node.",
+        causeVpnBlocked1:
+          "The selected Hiddify node closes connections for this site (common with camouflage/Reality nodes that protect their cover domain). Switch to a different node in Hiddify.",
+        causeVpnBlocked2:
+          "The node's server or its ISP blocks this destination. A node in another datacenter usually fixes it.",
+        causeVpnBlocked3:
+          "The node lost real egress. Pick another node, then press Try again.",
+        causeVpnOfflineTitle: "You are not connected.",
+        causeVpnOffline1:
+          "Without the VPN this site is filtered on the Iranian network — this result is expected. Press Connect first.",
+        causeDirectTitle: "The DIRECT path could not reach this site.",
+        causeDirect1:
+          "Your internet connection may be down — check other local sites.",
+        causeDirect2:
+          "The DIRECT DNS resolver may be failing. In Settings, try another DIRECT DNS preset.",
+        causeDirect3: "The site itself may be temporarily down.",
+        causeSlowTitle: "It answered, but slowly.",
+        causeSlow1:
+          "The node or your internet link is congested. Try again, or switch nodes if it stays slow.",
+      },
       errors: {
         helperUnavailable: "The privileged helper is unavailable.",
         helperUnauthorized: "The current user is not authorized by the helper.",
@@ -369,6 +404,40 @@ const resources = {
       freshHiddifyNothing: "چیزی برای پاک‌کردن نبود",
       freshHiddifyBackup: "پشتیبان",
       flowResult: "مسیر",
+      reachability: {
+        title: "دسترسی‌پذیری",
+        help: "بررسی زندهٔ مقصدهای شناخته‌شده از همان مسیری که واقعاً طی می‌کنند.",
+        refresh: "بررسی دوباره",
+        checking: "در حال بررسی…",
+        pathVpn: "وی‌پی‌ان",
+        pathDirect: "مستقیم",
+        statusOk: "در دسترس",
+        statusSlow: "کند",
+        statusUnreachable: "در دسترس نیست",
+        rowHint: "برای دلایل احتمالی کلیک کنید",
+        modalTitle: "چرا {{domain}} {{status}} است؟",
+        close: "بستن",
+        tryAgain: "تلاش دوباره",
+        causeVpnBlockedTitle: "تونل برقرار است اما این مقصد داخل نود می‌میرد.",
+        causeVpnBlocked1:
+          "نود انتخابی هیدیفای اتصال‌های این سایت را می‌بندد (در نودهای استتاری/Reality که از دامنهٔ پوششی‌شان محافظت می‌کنند رایج است). در هیدیفای نود دیگری انتخاب کنید.",
+        causeVpnBlocked2:
+          "سرور نود یا اینترنت آن، این مقصد را مسدود می‌کند. نودی در دیتاسنتر دیگر معمولاً مشکل را حل می‌کند.",
+        causeVpnBlocked3:
+          "نود خروجی واقعی ندارد. نود دیگری انتخاب و دوباره تلاش کنید.",
+        causeVpnOfflineTitle: "شما متصل نیستید.",
+        causeVpnOffline1:
+          "بدون وی‌پی‌ان این سایت در شبکهٔ ایران فیلتر است — این نتیجه طبیعی است. ابتدا Connect را بزنید.",
+        causeDirectTitle: "مسیر مستقیم به این سایت نرسید.",
+        causeDirect1:
+          "شاید اینترنت شما قطع است — سایت‌های داخلی دیگر را بررسی کنید.",
+        causeDirect2:
+          "شاید DNS مستقیم خراب است. در تنظیمات، یک DNS مستقیم دیگر امتحان کنید.",
+        causeDirect3: "شاید خود سایت موقتاً از دسترس خارج است.",
+        causeSlowTitle: "پاسخ داد، اما کند.",
+        causeSlow1:
+          "نود یا اینترنت شما شلوغ است. دوباره تلاش کنید و اگر کند ماند، نود را عوض کنید.",
+      },
       errors: {
         helperUnavailable: "سرویس کمکی در دسترس نیست.",
         helperUnauthorized: "کاربر فعلی توسط سرویس کمکی مجاز نیست.",

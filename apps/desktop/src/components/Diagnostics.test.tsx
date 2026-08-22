@@ -30,6 +30,35 @@ vi.mock("../api/desktop", () => ({
     }),
     exportBundle: vi.fn(),
     listActiveConnections: vi.fn().mockResolvedValue([]),
+    checkReachability: vi.fn().mockResolvedValue([
+      {
+        id: "google",
+        domain: "google.com",
+        path: "vpn",
+        via_proxy: true,
+        status: "unreachable",
+        latency_ms: null,
+        detail: "tls closed",
+      },
+      {
+        id: "facebook",
+        domain: "facebook.com",
+        path: "vpn",
+        via_proxy: true,
+        status: "slow",
+        latency_ms: 3200,
+        detail: null,
+      },
+      {
+        id: "iran",
+        domain: "iran.ir",
+        path: "direct",
+        via_proxy: false,
+        status: "ok",
+        latency_ms: 95,
+        detail: null,
+      },
+    ]),
     freshHiddifyStart: vi.fn().mockResolvedValue({
       data_dir: "/home/user/.local/share/hiddify",
       backup_dir: "/home/user/.local/share/biflow/backups/hiddify-20260815",
@@ -283,5 +312,56 @@ describe("Diagnostics", () => {
     // Each row offers a button that moves the host to the opposite route.
     expect(screen.getByTitle("Add digikala.ir to VPN")).toBeVisible();
     expect(screen.getByTitle("Add openai.com to direct")).toBeVisible();
+  });
+
+  it("shows a reachability row per fixed probe domain", async () => {
+    render(<Diagnostics report={null} />);
+    expect(
+      await screen.findByRole("heading", { name: "Reachability" }),
+    ).toBeVisible();
+    expect(await screen.findByText("google.com")).toBeVisible();
+    expect(screen.getByText("facebook.com")).toBeVisible();
+    expect(screen.getByText("iran.ir")).toBeVisible();
+    expect(screen.getByText("Unreachable")).toBeVisible();
+    expect(screen.getByText("Slow")).toBeVisible();
+    expect(screen.getByText("Reachable")).toBeVisible();
+    // Only degraded rows invite a click for causes; the green row stays plain.
+    expect(screen.getAllByTitle("Click for likely causes")).toHaveLength(2);
+  });
+
+  it("opens likely causes for an unreachable domain and retries", async () => {
+    render(<Diagnostics report={null} />);
+    await screen.findByText("google.com");
+    const googleRow = screen.getAllByTitle("Click for likely causes")[0];
+    if (!googleRow) throw new Error("expected a clickable reachability row");
+    await userEvent.click(googleRow);
+
+    const dialog = await screen.findByRole("dialog");
+    // google is VPN-path and was probed through the proxy, so the causes
+    // point at the Hiddify node rather than at being disconnected.
+    expect(dialog).toHaveTextContent("Switch to a different node in Hiddify");
+    expect(dialog).toHaveTextContent("tls closed");
+
+    await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(desktop.checkReachability).toHaveBeenCalledTimes(2);
+  });
+
+  it("explains an unreachable VPN domain as expected while disconnected", async () => {
+    vi.mocked(desktop.checkReachability).mockResolvedValueOnce([
+      {
+        id: "google",
+        domain: "google.com",
+        path: "vpn",
+        via_proxy: false,
+        status: "unreachable",
+        latency_ms: null,
+        detail: null,
+      },
+    ]);
+    render(<Diagnostics report={null} />);
+    await userEvent.click(await screen.findByTitle("Click for likely causes"));
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "Press Connect first",
+    );
   });
 });

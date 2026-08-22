@@ -16,6 +16,7 @@ import type {
   LogEntry,
   NetworkStatus,
   OperationAccepted,
+  ReachabilityResult,
   RouteTestResult,
   LifecycleBusy,
   OperationStage,
@@ -874,6 +875,35 @@ export const mockApi = {
       return route(target, "direct", "iran_domain", business);
     }
     return route(target, "vpn", "default_proxy", "MATCH");
+  },
+  async checkReachability(): Promise<ReachabilityResult[]> {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    // Mirrors the real probe: VPN domains only pass while the stack runs;
+    // iran.ir is DIRECT and reachable either way.
+    const connected =
+      snapshot.phase === "running" || snapshot.phase === "degraded";
+    const vpnStatus = (domain: string, id: string): ReachabilityResult => ({
+      id,
+      domain,
+      path: "vpn",
+      via_proxy: connected,
+      status: connected ? "ok" : "unreachable",
+      latency_ms: connected ? 420 : null,
+      detail: connected ? null : "connection closed before TLS finished",
+    });
+    return [
+      vpnStatus("google.com", "google"),
+      vpnStatus("facebook.com", "facebook"),
+      {
+        id: "iran",
+        domain: "iran.ir",
+        path: "direct",
+        via_proxy: false,
+        status: "ok",
+        latency_ms: 95,
+        detail: null,
+      },
+    ];
   },
   async diagnostics(): Promise<DiagnosticsReport> {
     const steps: DiagnosticStep[] = [

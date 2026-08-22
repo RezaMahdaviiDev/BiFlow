@@ -171,6 +171,19 @@ export interface RouteTestResult {
   tested_at: string;
 }
 
+export type ReachabilityStatus = "ok" | "slow" | "unreachable";
+
+export interface ReachabilityResult {
+  id: string;
+  domain: string;
+  path: "vpn" | "direct";
+  /** True when the probe actually went through the Hiddify proxy. */
+  via_proxy: boolean;
+  status: ReachabilityStatus;
+  latency_ms: number | null;
+  detail: string | null;
+}
+
 export interface DiagnosticStep {
   id: string;
   label: string;

@@ -16,6 +16,7 @@ import type {
   LogEntry,
   NetworkStatus,
   OperationAccepted,
+  ReachabilityResult,
   TrafficTotals,
   RouteTestResult,
   StackSnapshot,
@@ -37,6 +38,9 @@ export const desktop = {
   },
   getNetworkStatus(): Promise<NetworkStatus> {
     return native ? invoke("get_network_status") : mockApi.getNetworkStatus();
+  },
+  checkReachability(): Promise<ReachabilityResult[]> {
+    return native ? invoke("check_reachability") : mockApi.checkReachability();
   },
   getTrafficTotals(): Promise<TrafficTotals> {
     return native ? invoke("get_traffic_totals") : mockApi.getTrafficTotals();
