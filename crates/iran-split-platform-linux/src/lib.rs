@@ -452,7 +452,7 @@ impl LinuxBackend {
             match probe_hiddify_egress(
                 &config.hiddify.host,
                 config.hiddify.port,
-                Duration::from_secs(5),
+                Duration::from_secs(2),
             )
             .await
             {

@@ -24,8 +24,9 @@ The clash-master fixture already maps `rule-set:custom-direct-domains` and
   see [0060](./0060-fake-ip-default-direct-dns.md)).
 - Put the same three rule-sets in `fake-ip-filter` so those names skip fake-ip
   and the browser talks to the real address.
-- Keep Cloudflare DoH as the default `nameserver` (Windows still `#VPN`). Do
-  not log resolved hosts or IPs.
+- Keep Cloudflare DoH as the default `nameserver`, pinned `#VPN` on Linux and
+  Windows (see [0065](./0065-linux-vpn-doh-and-egress-probe.md)). Do not log
+  resolved hosts or IPs.
 
 ## Consequences
 

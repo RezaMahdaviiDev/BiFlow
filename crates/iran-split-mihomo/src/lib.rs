@@ -24,6 +24,8 @@ pub enum MihomoError {
     Yaml(#[from] serde_yaml::Error),
     #[error("Mihomo controller request failed: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("Hiddify egress probe failed: {0}")]
+    EgressProbe(String),
     #[error("Mihomo controller returned HTTP {0}")]
     UnexpectedStatus(StatusCode),
     #[error("Mihomo validation process failed: {0}")]
@@ -328,20 +330,15 @@ pub fn generate_config(
     Ok(GeneratedConfig { yaml, sha256 })
 }
 
-fn nameservers(platform: Platform) -> Vec<String> {
-    match platform {
-        // Windows Wintun + strict-route blackholes bootstrap DoH unless the
-        // query is pinned to the Hiddify proxy group, matching the proven
-        // clash-master stack (`#VPN`).
-        Platform::Windows => vec![
-            "https://1.1.1.1/dns-query#VPN".into(),
-            "https://8.8.8.8/dns-query#VPN".into(),
-        ],
-        Platform::Linux => vec![
-            "https://1.1.1.1/dns-query".into(),
-            "https://8.8.8.8/dns-query".into(),
-        ],
-    }
+fn nameservers(_platform: Platform) -> Vec<String> {
+    // Pin DoH to the Hiddify group on every platform. Unpinned Cloudflare /
+    // Google DoH is often blocked on the Iranian WAN, so VPN destinations
+    // (including Google) stay on fake-ip with no usable mapping. Windows also
+    // needs `#VPN` because Wintun + strict-route blackholes DIRECT DoH.
+    vec![
+        "https://1.1.1.1/dns-query#VPN".into(),
+        "https://8.8.8.8/dns-query#VPN".into(),
+    ]
 }
 
 fn direct_nameserver_policy(resolvers: &[String]) -> BTreeMap<String, Vec<String>> {
@@ -866,36 +863,71 @@ fn classify_outbound(chains: &[String], rule: &str) -> &'static str {
 ///
 /// Returns an error when the proxy/client cannot be configured, the request
 /// fails, or the service returns an invalid IP address.
+const EGRESS_PROBE_URLS: &[&str] = &[
+    "https://cp.cloudflare.com/generate_204",
+    "http://cp.cloudflare.com/generate_204",
+    "https://www.gstatic.com/generate_204",
+];
+
+/// Resolves the public egress IP through the configured Hiddify proxy.
+///
+/// Tries SOCKS then HTTP CONNECT on the mixed port, and more than one
+/// `generate_204` host, so a single blocked Google URL does not fail Connect.
+///
+/// # Errors
+///
+/// Returns [`MihomoError::EgressProbe`] when every proxy/host combination
+/// fails, or the client cannot be built.
 pub async fn probe_hiddify_egress(
     host: &str,
     port: u16,
     timeout: Duration,
 ) -> Result<String, MihomoError> {
-    let proxy = reqwest::Proxy::all(format!("socks5h://{host}:{port}"))?;
-    let client = reqwest::Client::builder()
-        .proxy(proxy)
-        .connect_timeout(timeout)
-        .timeout(timeout)
-        .build()?;
-    client
-        .get("https://www.gstatic.com/generate_204")
-        .send()
-        .await?
-        .error_for_status()?;
-    let ip_response = client
-        .get("https://api.ipify.org?format=json")
-        .send()
-        .await
-        .ok()
-        .filter(|item| item.status().is_success());
-    if let Some(ip_response) = ip_response {
-        if let Ok(payload) = ip_response.json::<ExitIpResponse>().await {
-            if payload.ip.parse::<IpAddr>().is_ok() {
-                return Ok(payload.ip);
+    let mut last = String::from("no probe ran");
+    for proxy_kind in ["socks5h", "http"] {
+        let proxy = reqwest::Proxy::all(format!("{proxy_kind}://{host}:{port}"))
+            .map_err(|error| MihomoError::EgressProbe(error.without_url().to_string()))?;
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .proxy(proxy)
+            .connect_timeout(timeout)
+            .timeout(timeout)
+            .build()
+            .map_err(|error| MihomoError::EgressProbe(error.to_string()))?;
+        for url in EGRESS_PROBE_URLS {
+            match client.get(*url).send().await {
+                Ok(response)
+                    if response.status().as_u16() == 204 || response.status().is_success() =>
+                {
+                    return Ok(optional_exit_ip(&client).await);
+                }
+                Ok(response) => {
+                    last = format!("{proxy_kind} HTTP {}", response.status().as_u16());
+                }
+                Err(error) => {
+                    last = format!("{proxy_kind} {}", error.without_url());
+                }
             }
         }
     }
-    Ok("unknown".into())
+    Err(MihomoError::EgressProbe(last))
+}
+
+async fn optional_exit_ip(client: &reqwest::Client) -> String {
+    let Ok(response) = client.get("https://api.ipify.org?format=json").send().await else {
+        return "unknown".into();
+    };
+    if !response.status().is_success() {
+        return "unknown".into();
+    }
+    let Ok(payload) = response.json::<ExitIpResponse>().await else {
+        return "unknown".into();
+    };
+    if payload.ip.parse::<IpAddr>().is_ok() {
+        payload.ip
+    } else {
+        "unknown".into()
+    }
 }
 
 #[cfg(test)]
@@ -957,7 +989,7 @@ mod tests {
         assert!(iran_networks < quic_reject && quic_reject < match_vpn);
         assert!(generated.yaml.contains("find-process-mode: always"));
         assert!(generated.yaml.contains("ipv6: true"));
-        assert!(!generated.yaml.contains("dns-query#VPN"));
+        assert!(generated.yaml.contains("dns-query#VPN"));
         assert!(generated.yaml.contains("path: private.txt"));
         assert!(generated.yaml.contains("path: iran-business-domains.txt"));
         assert!(generated
@@ -1095,6 +1127,32 @@ mod tests {
         assert!(
             constructor.contains(".no_proxy()"),
             "loopback controller requests must ignore HTTP_PROXY"
+        );
+    }
+
+    #[test]
+    fn hiddify_egress_probe_tries_socks_and_http_without_env_proxy() {
+        let source = include_str!("lib.rs");
+        let probe = source
+            .split("const EGRESS_PROBE_URLS")
+            .nth(1)
+            .and_then(|rest| rest.split("async fn optional_exit_ip").next())
+            .expect("probe_hiddify_egress");
+        assert!(
+            probe.contains("socks5h") && probe.contains("\"http\""),
+            "Hiddify mixed port may speak HTTP CONNECT instead of SOCKS"
+        );
+        assert!(
+            probe.contains(".no_proxy()"),
+            "egress probe must ignore HTTP_PROXY so it talks to Hiddify directly"
+        );
+        assert!(
+            probe.contains("cp.cloudflare.com") && probe.contains("gstatic.com"),
+            "one blocked generate_204 host must not fail Connect"
+        );
+        assert!(
+            source.contains("Hiddify egress probe failed"),
+            "probe failures must not reuse the Mihomo controller error"
         );
     }
 

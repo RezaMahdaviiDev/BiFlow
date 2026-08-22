@@ -181,7 +181,7 @@ const resources = {
         helperUnauthorized: "The current user is not authorized by the helper.",
         hiddifyNotFound: "Hiddify is not installed.",
         hiddifyEgressUnavailable:
-          "Hiddify is listening but has no usable egress.",
+          "Hiddify is open but not connected. Connect a node in Hiddify, then try again.",
         configInvalid: "The generated runtime configuration is invalid.",
         mihomoNotFound: "Mihomo is not installed.",
         mihomoStartFailed: "Mihomo could not start.",
@@ -374,7 +374,7 @@ const resources = {
         helperUnauthorized: "کاربر فعلی توسط سرویس کمکی مجاز نیست.",
         hiddifyNotFound: "هیدیفای نصب نشده است.",
         hiddifyEgressUnavailable:
-          "هیدیفای در حال گوش دادن است اما خروجی قابل استفاده ندارد.",
+          "هیدیفای باز است اما به سرور وصل نیست. در هیدیفای یک نود وصل کنید و دوباره اتصال را بزنید.",
         configInvalid: "پیکربندی زمان اجرا نامعتبر است.",
         mihomoNotFound: "میهومو نصب نشده است.",
         mihomoStartFailed: "میهومو نتوانست شروع شود.",
