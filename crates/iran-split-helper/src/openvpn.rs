@@ -560,6 +560,10 @@ async fn device_address(device: &str) -> Option<DeviceAddress> {
 }
 
 /// Reads `inet 10.8.0.6/24` out of one `ip -o -4 addr` line.
+///
+/// Production Windows uses the netsh parser instead; the tests still cover
+/// this parser on every OS so the Linux path cannot regress unnoticed.
+#[cfg(any(unix, test))]
 fn parse_ip_addr_output(output: &str) -> Option<DeviceAddress> {
     output
         .split_whitespace()
@@ -677,6 +681,7 @@ async fn install_policy_routing(
 }
 
 #[cfg(windows)]
+#[allow(clippy::unused_async)]
 async fn install_policy_routing(
     _device: &str,
     _mark: u32,
@@ -736,6 +741,7 @@ async fn revert_policy_routing(mark: u32, table: u32) {
 }
 
 #[cfg(windows)]
+#[allow(clippy::unused_async)]
 async fn revert_policy_routing(_mark: u32, _table: u32) {}
 
 #[cfg(unix)]
@@ -787,12 +793,14 @@ fn apply_openvpn_spawn(command: &mut Command) {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let system_root = std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".into());
     let system_drive = std::env::var("SYSTEMDRIVE").unwrap_or_else(|_| r"C:".into());
+    let path = format!(r"{system_root}\System32;{system_root}");
     command
         .env("SYSTEMROOT", &system_root)
         .env("SystemRoot", &system_root)
         .env("WINDIR", &system_root)
         .env("SYSTEMDRIVE", system_drive)
         .env("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+        .env("PATH", path)
         .creation_flags(CREATE_NO_WINDOW);
 }
 
@@ -1040,6 +1048,24 @@ mod tests {
             "Mon Aug 10 12:00:00 2026 Peer Connection Initiated with [AF_INET]203.0.113.9:1194";
         assert_eq!(peer_address(line).as_deref(), Some("203.0.113.9"));
         assert!(peer_address("nothing here").is_none());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn netsh_addresses_are_read_from_the_show_addresses_dump() {
+        let output = concat!(
+            "Configuration for interface \"biflow-ovpn\"\n",
+            "    DHCP enabled:                         Yes\n",
+            "    IP Address:                           10.8.0.6\n",
+            "    Subnet Prefix:                        10.8.0.0/24 (mask 255.255.255.0)\n",
+            "    Default Gateway:                      10.8.0.1\n",
+        );
+        let parsed = parse_netsh_addresses(output).expect("address");
+        assert_eq!(parsed.address.to_string(), "10.8.0.6");
+        assert_eq!(
+            parsed.trunc_network().map(|net| net.to_string()),
+            Some("10.8.0.0/24".to_owned())
+        );
     }
 
     #[test]
