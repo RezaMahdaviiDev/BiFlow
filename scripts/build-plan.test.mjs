@@ -595,6 +595,7 @@ describe("release artifact names", () => {
     assert.match(workflow, /\$env:Path = "\$nsis;\$env:Path"/);
     assert.match(workflow, /prefetch-appimage-tools\.sh/);
     assert.match(workflow, /createUpdaterArtifacts/);
+    assert.match(workflow, /stage-helper\.sh/);
     assert.doesNotMatch(workflow, /if:[^\n]*matrix\./);
     assert.doesNotMatch(workflow, /if: >-[\s\S]*?matrix\./);
     const autocrlf = workflow.indexOf(

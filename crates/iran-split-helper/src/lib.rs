@@ -601,8 +601,40 @@ pub(crate) fn copy_file_unless_same(
     if paths_refer_to_same_file(source, destination) {
         return Ok(());
     }
-    fs::copy(source, destination)?;
-    Ok(())
+    copy_file_replacing(source, destination)
+}
+
+#[cfg(windows)]
+const ERROR_SHARING_VIOLATION: i32 = 32;
+#[cfg(windows)]
+const COPY_RETRY_LIMIT: usize = 20;
+#[cfg(windows)]
+const COPY_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+fn copy_file_replacing(source: &Path, destination: &Path) -> Result<(), HelperServiceError> {
+    #[cfg(windows)]
+    {
+        // A still-mapped previous helper, Mihomo, or wintun.dll answers
+        // ERROR_SHARING_VIOLATION. The installer already asked the old task to
+        // exit; wait out the remaining lock rather than failing Connect.
+        let mut last = None;
+        for _ in 0..COPY_RETRY_LIMIT {
+            match fs::copy(source, destination) {
+                Ok(_) => return Ok(()),
+                Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
+                    last = Some(error);
+                    std::thread::sleep(COPY_RETRY_DELAY);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        return Err(last.expect("sharing-violation retry").into());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::copy(source, destination)?;
+        Ok(())
+    }
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
