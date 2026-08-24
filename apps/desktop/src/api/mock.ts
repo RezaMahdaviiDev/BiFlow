@@ -62,6 +62,7 @@ function initialSnapshot(): StackSnapshot {
           since: now(),
         },
     hiddify: component("stopped", "Hiddify proxy is not listening"),
+    openvpn: component("stopped", "OpenVPN side tunnel is off"),
     mihomo: component("stopped", "Mihomo controller is not listening"),
     tun: component("stopped", "TUN interface is absent"),
     dns: component("stopped", "DNS listener is inactive"),
@@ -101,6 +102,19 @@ function initialSettings(): AppConfig {
       connect_at_launch: false,
       close_to_tray: true,
     },
+    openvpn: {
+      enabled: false,
+      required: false,
+      pull_routes: true,
+      device: "biflow-ovpn",
+      start_timeout_seconds: 45,
+      routing_mark: 45552,
+      routing_table: 178,
+      profile: null,
+      auth_file: null,
+      executable: null,
+      tunnel_routes: [],
+    },
   };
 }
 
@@ -116,6 +130,7 @@ function initialDirectRules(): DirectRulesDocument {
       },
     ],
     vpn_rules: [],
+    openvpn_rules: [],
   };
 }
 
@@ -312,7 +327,7 @@ function ruleMatchesHost(item: DirectRule, host: string): boolean {
 
 function route(
   target: string,
-  outbound: "direct" | "vpn",
+  outbound: "direct" | "vpn" | "openvpn",
   reason: string,
   matched: string,
 ): RouteTestResult {
@@ -489,6 +504,7 @@ function operation(): OperationAccepted {
 async function runStart(accepted: OperationAccepted) {
   const phases: Array<[StackPhase, OperationStage]> = [
     ["starting_hiddify", "starting_hiddify"],
+    ["starting_openvpn", "starting_openvpn"],
     ["preparing_runtime", "preparing_runtime"],
     ["validating_config", "validating_config"],
     ["starting_core", "starting_core"],
@@ -496,7 +512,9 @@ async function runStart(accepted: OperationAccepted) {
   ];
   for (const [phase, stage] of phases) {
     emit(phase, accepted.operation_id, lifecycleBusy, stage);
-    await new Promise((resolve) => setTimeout(resolve, 180));
+    // Six stages at 140ms keep the mock connect under a second, which is what
+    // the demo UI and its tests are pacing against.
+    await new Promise((resolve) => setTimeout(resolve, 140));
   }
   snapshot = {
     ...snapshot,
@@ -726,7 +744,7 @@ export const mockApi = {
   },
   async pinRoute(
     input: string,
-    outbound: "direct" | "vpn",
+    outbound: "direct" | "vpn" | "openvpn",
     expectedRevision: number,
   ) {
     if (expectedRevision !== directRules.revision)
@@ -745,14 +763,21 @@ export const mockApi = {
     };
     const sameTarget = (item: DirectRule) =>
       item.target.kind === parsed.kind && item.target.value === parsed.value;
+    // A host lives on exactly one route, so it is dropped from all three
+    // lists before it is added back to the chosen one.
     const rules = directRules.rules.filter((item) => !sameTarget(item));
     const vpnRules = directRules.vpn_rules.filter((item) => !sameTarget(item));
+    const sideRules = directRules.openvpn_rules.filter(
+      (item) => !sameTarget(item),
+    );
     if (outbound === "direct") rules.push(rule);
+    else if (outbound === "openvpn") sideRules.push(rule);
     else vpnRules.push(rule);
     directRules = {
       revision: directRules.revision + 1,
       rules,
       vpn_rules: vpnRules,
+      openvpn_rules: sideRules,
     };
     return structuredClone(directRules);
   },
@@ -765,6 +790,9 @@ export const mockApi = {
       vpn_rules: directRules.vpn_rules.filter(
         (item) => item.target.value !== input,
       ),
+      openvpn_rules: directRules.openvpn_rules.filter(
+        (item) => item.target.value !== input,
+      ),
     };
     return structuredClone(directRules);
   },
@@ -774,6 +802,7 @@ export const mockApi = {
       revision: directRules.revision + 1,
       rules: directRules.rules.map(touch),
       vpn_rules: directRules.vpn_rules.map(touch),
+      openvpn_rules: directRules.openvpn_rules.map(touch),
     };
     return structuredClone(directRules);
   },

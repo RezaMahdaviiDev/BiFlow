@@ -101,7 +101,7 @@ export const desktop = {
   },
   pinRoute(
     input: string,
-    outbound: "direct" | "vpn",
+    outbound: "direct" | "vpn" | "openvpn",
     expectedRevision: number,
   ): Promise<DirectRulesDocument> {
     return native

@@ -143,6 +143,7 @@ describe("mock transport", () => {
     unsubscribe();
     expect(stages).toContain("preparing");
     expect(stages).toContain("starting_hiddify");
+    expect(stages).toContain("starting_openvpn");
     expect(stages).toContain("starting_core");
     expect(stages).toContain("checking_readiness");
   });

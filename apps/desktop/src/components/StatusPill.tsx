@@ -7,6 +7,7 @@ const colors: Record<ComponentPhase | StackPhase, string> = {
   stopped: "bg-slate-400/15 text-slate-500",
   starting: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   starting_hiddify: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
+  starting_openvpn: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   preparing_runtime: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   validating_config: "bg-amber-400/15 text-amber-600 dark:text-amber-300",
   starting_core: "bg-amber-400/15 text-amber-600 dark:text-amber-300",

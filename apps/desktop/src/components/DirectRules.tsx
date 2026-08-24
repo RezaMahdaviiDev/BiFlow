@@ -1,5 +1,4 @@
 import {
-  ArrowLeftRight,
   CloudDownload,
   LoaderCircle,
   Minus,
@@ -22,7 +21,8 @@ import { sortRows, toggleSort } from "../lib/tableSort";
 import { useAppStore } from "../store/app";
 import { SortHeader } from "./SortHeader";
 
-type PinnedRow = { rule: DirectRule; outbound: "direct" | "vpn" };
+type PinnedOutbound = "direct" | "vpn" | "openvpn";
+type PinnedRow = { rule: DirectRule; outbound: PinnedOutbound };
 type PinnedSortKey = "target" | "kind" | "outbound";
 
 const PINNED_SORT_ACCESSORS: Record<
@@ -58,9 +58,13 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
     const rows: PinnedRow[] = [
       ...rules.rules.map((rule) => ({ rule, outbound: "direct" as const })),
       ...rules.vpn_rules.map((rule) => ({ rule, outbound: "vpn" as const })),
+      ...rules.openvpn_rules.map((rule) => ({
+        rule,
+        outbound: "openvpn" as const,
+      })),
     ].filter(({ rule }) => rule.target.value.includes(needle));
     return sortRows(rows, sort, PINNED_SORT_ACCESSORS);
-  }, [rules.rules, rules.vpn_rules, search, sort]);
+  }, [rules.rules, rules.vpn_rules, rules.openvpn_rules, search, sort]);
   const synced = cloudRules?.last_synced_at
     ? new Date(cloudRules.last_synced_at).toLocaleString()
     : t("neverSynced");
@@ -225,13 +229,9 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
                     </td>
                     <td className="px-3 py-2">
                       <span
-                        className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
-                          outbound === "vpn"
-                            ? "bg-brand/10 text-brand"
-                            : "bg-success/10 text-success"
-                        }`}
+                        className={`rounded-md px-2 py-0.5 text-xs font-semibold ${routeTone(outbound)}`}
                       >
-                        {outbound === "vpn" ? t("vpn") : t("direct")}
+                        {t(outbound)}
                       </span>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-muted break-all">
@@ -239,25 +239,28 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex gap-1.5">
-                        <button
-                          type="button"
+                        {/* Three routes no longer fit a two-way toggle, so
+                            the row carries a compact selector instead. Its
+                            aria-label is the only accessible name; a visible
+                            one would widen the narrowest layout. */}
+                        <select
                           disabled={actionPending}
-                          onClick={() =>
+                          value={outbound}
+                          aria-label={t("moveRoute", {
+                            target: rule.target.value,
+                          })}
+                          onChange={(event) =>
                             void pinRoute(
                               rule.target.value,
-                              outbound === "vpn" ? "direct" : "vpn",
+                              event.target.value as PinnedOutbound,
                             ).catch(() => undefined)
                           }
-                          className="inline-flex items-center gap-1 rounded-lg border border-ink/15 px-2 py-1 text-xs font-semibold text-muted hover:text-brand disabled:opacity-50"
-                          title={
-                            outbound === "vpn"
-                              ? t("moveToDirect", { target: rule.target.value })
-                              : t("moveToVpn", { target: rule.target.value })
-                          }
+                          className="rounded-lg border border-ink/15 bg-canvas py-1 ps-2 pe-6 text-xs font-semibold text-muted disabled:opacity-50"
                         >
-                          <ArrowLeftRight size={14} aria-hidden />
-                          {outbound === "vpn" ? t("direct") : t("vpn")}
-                        </button>
+                          <option value="direct">{t("direct")}</option>
+                          <option value="vpn">{t("vpn")}</option>
+                          <option value="openvpn">{t("openvpn")}</option>
+                        </select>
                         <button
                           type="button"
                           disabled={testing}
@@ -293,6 +296,18 @@ export function DirectRules({ rules }: { rules: DirectRulesDocument }) {
   );
 }
 
+/** Badge colour per route, so the three are distinguishable at a glance. */
+function routeTone(outbound: PinnedOutbound): string {
+  switch (outbound) {
+    case "vpn":
+      return "bg-brand/10 text-brand";
+    case "openvpn":
+      return "bg-amber-400/15 text-amber-600 dark:text-amber-300";
+    default:
+      return "bg-success/10 text-success";
+  }
+}
+
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-canvas p-4">
@@ -315,7 +330,10 @@ export function FlowResult({
   moving?: boolean;
 }) {
   const { t } = useTranslation();
-  const vpn = route.outbound === "vpn";
+  const vpn = route.outbound !== "direct";
+  // From DIRECT the useful move is onto the tunnel; from either tunnel the
+  // useful move is back to DIRECT. Pinning to the side tunnel specifically is
+  // done from the rules table, where all three routes are listed.
   const destination = vpn ? "direct" : "vpn";
   // Both directions are real pins now, so the only host that cannot move is a
   // loopback/LAN/CGNAT address: forcing those through the tunnel would cut the

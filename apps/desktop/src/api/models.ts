@@ -9,6 +9,7 @@ export type LifecycleBusy =
 export type OperationStage =
   | "preparing"
   | "starting_hiddify"
+  | "starting_openvpn"
   | "preparing_runtime"
   | "validating_config"
   | "starting_core"
@@ -22,6 +23,7 @@ export type StackPhase =
   | "uninitialized"
   | "stopped"
   | "starting_hiddify"
+  | "starting_openvpn"
   | "preparing_runtime"
   | "validating_config"
   | "starting_core"
@@ -80,6 +82,8 @@ export interface StackSnapshot {
   operation_id: string | null;
   helper: ComponentStatus;
   hiddify: ComponentStatus;
+  /** The optional OpenVPN side tunnel. Absent on snapshots from older builds. */
+  openvpn: ComponentStatus;
   mihomo: ComponentStatus;
   tun: ComponentStatus;
   dns: ComponentStatus;
@@ -135,6 +139,31 @@ export interface AppConfig {
     connect_at_launch: boolean;
     close_to_tray: boolean;
   };
+  openvpn: OpenVpnConfig;
+}
+
+/**
+ * The OpenVPN side tunnel that starts after Hiddify.
+ *
+ * It never owns the default route: only the tunnel's own network and the
+ * CIDRs in `tunnel_routes` reach it, so a tunnel that drops cannot take the
+ * machine's internet with it.
+ */
+export interface OpenVpnConfig {
+  enabled: boolean;
+  /** Fail Connect when the tunnel will not start. Off by default. */
+  required: boolean;
+  /** Keep the server's scoped routes. A default route is filtered regardless. */
+  pull_routes: boolean;
+  device: string;
+  start_timeout_seconds: number;
+  routing_mark: number;
+  routing_table: number;
+  profile?: string | null;
+  auth_file?: string | null;
+  executable?: string | null;
+  /** Extra CIDRs that reach the tunnel. Never a default route. */
+  tunnel_routes: string[];
 }
 
 export interface ValidationIssue {
@@ -160,11 +189,13 @@ export interface DirectRulesDocument {
   rules: DirectRule[];
   /** Hosts forced onto the VPN ahead of the bundled Iran list. */
   vpn_rules: DirectRule[];
+  /** Hosts routed through the OpenVPN side tunnel. */
+  openvpn_rules: DirectRule[];
 }
 
 export interface RouteTestResult {
   target: string;
-  outbound: "direct" | "vpn";
+  outbound: "direct" | "vpn" | "openvpn";
   reason: string;
   matched_rule: string | null;
   reachable: boolean | null;
@@ -228,7 +259,7 @@ export interface TrafficTotals {
 export interface ActiveConnection {
   host: string;
   destination_ip: string;
-  outbound: "direct" | "vpn";
+  outbound: "direct" | "vpn" | "openvpn";
   rule: string;
 }
 

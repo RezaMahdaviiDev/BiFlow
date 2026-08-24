@@ -10,16 +10,17 @@
 use async_trait::async_trait;
 use iran_split_config::{AppConfig, ExecutableSetting};
 use iran_split_core::{
-    CleanupReport, ComponentPhase, ComponentStatus, CoreError, HelperStatus, PlatformBackend,
-    ProcessStatus, ProviderSummary, ReadinessReport, RuntimeGeneration, RuntimeHealth, TunStatus,
+    CleanupReport, ComponentPhase, ComponentStatus, CoreError, HelperStatus, OpenVpnState,
+    PlatformBackend, ProcessStatus, ProviderSummary, ReadinessReport, RuntimeGeneration,
+    RuntimeHealth, TunStatus,
 };
 use iran_split_ipc::{
     read_frame, validate_envelope, write_frame, Envelope, HelperCommand, HelperReply,
-    PROTOCOL_VERSION,
+    OpenVpnRequest, OpenVpnStatus, PROTOCOL_VERSION,
 };
 use iran_split_mihomo::{
     generate_config, probe_hiddify_egress, validate_with_binary, ControllerClient, MihomoError,
-    Platform, RuntimePaths,
+    OpenVpnOutbound, Platform, RuntimePaths,
 };
 use iran_split_rules::{DirectRulesDocument, DirectTarget};
 use std::{
@@ -256,6 +257,10 @@ pub struct WindowsBackend {
     prepared: Mutex<Option<PreparedGeneration>>,
     launched_hiddify: Mutex<Option<Child>>,
     hiddify_exit_ip: Mutex<Option<String>>,
+    /// Last status the helper reported for the `OpenVPN` side tunnel. Read by
+    /// `prepare_runtime` so the generated Mihomo configuration can bind the
+    /// tunnel's device and keep its server address DIRECT.
+    openvpn: Mutex<Option<OpenVpnStatus>>,
 }
 
 impl WindowsBackend {
@@ -268,6 +273,7 @@ impl WindowsBackend {
             prepared: Mutex::new(None),
             launched_hiddify: Mutex::new(None),
             hiddify_exit_ip: Mutex::new(None),
+            openvpn: Mutex::new(None),
         }
     }
 
@@ -302,6 +308,58 @@ impl WindowsBackend {
             .request(command)
             .await
             .map_err(|error| CoreError::Platform(error.to_string()))
+    }
+
+    /// Sends an `OpenVPN` command, surfacing helper refusals as an `OpenVPN`
+    /// failure rather than a generic platform error.
+    async fn openvpn_request(&self, command: HelperCommand) -> Result<OpenVpnStatus, CoreError> {
+        match self
+            .helper
+            .request(command)
+            .await
+            .map_err(|error| CoreError::OpenVpnFailed(error.to_string()))?
+        {
+            HelperReply::OpenVpnStatus(status) => Ok(status),
+            _ => Err(CoreError::OpenVpnFailed(
+                "helper returned an unexpected reply".into(),
+            )),
+        }
+    }
+
+    fn openvpn_component(status: Option<&OpenVpnStatus>) -> ComponentStatus {
+        match status {
+            Some(status) if status.running => ComponentStatus::new(
+                ComponentPhase::Running,
+                status
+                    .device
+                    .clone()
+                    .map(|device| format!("{device} · {} routes", status.routes.len())),
+            ),
+            Some(status) => ComponentStatus::new(
+                ComponentPhase::Degraded,
+                status.last_error.clone().or_else(|| Some("stopped".into())),
+            ),
+            None => ComponentStatus::new(ComponentPhase::Stopped, None),
+        }
+    }
+
+    /// Describes the running side tunnel to Mihomo, or `None` when there is
+    /// nothing to describe.
+    ///
+    /// Windows has no firewall marks, so the device binding in the outbound is
+    /// the whole mechanism; the mark travels anyway and is simply ignored.
+    async fn openvpn_outbound(&self, config: &AppConfig) -> Option<OpenVpnOutbound> {
+        let status = self.openvpn.lock().await.clone()?;
+        if !status.running {
+            return None;
+        }
+        Some(OpenVpnOutbound {
+            device: status
+                .device
+                .unwrap_or_else(|| config.openvpn.device.clone()),
+            routing_mark: config.openvpn.routing_mark,
+            server_endpoints: status.server_endpoint.into_iter().collect(),
+        })
     }
 
     async fn hiddify_listening(config: &AppConfig) -> bool {
@@ -644,6 +702,7 @@ impl PlatformBackend for WindowsBackend {
         RuntimeHealth {
             helper,
             hiddify,
+            openvpn: Self::openvpn_component(self.openvpn.lock().await.as_ref()),
             mihomo,
             tun,
             dns,
@@ -698,6 +757,59 @@ impl PlatformBackend for WindowsBackend {
         self.probe_hiddify_until_ready(&config, cancel).await
     }
 
+    async fn ensure_openvpn(
+        &self,
+        cancel: CancellationToken,
+    ) -> Result<Option<OpenVpnState>, CoreError> {
+        let config = self.config.read().await.clone();
+        let Some(profile) = config
+            .openvpn
+            .active()
+            .then(|| config.openvpn.profile.clone())
+            .flatten()
+        else {
+            // Not enabled is not a failure: most users never run a side tunnel.
+            self.openvpn.lock().await.take();
+            return Ok(None);
+        };
+        if cancel.is_cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let status = self
+            .openvpn_request(HelperCommand::StartOpenVpn(OpenVpnRequest {
+                profile,
+                auth_file: config.openvpn.auth_file.clone(),
+                executable: config.openvpn.executable.clone(),
+                device: config.openvpn.device.clone(),
+                pull_routes: config.openvpn.pull_routes,
+                tunnel_routes: config.openvpn.tunnel_routes.clone(),
+                routing_mark: config.openvpn.routing_mark,
+                routing_table: config.openvpn.routing_table,
+                start_timeout_seconds: config.openvpn.start_timeout_seconds,
+            }))
+            .await?;
+        let state = OpenVpnState {
+            device: status
+                .device
+                .clone()
+                .unwrap_or_else(|| config.openvpn.device.clone()),
+            local_address: status.local_address.clone(),
+            routes: status.routes.clone(),
+        };
+        *self.openvpn.lock().await = Some(status);
+        Ok(Some(state))
+    }
+
+    async fn openvpn_required(&self) -> bool {
+        self.config.read().await.openvpn.required
+    }
+
+    async fn stop_openvpn(&self) -> Result<(), CoreError> {
+        self.openvpn.lock().await.take();
+        self.openvpn_request(HelperCommand::StopOpenVpn).await?;
+        Ok(())
+    }
+
     async fn prepare_runtime(&self) -> Result<RuntimeGeneration, CoreError> {
         let config = self.config.read().await.clone();
         let generation_id = Uuid::new_v4();
@@ -715,6 +827,8 @@ impl PlatformBackend for WindowsBackend {
             custom_direct_ips: PathBuf::from("custom-direct-ips.txt"),
             custom_vpn_domains: PathBuf::from("custom-vpn-domains.txt"),
             custom_vpn_ips: PathBuf::from("custom-vpn-ips.txt"),
+            custom_openvpn_domains: PathBuf::from("custom-openvpn-domains.txt"),
+            custom_openvpn_ips: PathBuf::from("custom-openvpn-ips.txt"),
         };
         let rules_path = self.paths.user_data_dir.join("direct-rules.json");
         let custom: DirectRulesDocument = if rules_path.exists() {
@@ -723,8 +837,15 @@ impl PlatformBackend for WindowsBackend {
         } else {
             DirectRulesDocument::default()
         };
-        let generated = generate_config(&config, Platform::Windows, &runtime_paths, &custom)
-            .map_err(|error| CoreError::ConfigInvalid(error.to_string()))?;
+        let outbound = self.openvpn_outbound(&config).await;
+        let generated = generate_config(
+            &config,
+            Platform::Windows,
+            &runtime_paths,
+            &custom,
+            outbound.as_ref(),
+        )
+        .map_err(|error| CoreError::ConfigInvalid(error.to_string()))?;
         for name in [
             "private.txt",
             "iran-domains.txt",
@@ -983,13 +1104,20 @@ impl PlatformBackend for WindowsBackend {
             .helper_request(HelperCommand::CleanupOwnedNetworkState)
             .await?
         {
-            HelperReply::CleanupReport(report) => Ok(CleanupReport {
-                process_stopped: report.process_stopped,
-                tun_removed: report.tun_removed,
-                dns_restored: report.dns_restored,
-                routes_removed: report.routes_removed,
-                warnings: report.warnings,
-            }),
+            HelperReply::CleanupReport(report) => {
+                // The helper tore the side tunnel down as part of cleanup, so
+                // the cached status would otherwise describe a tunnel that no
+                // longer exists.
+                self.openvpn.lock().await.take();
+                Ok(CleanupReport {
+                    process_stopped: report.process_stopped,
+                    tun_removed: report.tun_removed,
+                    dns_restored: report.dns_restored,
+                    openvpn_stopped: report.openvpn_stopped,
+                    routes_removed: report.routes_removed,
+                    warnings: report.warnings,
+                })
+            }
             _ => Err(CoreError::Platform("unexpected cleanup reply".into())),
         }
     }
@@ -1071,6 +1199,9 @@ fn write_custom_provider_files(
     let (vpn_domains, vpn_ips) = split_targets(&document.vpn_rules);
     write_lines(&staging.join("custom-vpn-domains.txt"), &vpn_domains)?;
     write_lines(&staging.join("custom-vpn-ips.txt"), &vpn_ips)?;
+    let (side_domains, side_ips) = split_targets(&document.openvpn_rules);
+    write_lines(&staging.join("custom-openvpn-domains.txt"), &side_domains)?;
+    write_lines(&staging.join("custom-openvpn-ips.txt"), &side_ips)?;
     Ok(())
 }
 
@@ -1245,10 +1376,15 @@ mod tests {
             .map(|entry| entry.expect("entry").file_name())
             .collect::<std::collections::HashSet<_>>();
 
-        // config.yaml, four bundled providers, two custom-direct, two custom-vpn.
-        assert_eq!(names.len(), 9);
+        // config.yaml, four bundled providers, two custom-direct, two
+        // custom-vpn, two custom-openvpn.
+        assert_eq!(names.len(), 11);
         assert!(names.contains(std::ffi::OsStr::new("custom-vpn-domains.txt")));
         assert!(names.contains(std::ffi::OsStr::new("custom-vpn-ips.txt")));
+        // Mihomo refuses to load a rule-set whose file is missing, so the
+        // side-tunnel providers ship even when no tunnel is configured.
+        assert!(names.contains(std::ffi::OsStr::new("custom-openvpn-domains.txt")));
+        assert!(names.contains(std::ffi::OsStr::new("custom-openvpn-ips.txt")));
         assert!(names.contains(std::ffi::OsStr::new("config.yaml")));
         let config = fs::read_to_string(root.join("config.yaml")).expect("config");
         assert!(config.contains("path: private.txt"));

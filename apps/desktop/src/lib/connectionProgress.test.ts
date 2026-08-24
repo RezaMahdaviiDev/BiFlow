@@ -15,6 +15,7 @@ const base = (overrides: Partial<StackSnapshot> = {}): StackSnapshot => ({
   operation_id: null,
   helper: { phase: "running", message: null, since: now },
   hiddify: { phase: "stopped", message: null, since: now },
+  openvpn: { phase: "stopped", message: null, since: now },
   mihomo: { phase: "stopped", message: null, since: now },
   tun: { phase: "stopped", message: null, since: now },
   dns: { phase: "stopped", message: null, since: now },
@@ -82,6 +83,7 @@ describe("connectionButtonProgress", () => {
       busy: "disconnecting",
       operation_stage: "stopping_proxy",
       hiddify: { phase: "running", message: null, since: now },
+      openvpn: { phase: "stopped", message: null, since: now },
     });
     expect(connectionButtonProgress(disconnecting, "disconnect")).toEqual({
       labelKey: "stages.stopHiddify",

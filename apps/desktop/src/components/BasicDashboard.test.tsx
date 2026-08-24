@@ -12,6 +12,7 @@ const stopped: StackSnapshot = {
   operation_id: null,
   helper: { phase: "running", message: null, since: now },
   hiddify: { phase: "stopped", message: null, since: now },
+  openvpn: { phase: "stopped", message: null, since: now },
   mihomo: { phase: "stopped", message: null, since: now },
   tun: { phase: "stopped", message: null, since: now },
   dns: { phase: "stopped", message: null, since: now },

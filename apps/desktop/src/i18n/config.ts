@@ -10,6 +10,25 @@ const resources = {
       rules: "Direct rules",
       diagnostics: "Diagnostics",
       settings: "Settings",
+      settingsOpenVpn: {
+        legend: "OpenVPN side tunnel",
+        intro:
+          "Starts after Hiddify and carries only its own network plus the routes you list. It never becomes the system gateway, so a tunnel that drops cannot take your internet with it.",
+        enabled: "Start OpenVPN with Connect",
+        required: "Fail Connect when the tunnel will not start",
+        profile: ".ovpn profile",
+        profileHelp:
+          "Full path to the profile. Profiles that run scripts (up, down, plugin) are refused because the tunnel starts with root privileges.",
+        authFile: "Credentials file",
+        authFileHelp:
+          "Optional. A file whose first two lines are the user name and password.",
+        device: "Tunnel device",
+        timeout: "Start timeout (seconds)",
+        tunnelRoutes: "Extra networks through the tunnel",
+        tunnelRoutesHelp:
+          "Comma-separated CIDRs, such as 10.8.0.0/24. A default route is rejected.",
+        pullRoutes: "Accept the server's own scoped routes",
+      },
       settingsDns: {
         label: "DIRECT DNS",
         help: "Default is Mihomo fake-ip. Pick an Iranian DNS only if a DIRECT site fails to open. Pause then Connect to apply.",
@@ -31,6 +50,7 @@ const resources = {
       stages: {
         preparing: "Preparing",
         startHiddify: "Start Hiddify",
+        startOpenVpn: "Start OpenVPN",
         prepareRuntime: "Prepare runtime",
         validateConfig: "Validate config",
         startMihomo: "Start Mihomo",
@@ -45,6 +65,7 @@ const resources = {
       },
       direct: "DIRECT",
       vpn: "VPN",
+      openvpn: "OpenVPN",
       status: "Status",
       activeTitle: "Protected split routing is active",
       pausedTitle: "Split routing is paused",
@@ -162,6 +183,7 @@ const resources = {
       rulesLoaded: "Rules loaded",
       moveToDirect: "Add {{target}} to direct",
       moveToVpn: "Add {{target}} to VPN",
+      moveRoute: "Route for {{target}}",
       moveLocalUnavailable:
         "Loopback, LAN, and carrier-grade NAT addresses always stay direct. Sending them through the tunnel would cut this machine off from its own network.",
       pinnedDirect: "Pinned direct",
@@ -221,6 +243,8 @@ const resources = {
         hiddifyNotFound: "Hiddify is not installed.",
         hiddifyEgressUnavailable:
           "Hiddify is open but not connected. Connect a node in Hiddify, then try again.",
+        openVpnFailed:
+          "The OpenVPN side tunnel could not start. Your other traffic is unaffected; check the profile in Settings.",
         configInvalid: "The generated runtime configuration is invalid.",
         mihomoNotFound: "Mihomo is not installed.",
         mihomoStartFailed: "Mihomo could not start.",
@@ -243,6 +267,25 @@ const resources = {
       rules: "قوانین مستقیم",
       diagnostics: "عیب‌یابی",
       settings: "تنظیمات",
+      settingsOpenVpn: {
+        legend: "تونل جانبی OpenVPN",
+        intro:
+          "بعد از هیدیفای بالا می‌آید و فقط شبکهٔ خودش به‌همراه مسیرهایی که وارد می‌کنید را عبور می‌دهد. هیچ‌وقت مسیر پیش‌فرض سیستم نمی‌شود، پس قطع شدن این تونل اینترنت شما را قطع نمی‌کند.",
+        enabled: "اجرای OpenVPN همراه با اتصال",
+        required: "اگر تونل بالا نیامد، اتصال ناموفق شود",
+        profile: "فایل پروفایل ovpn.",
+        profileHelp:
+          "مسیر کامل فایل. پروفایل‌هایی که اسکریپت اجرا می‌کنند (up، down، plugin) رد می‌شوند، چون تونل با دسترسی روت اجرا می‌شود.",
+        authFile: "فایل نام کاربری و رمز",
+        authFileHelp:
+          "اختیاری. فایلی که خط اول آن نام کاربری و خط دوم رمز عبور است.",
+        device: "نام دستگاه تونل",
+        timeout: "مهلت راه‌اندازی (ثانیه)",
+        tunnelRoutes: "شبکه‌های اضافی از مسیر تونل",
+        tunnelRoutesHelp:
+          "CIDRها با کاما جدا شوند، مثل 10.8.0.0/24. مسیر پیش‌فرض پذیرفته نمی‌شود.",
+        pullRoutes: "پذیرش مسیرهای محدود خود سرور",
+      },
       settingsDns: {
         label: "DNS مستقیم",
         help: "پیش‌فرض فیک‌آی‌پی میهومو است. فقط اگر سایت مستقیم باز نشد DNS ایرانی انتخاب کنید. برای اعمال، توقف موقت سپس اتصال.",
@@ -264,6 +307,7 @@ const resources = {
       stages: {
         preparing: "آماده‌سازی",
         startHiddify: "شروع هیدیفای",
+        startOpenVpn: "شروع OpenVPN",
         prepareRuntime: "آماده‌سازی اجرا",
         validateConfig: "اعتبارسنجی",
         startMihomo: "شروع میهومو",
@@ -278,6 +322,7 @@ const resources = {
       },
       direct: "مستقیم",
       vpn: "وی‌پی‌ان",
+      openvpn: "OpenVPN",
       status: "وضعیت",
       activeTitle: "مسیریابی دوگانه محافظت‌شده فعال است",
       pausedTitle: "مسیریابی دوگانه متوقف شده است",
@@ -395,6 +440,7 @@ const resources = {
       rulesLoaded: "قوانین بارگذاری‌شده",
       moveToDirect: "افزودن {{target}} به مستقیم",
       moveToVpn: "افزودن {{target}} به وی‌پی‌ان",
+      moveRoute: "مسیر {{target}}",
       moveLocalUnavailable:
         "نشانی‌های لوپ‌بک، شبکهٔ محلی و NAT اپراتور همیشه مستقیم می‌مانند. عبور دادن آن‌ها از تونل، این دستگاه را از شبکهٔ خودش جدا می‌کند.",
       pinnedDirect: "سنجاق‌شده به مستقیم",
@@ -452,6 +498,8 @@ const resources = {
         hiddifyNotFound: "هیدیفای نصب نشده است.",
         hiddifyEgressUnavailable:
           "هیدیفای باز است اما به سرور وصل نیست. در هیدیفای یک نود وصل کنید و دوباره اتصال را بزنید.",
+        openVpnFailed:
+          "تونل جانبی OpenVPN بالا نیامد. بقیهٔ ترافیک شما دست‌نخورده است؛ پروفایل را در تنظیمات بررسی کنید.",
         configInvalid: "پیکربندی زمان اجرا نامعتبر است.",
         mihomoNotFound: "میهومو نصب نشده است.",
         mihomoStartFailed: "میهومو نتوانست شروع شود.",

@@ -100,6 +100,15 @@ async fn execute(supervisor: &Supervisor, command: HelperCommand) -> HelperReply
             HelperCommand::GetMihomoProcessStatus => {
                 HelperReply::ProcessStatus(supervisor.status().await?)
             }
+            HelperCommand::StartOpenVpn(request) => {
+                HelperReply::OpenVpnStatus(supervisor.start_openvpn(&request).await?)
+            }
+            HelperCommand::StopOpenVpn => {
+                HelperReply::OpenVpnStatus(supervisor.stop_openvpn().await?)
+            }
+            HelperCommand::GetOpenVpnStatus => {
+                HelperReply::OpenVpnStatus(supervisor.openvpn_status().await)
+            }
             HelperCommand::CleanupOwnedNetworkState => {
                 HelperReply::CleanupReport(supervisor.cleanup().await?)
             }
@@ -135,6 +144,7 @@ fn helper_error_code(error: &HelperServiceError) -> &'static str {
         HelperServiceError::InvalidGeneration(_) => "INVALID_GENERATION",
         HelperServiceError::BinaryIntegrity => "BINARY_INTEGRITY_FAILED",
         HelperServiceError::Process(_) => "PROCESS_FAILED",
+        HelperServiceError::OpenVpn(_) => "OPENVPN_FAILED",
         HelperServiceError::Install(_) => "INSTALL_FAILED",
         HelperServiceError::UnsafeConfig(_) | HelperServiceError::Toml(_) => {
             "HELPER_CONFIG_INVALID"

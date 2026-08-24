@@ -577,7 +577,13 @@ fn windows_mihomo_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBu
 
 #[must_use]
 pub(crate) fn first_existing_file(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates.iter().find(|path| path.is_file()).cloned()
+    // Tauri `build.rs` writes empty helper placeholders so the bundle graph
+    // can resolve; a 0-byte file is not a packaged helper.
+    candidates.iter().find(|path| is_nonempty_file(path)).cloned()
+}
+
+fn is_nonempty_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
 #[cfg(target_os = "linux")]
@@ -868,6 +874,19 @@ mod tests {
         fs::write(&present, b"ok").expect("write");
         assert_eq!(
             first_existing_file(&[missing, present.clone()]),
+            Some(present)
+        );
+    }
+
+    #[test]
+    fn first_existing_file_skips_empty_placeholders() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let empty = directory.path().join("empty");
+        let present = directory.path().join("present");
+        fs::write(&empty, b"").expect("write empty");
+        fs::write(&present, b"ok").expect("write");
+        assert_eq!(
+            first_existing_file(&[empty, present.clone()]),
             Some(present)
         );
     }

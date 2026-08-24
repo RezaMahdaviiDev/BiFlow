@@ -56,6 +56,22 @@ pub struct RuntimePaths {
     pub custom_direct_ips: PathBuf,
     pub custom_vpn_domains: PathBuf,
     pub custom_vpn_ips: PathBuf,
+    pub custom_openvpn_domains: PathBuf,
+    pub custom_openvpn_ips: PathBuf,
+}
+
+/// The `OpenVPN` side tunnel, as Mihomo needs to see it.
+///
+/// Mihomo does not speak `OpenVPN`. It reaches the tunnel by sending selected
+/// traffic out of the device the helper owns — marked on Linux so the helper's
+/// policy table picks it up, bound by interface name on Windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenVpnOutbound {
+    pub device: String,
+    pub routing_mark: u32,
+    /// The `OpenVPN` servers themselves. These must stay DIRECT: the tunnel's
+    /// own packets would otherwise re-enter the split TUN and loop.
+    pub server_endpoints: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,9 +160,19 @@ struct ProxyConfig {
     name: String,
     #[serde(rename = "type")]
     kind: String,
-    server: String,
-    port: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
     udp: bool,
+    /// Egress interface for a `direct` outbound. Used by the `OpenVPN` side
+    /// tunnel so its traffic leaves through the helper-owned device.
+    #[serde(rename = "interface-name", skip_serializing_if = "Option::is_none")]
+    interface_name: Option<String>,
+    /// Linux firewall mark that steers this outbound into the helper's policy
+    /// table. Absent on Windows, which has no equivalent.
+    #[serde(rename = "routing-mark", skip_serializing_if = "Option::is_none")]
+    routing_mark: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,6 +207,7 @@ pub fn generate_config(
     platform: Platform,
     _paths: &RuntimePaths,
     custom_rules: &DirectRulesDocument,
+    openvpn: Option<&OpenVpnOutbound>,
 ) -> Result<GeneratedConfig, MihomoError> {
     let issues = app.validate();
     if !issues.is_empty() {
@@ -199,10 +226,38 @@ pub fn generate_config(
     }
 
     let mut rules = process_bypass_rules(platform);
+    // The OpenVPN transport has to leave the machine on the ordinary route.
+    // If the split TUN captured it, the tunnel's own packets would be handed
+    // back to the tunnel and the side connection would never establish. This
+    // sits above every other rule for that reason.
+    if let Some(tunnel) = openvpn {
+        for endpoint in &tunnel.server_endpoints {
+            let suffix = if endpoint.contains(':') {
+                "/128"
+            } else {
+                "/32"
+            };
+            let family = if endpoint.contains(':') {
+                "IP-CIDR6"
+            } else {
+                "IP-CIDR"
+            };
+            rules.push(format!("{family},{endpoint}{suffix},DIRECT,no-resolve"));
+        }
+    }
     rules.extend([
         "DOMAIN-SUFFIX,localhost,DIRECT".into(),
         "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve".into(),
         "IP-CIDR6,::1/128,DIRECT,no-resolve".into(),
+        // OpenVPN pins sit above `private-networks` on purpose. The usual
+        // reason to run a side tunnel is to reach an RFC1918 range that lives
+        // behind it, and a pin below this line would be answered by the local
+        // LAN instead. Loopback stays above so the machine can always reach
+        // itself. Both lines resolve to DIRECT when no side tunnel is
+        // running, so a stale pin degrades to the local internet rather than
+        // a black hole.
+        "RULE-SET,custom-openvpn-domains,OPENVPN".into(),
+        "RULE-SET,custom-openvpn-ips,OPENVPN,no-resolve".into(),
         "RULE-SET,private-networks,DIRECT,no-resolve".into(),
         // User VPN pins sit above every DIRECT source except loopback and LAN,
         // so an exact host can be forced through the tunnel even when the
@@ -236,6 +291,10 @@ pub fn generate_config(
         "+.local".into(),
         "localhost.ptlogin2.qq.com".into(),
         "rule-set:custom-direct-domains".into(),
+        // Side-tunnel hosts are usually internal names whose real address is
+        // only meaningful inside that network, so they must resolve for real
+        // instead of collapsing onto a fake-ip.
+        "rule-set:custom-openvpn-domains".into(),
         "rule-set:iran-domains".into(),
         "rule-set:iran-business-domains".into(),
     ];
@@ -309,18 +368,26 @@ pub fn generate_config(
                 ),
             ]),
         },
-        proxies: vec![ProxyConfig {
-            name: "Hiddify".into(),
-            kind: "socks5".into(),
-            server: app.hiddify.host.clone(),
-            port: app.hiddify.port,
-            udp: true,
-        }],
-        proxy_groups: vec![ProxyGroup {
-            name: "VPN".into(),
-            kind: "select".into(),
-            proxies: vec!["Hiddify".into()],
-        }],
+        proxies: openvpn_proxies(app, platform, openvpn),
+        proxy_groups: vec![
+            ProxyGroup {
+                name: "VPN".into(),
+                kind: "select".into(),
+                proxies: vec!["Hiddify".into()],
+            },
+            ProxyGroup {
+                name: "OPENVPN".into(),
+                kind: "select".into(),
+                // Without a side tunnel the pins fall through to the local
+                // internet instead of pointing at an interface that is not
+                // there.
+                proxies: vec![if openvpn.is_some() {
+                    "OpenVPN".into()
+                } else {
+                    "DIRECT".into()
+                }],
+            },
+        ],
         rule_providers: providers(),
         rules,
     };
@@ -328,6 +395,41 @@ pub fn generate_config(
     let yaml = serde_yaml::to_string(&document)?;
     let sha256 = hex::encode(Sha256::digest(yaml.as_bytes()));
     Ok(GeneratedConfig { yaml, sha256 })
+}
+
+/// Hiddify plus, when the side tunnel is up, the `OpenVPN` egress.
+///
+/// The `OpenVPN` entry is a `direct` outbound pinned to the helper-owned
+/// device: Mihomo sends the packets, the kernel and the helper's policy table
+/// put them in the tunnel.
+fn openvpn_proxies(
+    app: &AppConfig,
+    platform: Platform,
+    openvpn: Option<&OpenVpnOutbound>,
+) -> Vec<ProxyConfig> {
+    let mut proxies = vec![ProxyConfig {
+        name: "Hiddify".into(),
+        kind: "socks5".into(),
+        server: Some(app.hiddify.host.clone()),
+        port: Some(app.hiddify.port),
+        udp: true,
+        interface_name: None,
+        routing_mark: None,
+    }];
+    if let Some(tunnel) = openvpn {
+        proxies.push(ProxyConfig {
+            name: "OpenVPN".into(),
+            kind: "direct".into(),
+            server: None,
+            port: None,
+            udp: true,
+            interface_name: Some(tunnel.device.clone()),
+            // Windows has no firewall marks; binding the interface is the
+            // whole mechanism there.
+            routing_mark: (platform == Platform::Linux).then_some(tunnel.routing_mark),
+        });
+    }
+    proxies
 }
 
 fn nameservers(_platform: Platform) -> Vec<String> {
@@ -392,6 +494,12 @@ fn providers() -> BTreeMap<String, RuleProvider> {
         ("custom-direct-ips", "ipcidr", "custom-direct-ips.txt"),
         ("custom-vpn-domains", "domain", "custom-vpn-domains.txt"),
         ("custom-vpn-ips", "ipcidr", "custom-vpn-ips.txt"),
+        (
+            "custom-openvpn-domains",
+            "domain",
+            "custom-openvpn-domains.txt",
+        ),
+        ("custom-openvpn-ips", "ipcidr", "custom-openvpn-ips.txt"),
     ]
     .into_iter()
     .map(|(name, behavior, path)| {
@@ -408,11 +516,13 @@ fn providers() -> BTreeMap<String, RuleProvider> {
     .collect()
 }
 
-const OPTIONAL_RULE_PROVIDERS: [&str; 4] = [
+const OPTIONAL_RULE_PROVIDERS: [&str; 6] = [
     "custom-direct-domains",
     "custom-direct-ips",
     "custom-vpn-domains",
     "custom-vpn-ips",
+    "custom-openvpn-domains",
+    "custom-openvpn-ips",
 ];
 
 fn summarize_rule_providers(value: &Value) -> Result<ProviderStatus, MihomoError> {
@@ -842,10 +952,16 @@ impl From<ConnectionEntry> for ActiveConnection {
     }
 }
 
+/// Names the route a live connection took.
+///
+/// Mihomo reports the outbound chain it actually used, so the side tunnel is
+/// recognised by its proxy name rather than by re-reading the rules.
 fn classify_outbound(chains: &[String], rule: &str) -> &'static str {
     if let Some(last) = chains.last() {
         return if last.eq_ignore_ascii_case("DIRECT") {
             "direct"
+        } else if last.eq_ignore_ascii_case("OpenVPN") || last.eq_ignore_ascii_case("OPENVPN") {
+            "openvpn"
         } else {
             "vpn"
         };
@@ -945,6 +1061,8 @@ mod tests {
             custom_direct_domains: "/runtime/custom-direct-domains.txt".into(),
             custom_direct_ips: "/runtime/custom-direct-ips.txt".into(),
             custom_vpn_domains: "/runtime/custom-vpn-domains.txt".into(),
+            custom_openvpn_domains: "/runtime/custom-openvpn-domains.txt".into(),
+            custom_openvpn_ips: "/runtime/custom-openvpn-ips.txt".into(),
             custom_vpn_ips: "/runtime/custom-vpn-ips.txt".into(),
         }
     }
@@ -955,6 +1073,7 @@ mod tests {
         let custom = DirectRulesDocument {
             revision: 1,
             vpn_rules: Vec::new(),
+            openvpn_rules: Vec::new(),
             rules: vec![DirectRule {
                 target: DirectTarget::Ip(Ipv4Addr::new(203, 0, 113, 1).into()),
                 resolved_ips: vec![],
@@ -962,7 +1081,8 @@ mod tests {
                 refreshed_at: None,
             }],
         };
-        let generated = generate_config(&app, Platform::Linux, &paths(), &custom).expect("config");
+        let generated =
+            generate_config(&app, Platform::Linux, &paths(), &custom, None).expect("config");
         assert!(generated
             .yaml
             .contains("external-controller: 127.0.0.1:19090"));
@@ -1029,6 +1149,7 @@ mod tests {
             Platform::Windows,
             &paths(),
             &DirectRulesDocument::default(),
+            None,
         )
         .expect("config");
         assert!(generated.yaml.contains("strict-route: true"));
@@ -1052,6 +1173,7 @@ mod tests {
             Platform::Linux,
             &paths(),
             &DirectRulesDocument::default(),
+            None,
         )
         .expect("config");
         assert!(generated.yaml.contains("5.200.200.200"));
@@ -1087,6 +1209,7 @@ mod tests {
             Platform::Linux,
             &paths(),
             &DirectRulesDocument::default(),
+            None,
         )
         .expect("config");
         let parsed: serde_yaml::Value =
@@ -1283,19 +1406,98 @@ mod tests {
         std::fs::write(generation.path().join("custom-direct-ips.txt"), "").expect("custom ips");
         std::fs::write(generation.path().join("custom-vpn-domains.txt"), "").expect("vpn domains");
         std::fs::write(generation.path().join("custom-vpn-ips.txt"), "").expect("vpn ips");
+        std::fs::write(generation.path().join("custom-openvpn-domains.txt"), "")
+            .expect("openvpn domains");
+        std::fs::write(generation.path().join("custom-openvpn-ips.txt"), "").expect("openvpn ips");
 
+        // Both shapes have to survive the real parser: the side tunnel adds an
+        // outbound type and two keys the Hiddify-only document never uses.
+        for tunnel in [None, Some(&openvpn_outbound())] {
+            let generated = generate_config(
+                &AppConfig::default(),
+                platform,
+                &paths(),
+                &DirectRulesDocument::default(),
+                tunnel,
+            )
+            .expect("config");
+            let config_path = generation.path().join("config.yaml");
+            std::fs::write(&config_path, generated.yaml.as_bytes()).expect("config yaml");
+
+            validate_with_binary(&mihomo, &config_path, Duration::from_secs(30))
+                .await
+                .expect("mihomo should accept the generated configuration");
+        }
+    }
+
+    fn openvpn_outbound() -> OpenVpnOutbound {
+        OpenVpnOutbound {
+            device: "biflow-ovpn".into(),
+            routing_mark: 0x0000_b1f0,
+            server_endpoints: vec!["203.0.113.9".into()],
+        }
+    }
+
+    #[test]
+    fn openvpn_outbound_keeps_the_server_direct_and_binds_the_device() {
         let generated = generate_config(
             &AppConfig::default(),
-            platform,
+            Platform::Linux,
             &paths(),
             &DirectRulesDocument::default(),
+            Some(&openvpn_outbound()),
         )
         .expect("config");
-        let config_path = generation.path().join("config.yaml");
-        std::fs::write(&config_path, generated.yaml.as_bytes()).expect("config yaml");
+        let yaml = generated.yaml;
+        assert!(yaml.contains("interface-name: biflow-ovpn"));
+        assert!(yaml.contains("routing-mark: 45552"));
+        assert!(yaml.contains("IP-CIDR,203.0.113.9/32,DIRECT,no-resolve"));
+        assert!(yaml.contains("RULE-SET,custom-openvpn-domains,OPENVPN"));
 
-        validate_with_binary(&mihomo, &config_path, Duration::from_secs(30))
-            .await
-            .expect("mihomo should accept the generated configuration");
+        // The server bypass must outrank every rule that could send it to a
+        // tunnel, otherwise OpenVPN's own packets loop through the split TUN.
+        let bypass = yaml
+            .find("IP-CIDR,203.0.113.9/32,DIRECT,no-resolve")
+            .expect("server bypass");
+        for later in [
+            "RULE-SET,custom-openvpn-domains,OPENVPN",
+            "RULE-SET,custom-vpn-domains,VPN",
+            "MATCH,VPN",
+        ] {
+            assert!(bypass < yaml.find(later).expect("rule"), "{later}");
+        }
+    }
+
+    #[test]
+    fn openvpn_pins_fall_back_to_direct_without_a_tunnel() {
+        let generated = generate_config(
+            &AppConfig::default(),
+            Platform::Linux,
+            &paths(),
+            &DirectRulesDocument::default(),
+            None,
+        )
+        .expect("config");
+        let yaml = generated.yaml;
+        // The rules stay in place so a pin keeps working across a restart, but
+        // with nothing to send them to they resolve to the local internet.
+        assert!(yaml.contains("RULE-SET,custom-openvpn-domains,OPENVPN"));
+        assert!(!yaml.contains("interface-name"));
+        assert!(yaml.contains("name: OPENVPN"));
+        assert!(yaml.contains("- DIRECT"));
+    }
+
+    #[test]
+    fn windows_openvpn_outbound_has_no_firewall_mark() {
+        let generated = generate_config(
+            &AppConfig::default(),
+            Platform::Windows,
+            &paths(),
+            &DirectRulesDocument::default(),
+            Some(&openvpn_outbound()),
+        )
+        .expect("config");
+        assert!(generated.yaml.contains("interface-name: biflow-ovpn"));
+        assert!(!generated.yaml.contains("routing-mark"));
     }
 }

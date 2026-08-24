@@ -25,7 +25,7 @@ const PIPE_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const PIPE_READY_POLL: Duration = Duration::from_millis(100);
 /// A previous helper keeps its own `.exe` locked, so a reinstall waits this
 /// long for the ended task to exit before copying over it.
-const HELPER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const HELPER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// `ERROR_FILE_NOT_FOUND`: the pipe object does not exist yet.
 const ERROR_FILE_NOT_FOUND: i32 = 2;
 /// `CREATE_NO_WINDOW`: the elevated installer is a GUI-subsystem binary
