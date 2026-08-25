@@ -464,7 +464,9 @@ mod tests {
 
     fn openvpn_request() -> OpenVpnRequest {
         OpenVpnRequest {
-            profile: PathBuf::from("/etc/openvpn/office.ovpn"),
+            // temp_dir is absolute on whichever OS runs the test; a literal
+            // `/etc/...` is not absolute on Windows.
+            profile: std::env::temp_dir().join("office.ovpn"),
             auth_file: None,
             executable: None,
             device: "biflow-ovpn".into(),
@@ -481,7 +483,7 @@ mod tests {
         assert!(openvpn_request().validate().is_ok());
 
         let traversing = OpenVpnRequest {
-            profile: PathBuf::from("/etc/openvpn/../../root/.ssh/id_rsa"),
+            profile: std::env::temp_dir().join("..").join("id_rsa"),
             ..openvpn_request()
         };
         assert!(traversing.validate().is_err());
