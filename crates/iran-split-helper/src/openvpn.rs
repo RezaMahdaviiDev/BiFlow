@@ -667,6 +667,7 @@ async fn install_scoped_routes(device: &str, routes: &[IpNet]) -> Result<(), Hel
         } else {
             "ipv6"
         };
+        let target = network.to_string();
         let added = run_capture(
             "netsh",
             &[
@@ -674,19 +675,35 @@ async fn install_scoped_routes(device: &str, routes: &[IpNet]) -> Result<(), Hel
                 family,
                 "add",
                 "route",
-                &network.to_string(),
+                &target,
                 &format!("interface={device}"),
                 "store=active",
             ],
         )
         .await;
-        if added.is_none() {
+        if added.is_none() && !route_present(family, device, &target).await {
             return Err(HelperServiceError::OpenVpn(format!(
                 "route {network} could not be added to {device}"
             )));
         }
     }
     Ok(())
+}
+
+/// Whether the interface already carries a route for `target`.
+///
+/// `netsh` refuses to add a duplicate, and the tunnel's own subnet becomes an
+/// on-link route the moment the address lands — a route that already exists
+/// is the desired end state, not a failure.
+#[cfg(windows)]
+async fn route_present(family: &str, device: &str, target: &str) -> bool {
+    run_capture("netsh", &["interface", family, "show", "route"])
+        .await
+        .is_some_and(|shown| {
+            shown
+                .lines()
+                .any(|line| line.contains(target) && line.contains(device))
+        })
 }
 
 /// Adds the marked table that carries traffic Mihomo pins to `OpenVPN`.
