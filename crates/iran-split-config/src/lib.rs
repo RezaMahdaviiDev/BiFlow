@@ -824,7 +824,9 @@ mod tests {
             .validate()
             .iter()
             .any(|item| item.code == "PATH_NOT_ABSOLUTE"));
-        config.openvpn.profile = Some(PathBuf::from("/etc/openvpn/office.ovpn"));
+        // `/etc/...` is not absolute on Windows, so build a path that is
+        // absolute on whichever OS runs the test.
+        config.openvpn.profile = Some(std::env::temp_dir().join("office.ovpn"));
         assert!(config.validate().is_empty());
         assert!(config.openvpn.active());
     }
