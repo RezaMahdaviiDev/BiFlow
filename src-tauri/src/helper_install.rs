@@ -579,7 +579,10 @@ fn windows_mihomo_candidates(resource_root: &Path, exe_dir: &Path) -> Vec<PathBu
 pub(crate) fn first_existing_file(candidates: &[PathBuf]) -> Option<PathBuf> {
     // Tauri `build.rs` writes empty helper placeholders so the bundle graph
     // can resolve; a 0-byte file is not a packaged helper.
-    candidates.iter().find(|path| is_nonempty_file(path)).cloned()
+    candidates
+        .iter()
+        .find(|path| is_nonempty_file(path))
+        .cloned()
 }
 
 fn is_nonempty_file(path: &Path) -> bool {
