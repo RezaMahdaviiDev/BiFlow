@@ -58,7 +58,7 @@ jobs:
       - run: pnpm test:e2e
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo test --workspace --no-fail-fast
       - uses: taiki-e/install-action@cargo-deny
       - run: cargo deny check
 

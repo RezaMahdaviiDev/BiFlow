@@ -81,7 +81,7 @@ describe("ci-local", () => {
     );
 
     assert.ok(tests, "windows-2025 `cargo test` is not mirrored");
-    assert.equal(tests.ciCommand, "cargo test --workspace");
+    assert.equal(tests.ciCommand, "cargo test --workspace --no-fail-fast");
     assert.equal(tests.runner, "windows-2025");
     assert.equal(tests.requires, "wine");
     assert.ok(tests.command.includes("x86_64-pc-windows-msvc"));
