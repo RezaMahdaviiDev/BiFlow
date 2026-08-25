@@ -628,7 +628,7 @@ fn copy_file_replacing(source: &Path, destination: &Path) -> Result<(), HelperSe
                 Err(error) => return Err(error.into()),
             }
         }
-        return Err(last.expect("sharing-violation retry").into());
+        Err(last.expect("sharing-violation retry").into())
     }
     #[cfg(not(windows))]
     {

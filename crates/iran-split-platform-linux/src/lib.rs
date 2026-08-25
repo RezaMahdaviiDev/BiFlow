@@ -39,7 +39,13 @@ use uuid::Uuid;
 
 mod system_proxy;
 
-const IPC_TIMEOUT: Duration = Duration::from_secs(5);
+/// Ceiling on an ordinary helper reply — a ceiling, not a wait.
+const IPC_TIMEOUT: Duration = Duration::from_secs(15);
+/// Extra reply headroom past the helper's own `OpenVPN` deadlines, so the
+/// helper — not this client — is the side that decides the tunnel failed.
+/// A client that gives up first strands a live tunnel it no longer knows
+/// about.
+const OPENVPN_REPLY_MARGIN: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 pub enum LinuxBackendError {
@@ -75,6 +81,22 @@ impl HelperClient {
     /// Returns an error when validation, connection, protocol negotiation, or
     /// the helper operation fails.
     pub async fn request(&self, command: HelperCommand) -> Result<HelperReply, LinuxBackendError> {
+        self.request_with_reply_timeout(command, IPC_TIMEOUT).await
+    }
+
+    /// Like [`HelperClient::request`], for commands whose reply legitimately
+    /// takes longer than the ordinary ceiling — starting the `OpenVPN` side
+    /// tunnel blocks until the tunnel settles or its own deadline passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation, connection, protocol negotiation, or
+    /// the helper operation fails.
+    pub async fn request_with_reply_timeout(
+        &self,
+        command: HelperCommand,
+        reply_timeout: Duration,
+    ) -> Result<HelperReply, LinuxBackendError> {
         let command_name = command.audit_name();
         let request_id = Uuid::new_v4();
         info!(
@@ -100,7 +122,7 @@ impl HelperClient {
             );
             return Err(cause.into());
         }
-        let result = self.request_validated(command).await;
+        let result = self.request_validated(command, reply_timeout).await;
         match &result {
             Ok(_) => info!(
                 event = "helper.request_completed",
@@ -129,6 +151,7 @@ impl HelperClient {
     async fn request_validated(
         &self,
         command: HelperCommand,
+        reply_timeout: Duration,
     ) -> Result<HelperReply, LinuxBackendError> {
         let mut stream = tokio::time::timeout(IPC_TIMEOUT, UnixStream::connect(&self.socket_path))
             .await
@@ -137,7 +160,7 @@ impl HelperClient {
             client_version: env!("CARGO_PKG_VERSION").into(),
             supported_protocols: vec![PROTOCOL_VERSION],
         });
-        let hello_reply = exchange(&mut stream, &hello).await?;
+        let hello_reply = exchange(&mut stream, &hello, IPC_TIMEOUT).await?;
         match hello_reply.payload {
             HelperReply::Hello(reply) if reply.selected_protocol == PROTOCOL_VERSION => {}
             HelperReply::Error(error) => {
@@ -149,7 +172,7 @@ impl HelperClient {
             _ => return Err(LinuxBackendError::ResponseMismatch),
         }
         let request = Envelope::new(command);
-        let response = exchange(&mut stream, &request).await?;
+        let response = exchange(&mut stream, &request, reply_timeout).await?;
         match response.payload {
             HelperReply::Error(error) => Err(LinuxBackendError::Helper {
                 code: error.code,
@@ -163,11 +186,12 @@ impl HelperClient {
 async fn exchange(
     stream: &mut UnixStream,
     request: &Envelope<HelperCommand>,
+    reply_timeout: Duration,
 ) -> Result<Envelope<HelperReply>, LinuxBackendError> {
     tokio::time::timeout(IPC_TIMEOUT, write_frame(stream, request))
         .await
         .map_err(|_| LinuxBackendError::Timeout)??;
-    let reply: Envelope<HelperReply> = tokio::time::timeout(IPC_TIMEOUT, read_frame(stream))
+    let reply: Envelope<HelperReply> = tokio::time::timeout(reply_timeout, read_frame(stream))
         .await
         .map_err(|_| LinuxBackendError::Timeout)??;
     validate_envelope(&reply)?;
@@ -259,10 +283,18 @@ impl LinuxBackend {
     /// Sends an `OpenVPN` command, surfacing helper refusals as an `OpenVPN`
     /// failure rather than a generic platform error, so the desktop can tell
     /// the user which component is at fault.
-    async fn openvpn_request(&self, command: HelperCommand) -> Result<OpenVpnStatus, CoreError> {
+    ///
+    /// `reply_timeout` must outlast the helper's own deadline for the command:
+    /// a start reply only arrives once the tunnel settles or the helper gives
+    /// up, and a client that quits first leaves an orphan tunnel behind.
+    async fn openvpn_request(
+        &self,
+        command: HelperCommand,
+        reply_timeout: Duration,
+    ) -> Result<OpenVpnStatus, CoreError> {
         match self
             .helper
-            .request(command)
+            .request_with_reply_timeout(command, reply_timeout)
             .await
             .map_err(|error| CoreError::OpenVpnFailed(error.to_string()))?
         {
@@ -667,18 +699,23 @@ impl PlatformBackend for LinuxBackend {
         if cancel.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
+        let start_reply_timeout =
+            Duration::from_secs(config.openvpn.start_timeout_seconds) + OPENVPN_REPLY_MARGIN;
         let status = self
-            .openvpn_request(HelperCommand::StartOpenVpn(OpenVpnRequest {
-                profile,
-                auth_file: config.openvpn.auth_file.clone(),
-                executable: config.openvpn.executable.clone(),
-                device: config.openvpn.device.clone(),
-                pull_routes: config.openvpn.pull_routes,
-                tunnel_routes: config.openvpn.tunnel_routes.clone(),
-                routing_mark: config.openvpn.routing_mark,
-                routing_table: config.openvpn.routing_table,
-                start_timeout_seconds: config.openvpn.start_timeout_seconds,
-            }))
+            .openvpn_request(
+                HelperCommand::StartOpenVpn(OpenVpnRequest {
+                    profile,
+                    auth_file: config.openvpn.auth_file.clone(),
+                    executable: config.openvpn.executable.clone(),
+                    device: config.openvpn.device.clone(),
+                    pull_routes: config.openvpn.pull_routes,
+                    tunnel_routes: config.openvpn.tunnel_routes.clone(),
+                    routing_mark: config.openvpn.routing_mark,
+                    routing_table: config.openvpn.routing_table,
+                    start_timeout_seconds: config.openvpn.start_timeout_seconds,
+                }),
+                start_reply_timeout,
+            )
             .await?;
         let state = OpenVpnState {
             device: status
@@ -698,7 +735,10 @@ impl PlatformBackend for LinuxBackend {
 
     async fn stop_openvpn(&self) -> Result<(), CoreError> {
         self.openvpn.lock().await.take();
-        self.openvpn_request(HelperCommand::StopOpenVpn).await?;
+        // Stopping tears down routes and waits out the daemon's own ten-second
+        // stop deadline, so it too outlasts the ordinary reply ceiling.
+        self.openvpn_request(HelperCommand::StopOpenVpn, OPENVPN_REPLY_MARGIN)
+            .await?;
         Ok(())
     }
 

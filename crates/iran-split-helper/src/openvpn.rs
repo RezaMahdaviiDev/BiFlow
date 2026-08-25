@@ -13,8 +13,8 @@
 //! **A `.ovpn` file is untrusted input to a root process.** `OpenVPN` can run
 //! arbitrary commands through `up`, `down`, `plugin`, and friends. The helper
 //! audits the profile for those directives and refuses to start when it finds
-//! one, then pins `--script-security 0` on the command line as a second
-//! barrier.
+//! one, then pins `--script-security` below the level where profile scripts
+//! run ([`SCRIPT_SECURITY_LEVEL`]) as a second barrier.
 //!
 //! Selected traffic reaches the tunnel through a marked policy-routing table
 //! (Linux) or interface binding (Windows), never through the main table's
@@ -64,11 +64,27 @@ const DEVICE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const OPENVPN_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_OBSERVED_ROUTES: usize = 64;
 
+/// On Windows `OpenVPN` addresses its own interface by calling `netsh.exe`,
+/// and `--script-security` gates those built-in executables too: level 0
+/// leaves the adapter with no address and the tunnel never settles. Level 1
+/// allows exactly the built-in system binaries while profile scripts keep
+/// needing level 2, so the audit boundary is unchanged. Linux configures the
+/// interface over netlink and needs no external programs at all.
+#[cfg(windows)]
+const SCRIPT_SECURITY_LEVEL: &str = "1";
+#[cfg(not(windows))]
+const SCRIPT_SECURITY_LEVEL: &str = "0";
+
 /// Facts read out of the daemon's own output while it negotiates.
 #[derive(Debug, Default)]
 struct Observations {
     server_endpoint: Option<String>,
     pushed_routes: Vec<IpNet>,
+    /// The adapter `OpenVPN` actually opened. Windows drivers pick or create
+    /// adapters by their own rules — the requested `--dev` name is a wish,
+    /// not a fact — and every route and interface binding must follow the
+    /// real name.
+    device: Option<String>,
     initialized: bool,
     fatal: Option<String>,
 }
@@ -90,6 +106,9 @@ pub(crate) struct RunningOpenVpn {
 /// What [`Supervisor::settle_openvpn`] learned once the tunnel was usable.
 #[derive(Debug)]
 struct SettledOpenVpn {
+    /// The adapter the daemon really opened, which every installed route and
+    /// the desktop's interface binding must name.
+    device: String,
     routes: Vec<IpNet>,
     policy_installed: bool,
     local_address: Option<String>,
@@ -155,7 +174,7 @@ impl Supervisor {
             Ok(settled) => {
                 let running = RunningOpenVpn {
                     child,
-                    device: request.device.clone(),
+                    device: settled.device,
                     routing_mark: request.routing_mark,
                     routing_table: request.routing_table,
                     routes: settled.routes,
@@ -170,7 +189,13 @@ impl Supervisor {
                     "info",
                     "openvpn_started",
                     BTreeMap::from([
-                        ("device".into(), request.device.clone()),
+                        (
+                            "device".into(),
+                            status
+                                .device
+                                .clone()
+                                .unwrap_or_else(|| request.device.clone()),
+                        ),
                         ("routes".into(), status.routes.len().to_string()),
                     ]),
                 )
@@ -188,7 +213,13 @@ impl Supervisor {
                     )
                     .await;
                 }
-                revert_scoped_routes(&request.device, &[]).await;
+                let device = observations
+                    .lock()
+                    .await
+                    .device
+                    .clone()
+                    .unwrap_or_else(|| request.device.clone());
+                revert_scoped_routes(&device, &[]).await;
                 revert_policy_routing(request.routing_mark, request.routing_table).await;
                 self.push_log(
                     "error",
@@ -211,7 +242,7 @@ impl Supervisor {
     ) -> Result<SettledOpenVpn, HelperServiceError> {
         let deadline =
             tokio::time::Instant::now() + Duration::from_secs(request.start_timeout_seconds);
-        let local_address = loop {
+        let (device, local_address) = loop {
             if let Some(exit) = child
                 .try_wait()
                 .map_err(|error| HelperServiceError::OpenVpn(error.to_string()))?
@@ -227,9 +258,17 @@ impl Supervisor {
             // Both signals matter: the interface can carry an address a moment
             // before the daemon finishes negotiating, and the PUSH_REPLY that
             // names the scoped routes only lands at the end of that handshake.
+            // The polled adapter is the one the daemon reported opening — on
+            // Windows that is rarely the requested name.
             if observations.lock().await.initialized {
-                if let Some(address) = device_address(&request.device).await {
-                    break address;
+                let device = observations
+                    .lock()
+                    .await
+                    .device
+                    .clone()
+                    .unwrap_or_else(|| request.device.clone());
+                if let Some(address) = device_address(&device).await {
+                    break (device, address);
                 }
             }
             if tokio::time::Instant::now() >= deadline {
@@ -267,15 +306,15 @@ impl Supervisor {
         routes.dedup();
         routes.truncate(MAX_OBSERVED_ROUTES);
 
-        install_scoped_routes(&request.device, &routes).await?;
+        install_scoped_routes(&device, &routes).await?;
         // A leftover rule from a crashed session would silently shadow the new
         // one, so the mark and table are cleared before they are claimed.
         revert_policy_routing(request.routing_mark, request.routing_table).await;
         let policy_installed =
-            install_policy_routing(&request.device, request.routing_mark, request.routing_table)
-                .await?;
+            install_policy_routing(&device, request.routing_mark, request.routing_table).await?;
 
         Ok(SettledOpenVpn {
+            device,
             routes,
             policy_installed,
             local_address: Some(local_address.address.to_string()),
@@ -365,7 +404,7 @@ fn build_arguments(request: &OpenVpnRequest) -> Vec<OsString> {
         // Nothing this daemon says may reach the routing table.
         "--route-noexec".into(),
         "--script-security".into(),
-        "0".into(),
+        SCRIPT_SECURITY_LEVEL.into(),
         "--dev-type".into(),
         "tun".into(),
         "--dev".into(),
@@ -853,6 +892,9 @@ async fn observe(observations: &Arc<Mutex<Observations>>, line: &str) {
     if let Some(endpoint) = peer_address(line) {
         observations.lock().await.server_endpoint = Some(endpoint);
     }
+    if let Some(device) = opened_device(line) {
+        observations.lock().await.device = Some(device);
+    }
     if let Some(routes) = pushed_routes(line) {
         let mut guard = observations.lock().await;
         for route in routes {
@@ -869,6 +911,20 @@ async fn observe(observations: &Arc<Mutex<Observations>>, line: &str) {
     if let Some(reason) = fatal_reason(line) {
         observations.lock().await.fatal = Some(reason);
     }
+}
+
+/// Extracts the adapter name from the driver's open line, such as
+/// `ovpn-dco device [OpenVPN Connect DCO Adapter] opened` or
+/// `Wintun device [biflow-ovpn] opened`.
+///
+/// Windows drivers pick an existing adapter or create one under their own
+/// name, so the `--dev` argument is only a request. Linux prints its open
+/// line without brackets and falls through to the requested name.
+fn opened_device(line: &str) -> Option<String> {
+    let start = line.find(" device [")? + " device [".len();
+    let rest = &line[start..];
+    let name = rest[..rest.find("] opened")?].trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// Extracts the peer from `Peer Connection Initiated with [AF_INET]1.2.3.4:1194`.
@@ -1040,6 +1096,42 @@ mod tests {
             routes.iter().map(ToString::to_string).collect::<Vec<_>>(),
             ["10.8.0.0/24"]
         );
+    }
+
+    #[test]
+    fn arguments_allow_only_builtin_executables_where_windows_needs_them() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let profile = write_profile(directory.path(), "client\nremote vpn.example.com 1194\n");
+        let arguments = build_arguments(&request(&profile))
+            .into_iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let flag = arguments
+            .iter()
+            .position(|value| value == "--script-security")
+            .expect("script-security flag");
+        assert_eq!(arguments[flag + 1], SCRIPT_SECURITY_LEVEL);
+        // Level 2 is where profile scripts start to run; neither OS reaches it.
+        assert!(SCRIPT_SECURITY_LEVEL == "0" || SCRIPT_SECURITY_LEVEL == "1");
+    }
+
+    #[test]
+    fn opened_device_is_read_from_the_driver_open_line() {
+        assert_eq!(
+            opened_device(
+                "2026-08-25 12:43:21 ovpn-dco device [OpenVPN Connect DCO Adapter] opened"
+            )
+            .as_deref(),
+            Some("OpenVPN Connect DCO Adapter")
+        );
+        assert_eq!(
+            opened_device("Wintun device [biflow-ovpn] opened").as_deref(),
+            Some("biflow-ovpn")
+        );
+        // Linux prints `TUN/TAP device biflow-ovpn opened` without brackets;
+        // the requested name is already the real one there.
+        assert!(opened_device("TUN/TAP device biflow-ovpn opened").is_none());
+        assert!(opened_device("nothing here").is_none());
     }
 
     #[test]
