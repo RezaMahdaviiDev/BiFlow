@@ -108,6 +108,11 @@ impl HelperClient {
     /// Like [`HelperClient::request`], for commands whose reply legitimately
     /// takes longer than the ordinary ceiling — starting the `OpenVPN` side
     /// tunnel blocks until the tunnel settles or its own deadline passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when validation, connection, protocol negotiation, or
+    /// the helper operation fails.
     pub async fn request_with_reply_timeout(
         &self,
         command: HelperCommand,
